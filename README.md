@@ -24,7 +24,14 @@ When the subprocess completes, a `<system-reminder>` notification is injected in
 Requires the `copilot` CLI to be on `PATH`. Install via:
 
 ```sh
-gh extension install github/gh-copilot
+# npm (recommended)
+npm install -g @github/copilot
+
+# Homebrew
+brew install copilot-cli
+
+# Install script (CI-friendly)
+curl -fsSL https://gh.io/copilot-install | bash
 ```
 
 ## Authentication
