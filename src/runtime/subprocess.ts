@@ -143,16 +143,15 @@ export function spawnCopilot(
     { once: true },
   )
 
-  task.completionPromise = new Promise<void>((resolve, reject) => {
+  task.completionPromise = new Promise<void>((resolve) => {
     child.once('error', (error) => {
       task.status = 'failed'
       task.errorText = stripAnsi(error.message)
-      reject(error)
+      resolve()
     })
 
     child.once('close', (code) => {
       finalizeTask(task, code, stderrText)
-
       resolve()
     })
   })
