@@ -1,0 +1,57 @@
+{
+  "name": "opencode-copilot-delegate",
+  "version": "0.1.0",
+  "description": "OpenCode plugin that delegates tasks to GitHub Copilot CLI as background subprocesses",
+  "type": "module",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE",
+    "CHANGELOG.md"
+  ],
+  "keywords": [
+    "opencode",
+    "opencode-plugin",
+    "copilot",
+    "github-copilot",
+    "agent",
+    "delegation"
+  ],
+  "license": "MIT",
+  "author": "Marcus R. Brown <git@mrbro.dev> (https://mrbro.dev)",
+  "homepage": "https://github.com/marcusrbrown/opencode-copilot-delegate",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/marcusrbrown/opencode-copilot-delegate.git"
+  },
+  "bugs": {
+    "url": "https://github.com/marcusrbrown/opencode-copilot-delegate/issues"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "peerDependencies": {
+    "@opencode-ai/plugin": ">=1.14.0",
+    "@opencode-ai/sdk": ">=1.14.0"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^1.9.4",
+    "@opencode-ai/plugin": "^1.14.19",
+    "@opencode-ai/sdk": "^1.14.19",
+    "@types/bun": "^1.2.0",
+    "@types/node": "^22.0.0",
+    "rimraf": "^6.0.1",
+    "typescript": "^5.8.0"
+  },
+  "scripts": {
+    "clean": "rimraf dist",
+    "build": "bun run clean && bun build src/index.ts --outdir dist --target bun --external @opencode-ai/plugin --external @opencode-ai/sdk && tsc --emitDeclarationOnly --noEmit false",
+    "typecheck": "tsc --noEmit",
+    "test": "bun test",
+    "lint": "biome check .",
+    "fix": "biome check . --write",
+    "prepublishOnly": "bun run build"
+  }
+}
