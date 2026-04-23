@@ -12,7 +12,7 @@ branches:
     protection:
       required_status_checks:
         strict: true
-        # T11 will expand this list once CI workflows exist (Build, Typecheck, Lint, Test, etc.)
+        # Expand this list once CI workflows exist (Build, Typecheck, Lint, Test, etc.)
         contexts:
           - Fro Bot
       enforce_admins: true
