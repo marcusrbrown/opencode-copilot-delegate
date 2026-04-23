@@ -36,7 +36,7 @@
     "@opencode-ai/plugin": "^1.14.19",
     "@opencode-ai/sdk": "^1.14.19",
     "@types/bun": "^1.2.0",
-    "@types/node": "^22.0.0",
+    "@types/node": "^25.0.0",
     "rimraf": "^6.0.1",
     "typescript": "^5.8.0"
   },
