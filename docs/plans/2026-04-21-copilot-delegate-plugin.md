@@ -5,8 +5,10 @@ status: active
 date: 2026-04-21
 origin: "~/.context/systematic/ce-brainstorm/2026-04-21-copilot-delegate-plugin-requirements.md"
 deepened: 2026-04-23
+second_deepening: 2026-04-23
 confidence_checked: 2026-04-23
 testing_strategy_updated: 2026-04-23
+fro_bot_review_integrated: 2026-04-23
 ---
 
 # feat: OpenCode Copilot Delegate Plugin
@@ -135,7 +137,7 @@ Auth precedence: `COPILOT_GITHUB_TOKEN` > `GH_TOKEN` > `GITHUB_TOKEN` > `~/.copi
 
 ### Institutional Learnings
 
-- OMO in-flight counter pattern: track per-parent-session task count; `noReply: false` only on last completion.
+- OMO in-flight counter pattern: track per-parent-session task count; `noReply: false` only on last completion. **Correctness invariant:** decrement the counter synchronously as the very first operation in the completion handler — before any `await` — or two concurrent completions can both read the same value and both set `noReply: false`, causing duplicate forced parent turns.
 - `fkill` npm package (v10.0.3, Jan 2026, actively maintained) preferred over `tree-kill` (unmaintained since 2019) for SIGTERM→SIGKILL escalation with timeout.
 - JSONL schema is version-specific — snapshot real Copilot output as test fixtures to detect drift.
 
@@ -149,6 +151,9 @@ Auth precedence: `COPILOT_GITHUB_TOKEN` > `GH_TOKEN` > `GITHUB_TOKEN` > `~/.copi
 - **Cap agent list at 20:** If more, show first 20 + "… and N more (use copilot_list_agents to see all)"; `copilot_list_agents` ships in v1.x.
 - **TUI toast on completion:** Yes — call `client.tui.showToast({ body: { message: '<text>', variant: 'success' } })` alongside session-prompt injection. `variant` is non-optional: `'info'|'success'|'warning'|'error'`. Confirmed present in SDK v1.14.21.
 - **`TaskState` lifetime:** Keep until plugin shutdown so repeat `copilot_output` calls are idempotent. No `discard` arg in v1.
+- **Plugin teardown flag:** `isShuttingDown: boolean` in plugin scope (default `false`). Set during cleanup. All `close` handlers check before calling `promptAsync`; skip and log if shutting down.
+- **Concurrent delegation cap:** Default max 10 in-flight tasks. `copilot_delegate` returns a structured error (not a throw) with the running count when the cap is exceeded. Configurable via plugin options in v1.x.
+- **Notification timeout:** Per-task 60s timeout from subprocess completion to confirmed `promptAsync` call. On timeout: abort and kill subprocess, log via `client.app.log`, set `status: 'failed'`. Prevents indefinite parent hangs on silent notification failure.
 
 ## Open Questions
 
@@ -350,7 +355,7 @@ type TaskState = {
 
 ---
 
-- [ ] **T2.5: JSONL fixture capture** *(blocks T2)*
+- [ ] **T2.5: JSONL fixture capture** *(can run in parallel with T2; fixture schema draftable from real Copilot output before parser is complete)*
 
 **Goal:** Capture real Copilot CLI JSONL output as test fixtures before writing the parser.
 
@@ -372,7 +377,7 @@ type TaskState = {
 
 **Test scenarios:**
 - Happy path: `head -1 tests/fixtures/happy-path.jsonl | jq 'has("type")'` → `true`.
-- PII scrub: `grep -RnE '/Users/[a-z]+/' tests/fixtures/` → no matches.
+- PII scrub: `grep -RnE '/Users/[^/]+/|/home/[^/]+/' tests/fixtures/` → no matches.
 - Non-empty: `wc -l tests/fixtures/*.jsonl` — each fixture has at least one line.
 
 **Verification:**
@@ -480,6 +485,7 @@ type TaskState = {
 
 **Test scenarios:**
 - In-flight counter: with 3 tasks, completing #1 → `noReply: true`; completing #3 (last) → `noReply: false`.
+- Multi-session isolation: sessions A and B each have tasks; interleave completions; assert each session's `noReply` is isolated by `parentSessionId` (completing A's last task must not affect B's counter).
 - Failed status forces turn: `status: 'failed'` always sets `noReply: false`.
 - Notification shape: `body.parts[0].text` contains `<system-reminder>` and `[COPILOT DELEGATION COMPLETED]` literals.
 - `noReply` never undefined: explicitly set (not left as `undefined`).
@@ -550,12 +556,15 @@ type TaskState = {
 - `output.ts`: read state, build envelope. When `block: true`, await close event up to `timeout_ms`; on timeout return current state with `timed_out: true`. When `block: false`, return immediately.
 - `cancel.ts`: SIGTERM → 2s grace → SIGKILL escalation. Set `status: 'cancelled'`, fire notification. Return `{ cancelled, was_running }`.
 - `index.ts`: export `Plugin` that registers all three tools, wires `client` into runtime.
+- `copilot_output` and `copilot_cancel` validate at the tool boundary: `task_id` must be non-empty and match the `cpl_` prefix; malformed inputs return a structured error envelope without throwing.
 
 **Test scenarios:**
 - Happy path: `copilot_delegate` returns `task_id` matching `/^cpl_[0-9a-f-]+$/`.
 - Unknown task: `copilot_output` returns `status: 'unknown'` for missing task_id — does not throw.
+- Malformed task_id: `copilot_output({task_id: ''})` and `copilot_output({task_id: 'bad_id'})` return structured error envelopes without throwing.
 - Unknown cancel: `copilot_cancel` returns `{cancelled: false, was_running: false}` for missing task_id.
 - Blocking mode: `copilot_output({task_id, block: true, timeout_ms: 500})` returns `timed_out: true` when subprocess outlasts timeout.
+- Near-timeout race: `completionPromise` resolves just before `timeout_ms` fires — result must not be `timed_out: true`.
 - Tool registration: `Object.keys(result.tool).sort()` → `['copilot_cancel', 'copilot_delegate', 'copilot_output']`.
 - Description non-trivial: `result.tool.copilot_delegate.description.length > 50` → `true`.
 
@@ -586,7 +595,7 @@ type TaskState = {
 - `client.ts`: `createOpencodeClient({ baseUrl: 'http://127.0.0.1:PORT', throwOnError: true })`.
 - Teardown: SIGTERM → 5s grace → SIGKILL (matching librarian-researched pattern).
 - Plugin loading: place built `dist/index.js` in `tests/integration/fixtures/.opencode/plugins/` (or symlink); OpenCode auto-loads on server start.
-- Port: use `4097` (avoid conflicting with any running OpenCode on `4096`).
+- Port: use ephemeral allocation — `Bun.spawn(['opencode', 'serve', '--port', '0', ...])` (or equivalent); read the assigned port from subprocess stdout or a startup-ready signal; `server.ts` returns the resolved base URL. If the subprocess exits before the health check completes, `server.ts` throws immediately with the last N lines of stderr.
 - Unique test isolation: each `describe` block uses its own session; sessions are deleted in `afterEach`.
 
 **Test scenarios:**
@@ -596,7 +605,7 @@ type TaskState = {
 - Given a `task_id` from `copilot_delegate`, when `copilot_output` is called with `block: true`, then it returns within `timeout_ms` with either output or `timed_out: true`.
 - Given a running task, when `copilot_cancel` is called, then `{ cancelled: true, was_running: true }` is returned.
 - Given a nonexistent `task_id`, when `copilot_output` is called, then `{ status: 'unknown' }` is returned without throwing.
-- `<system-reminder>` notification appears as a subsequent assistant turn after `copilot_delegate` completes.
+- `<system-reminder>` notification appears as a subsequent assistant turn after `copilot_delegate` completes — assert by polling session messages with bounded timeout (max 30s, 250ms interval) until the reminder turn is found.
 - Server shuts down cleanly after SIGTERM within 5s (no zombie processes).
 
 **Verification:**
@@ -615,6 +624,7 @@ type TaskState = {
 
 **Files:**
 - Create: `VERIFICATION.md`
+- Create: `docs/e2e-checklist.md` (reproducible checklist for future manual verification runs)
 
 **Approach:** Each scenario must be exercised in a real OpenCode session with the plugin installed. Record ✅/❌ + notes for each.
 
@@ -722,13 +732,14 @@ type TaskState = {
 
 **Requirements:** R6
 
-**Dependencies:** T6 *(gate enables after all src/* implementation is complete)*
+**Dependencies:** T11 *(gate enables after integration tests pass)*
 
 **Files:**
 - Create: `.github/workflows/ci.yml`
 
 **Approach:**
 - Install Bun, `bun install`, `bun test`, `bun run typecheck` (`tsc --noEmit`), `bun run lint`.
+- Install `opencode` binary before running `bun test tests/integration/` — download from `anomalyco/opencode` GitHub releases (see `fro-bot/agent` `src/services/setup/opencode.ts` for the platform detection + download pattern). T6.5 integration tests fail loudly if `opencode` is not on PATH.
 - Branch protection on `main` requires `ci` to pass.
 - `.changeset/` config: PRs without a changeset for `src/**` changes fail CI.
 - Pre-commit: optional husky hook running `bun run typecheck` on staged TS files.
@@ -748,6 +759,10 @@ type TaskState = {
 
 - **Interaction graph:** Plugin hooks into the OpenCode tool dispatch (via `PluginInput`) and injects messages into the parent session via `client.session.promptAsync`. No other callbacks or middleware involved.
 - **Error propagation:** `copilot_delegate` throws on missing binary. `copilot_output` and `copilot_cancel` never throw on unknown task_id — they return structured error envelopes. Subprocess failures surface via `status: 'failed'` + forced `noReply: false` turn.
+- **`promptAsync` failure handling:** `promptAsync` can throw (network error, session expired, OpenCode restart). All `close` handlers must wrap `promptAsync` in try/catch. On failure: log via `client.app.log`, store `notifyError` in `TaskState`, expose in `copilot_output` envelope so the parent can detect "task completed but notification failed" and retrieve the result manually. This also covers the case where `promptAsync` is called against a dead session ID (parent session ended before subprocess finished) — treat any throw as a notification failure, not a fatal error.
+- **Plugin teardown safety:** Maintain an `isShuttingDown: boolean` flag (default `false`). Set to `true` during plugin cleanup. The subprocess `close` handler must check this flag before calling `promptAsync` and skip notification (log instead) if shutting down. This prevents the close callback from calling `promptAsync` on a dead `client` reference after plugin unload.
+- **Concurrent delegation cap:** `copilot_delegate` enforces a configurable max-concurrent-tasks limit (default 10). Exceeding it returns a structured error response (not a throw) with the current running count. Each task opens 3 stdio pipes; no cap risks exhausting OS FD limits (256 on macOS, 1024 on Linux), which would crash the entire OpenCode process.
+- **`completionPromise` rejection:** Every `await` on `completionPromise` must be wrapped in try/catch. Rejection reason (non-zero exit, spawn error, parse failure) must be converted to a typed error before returning — never swallowed. Floating unhandled rejections are a process crash on Node ≥15.
 - **State lifecycle risks:** `TaskState` persists until plugin shutdown; plugin restart orphans in-flight subprocesses (documented v1 limitation). No cleanup hook exists across OpenCode restarts.
 - **API surface parity:** All three tools expose consistent `task_id` routing; `copilot_output` envelope is the single source of truth for task state — no state leaks through other return paths.
 - **Integration coverage:** T7 (manual E2E) is the primary cross-layer coverage. Unit tests stub `PluginInput`; real behavior requires a live `copilot` binary and OpenCode session.
@@ -759,11 +774,16 @@ type TaskState = {
 |------|------------|
 | Plugin restart mid-delegation → orphaned `copilot` subprocess. | Document in README. v1.x: PID file under `${XDG_RUNTIME_DIR}/opencode-copilot-delegate/<task_id>.pid`; plugin start reaps stale PIDs. |
 | Copilot CLI changes JSONL schema. | Defensive parsing (every field optional, unknown event types stored verbatim). Snapshot real JSONL fixtures at v0.1.0 to detect drift via tests. |
-| `promptAsync` doesn't accept `noReply` in current SDK. | Verify at impl time; if absent, fall back to `prompt` (used by `opencode-pty` reference). |
+| **RESOLVED:** `promptAsync` + `noReply` API compatibility. | Confirmed: use `prompt()` (not `promptAsync()`) with `noReply` for notification injection. `promptAsync` does not accept `noReply`; `opencode-pty` reference confirms `prompt` with `noReply: true`. This is a known API constraint, not a runtime verification item. |
 | Description string bloats with many user agents. | Cap merged list at 20; show "… and N more" + ship `copilot_list_agents` in v1.x. |
 | Auth misconfiguration (stale `GH_TOKEN` overrides login) → silent failures. | Plugin logs resolved auth source via `client.app.log` at delegate start (token value never logged). |
 | Built-in Copilot agent names guessed wrong. | Verify via `copilot agent list` at impl time. Hardcoded list lives in one place (`src/discovery/agents.ts`). |
-| `kill-tree` flakiness on macOS vs Linux. | Use `fkill` npm package (v10.0.3, actively maintained, zero dependencies, SIGTERM→SIGKILL escalation with `forceTimeout`) instead of `tree-kill` (unmaintained Dec 2019). |
+| `fkill` double-kill race — PID recycled between cancel decision and kill execution. | Before calling `fkill`, check whether `completionPromise` has already settled. If yes, treat cancel as a no-op (process already exited cleanly). Never call `fkill` on a settled task. |
+| `completionPromise` rejection unhandled — non-zero CLI exit or spawn error. | Every `await completionPromise` must be try/caught. Rejection must be converted to a typed error; never swallowed. Floating unhandled rejections crash Node ≥15. |
+| Silent notification / prompt timeout — parent never sees `<system-reminder>` (v1 requirement). | Implement per-task notification timeout (default 60s). On timeout: abort subprocess, kill via `fkill`, log warning via `client.app.log`, set `status: 'failed'` with descriptive error in envelope. No silent hangs. |
+| `promptAsync` or `prompt` throws on dead/expired session. | Treat any throw from the notify call as a notification failure (see System-Wide Impact). Log, store `notifyError` in `TaskState`, do not rethrow. |
+| OpenCode SDK breaking changes post-publish invalidate plugin API calls. | Pin `@opencode-ai/sdk` and `@opencode-ai/plugin` to exact versions in `package.json`. Add a compatibility matrix to README. Consider runtime version check at plugin load that warns (not crashes) if SDK version is outside tested range. |
+| `fkill` flakiness on macOS vs Linux. | Use `fkill` npm package (v10.0.3, actively maintained, zero dependencies, SIGTERM→SIGKILL escalation with `forceTimeout`) instead of `tree-kill` (unmaintained Dec 2019). |
 
 ## Documentation / Operational Notes
 
