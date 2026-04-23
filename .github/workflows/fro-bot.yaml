@@ -8,6 +8,8 @@ on:
     types: [created]
   discussion_comment:
     types: [created]
+  issues:
+    types: [opened, edited]
   pull_request:
     types: [opened, synchronize, reopened, ready_for_review, review_requested]
   schedule:
@@ -159,6 +161,12 @@ jobs:
           !endsWith(github.event.pull_request.user.login || '', '[bot]') &&
           (github.event.pull_request.user.login || '') != 'fro-bot'
         ) ||
+        (
+          github.event_name == 'issues' &&
+          !endsWith(github.event.issue.user.login || '', '[bot]') &&
+          (github.event.issue.user.login || '') != 'fro-bot' &&
+          contains(github.event.issue.body || '', '@fro-bot')
+        ) ||
         github.event_name == 'schedule' ||
         github.event_name == 'workflow_dispatch' ||
         (
@@ -200,6 +208,7 @@ jobs:
               (github.event_name == 'workflow_dispatch' && (github.event.inputs.prompt || ''))
               || (github.event_name == 'schedule' && env.SCHEDULE_PROMPT)
               || (github.event_name == 'pull_request' && env.PR_REVIEW_PROMPT)
+              || (github.event_name == 'issues' && github.event.issue.body)
               || ''
             }}
         with:
