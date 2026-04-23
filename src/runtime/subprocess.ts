@@ -37,7 +37,7 @@ function assignFinalMessage(task: SpawnCopilotResult): void {
   const lastMessage = [...task.events]
     .reverse()
     .find((event) => event.type === 'message')
-  const content = lastMessage?.data.content
+  const content = lastMessage?.data?.content
 
   if (typeof content === 'string' && content.length > 0) {
     task.finalMessage = stripAnsi(content)
@@ -138,7 +138,9 @@ export function spawnCopilot(
       }
 
       task.status = 'cancelled'
-      void killProcessTree(task.pid)
+      killProcessTree(task.pid).catch(() => {
+        // Kill failure after abort is non-fatal — process may already be dead
+      })
     },
     { once: true },
   )

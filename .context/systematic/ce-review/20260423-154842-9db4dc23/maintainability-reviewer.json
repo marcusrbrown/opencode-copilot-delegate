@@ -1,0 +1,98 @@
+{
+  "reviewer": "maintainability",
+  "findings": [
+    {
+      "file": "src/runtime/subprocess.ts",
+      "line": 295,
+      "category": "premature-abstraction / naming",
+      "description": "`SpawnCopilotResult` is named like a passive DTO but acts as a live task handle: it owns a `ChildProcess`, an `AbortController`, mutable `status`, and a `completionPromise`. A caller receives this object and must mutate it to cancel or observe completion. This mismatch makes the lifetime model hard to reason about.",
+      "confidence": 0.85,
+      "suggestion": "Rename to `CopilotTask` or split into a pure `SpawnResult` (snapshot) and a separate `TaskHandle` / `TaskController` that owns the mutable runtime state."
+    },
+    {
+      "file": "src/runtime/subprocess.ts",
+      "line": 362,
+      "category": "coupling",
+      "description": "`spawnCopilot` generates its own `taskId` (`cpl_${crypto.randomUUID()}`) but never registers the task with `task-registry.ts`. Meanwhile `task-registry.ts` has an identical `TaskState` shape and its own `createTask` that generates a *second* ID. Any integration code will need to reconcile two IDs for the same logical task, creating a brittle hand-off.",
+      "confidence": 0.9,
+      "suggestion": "Either have `spawnCopilot` accept a `taskId` from the registry, or move `spawnCopilot` into the registry module so it can create and register the task atomically."
+    },
+    {
+      "file": "src/runtime/subprocess.ts vs src/runtime/task-registry.ts",
+      "line": null,
+      "category": "coupling / duplication",
+      "description": "`SpawnCopilotResult` and `TaskState` duplicate ~12 fields (pid, events, status, exitCode, stdoutLineBuffer, finalMessage, errorText, child, completionPromise, abortController, etc.). This near-identical shape means every future change to task metadata requires edits in two places.",
+      "confidence": 0.9,
+      "suggestion": "Extract a shared `BaseTask` or `Task` interface in a common location (e.g., `src/runtime/task.ts`) and have both modules extend or reference it."
+    },
+    {
+      "file": "src/runtime/notify.ts",
+      "line": 178,
+      "category": "coupling",
+      "description": "`inFlightCounters` is module-level mutable `Map` state with no eviction policy. In a long-running process (e.g., a server or REPL), parent session IDs will accumulate indefinitely, leaking memory.",
+      "confidence": 0.8,
+      "suggestion": "Add a `delete` call when a counter reaches zero, or wrap the map in a small class that manages lifecycle."
+    },
+    {
+      "file": "src/discovery/agents.ts",
+      "line": 29,
+      "category": "complexity / error-handling",
+      "description": "`scanDir` silently swallows *all* errors in a bare `catch`. If the directory exists but is unreadable (permissions), the caller gets an empty list with no diagnostic. This masks configuration mistakes.",
+      "confidence": 0.75,
+      "suggestion": "Distinguish `ENOENT` (return empty) from other errors (re-throw or log)."
+    },
+    {
+      "file": "src/lib/kill-tree.ts",
+      "line": 114,
+      "category": "dead-code / error-handling",
+      "description": "`killProcessTree` returns silently for invalid PIDs without logging or throwing. The `-1` sentinel PID produced by `spawnCopilot` when `child.pid` is undefined will flow here and be silently ignored, making process leaks invisible.",
+      "confidence": 0.8,
+      "suggestion": "Log a warning when PID is invalid, or throw so the caller can decide."
+    },
+    {
+      "file": "src/runtime/notify.ts",
+      "line": 148,
+      "category": "premature-abstraction",
+      "description": "`NotifyClient` is a broad, hand-rolled interface (`session`, `tui`, `app`) that mirrors an external client shape. It is only consumed by `notifyCompletion`. The abstraction adds indirection without enabling multiple implementations—tests mock the whole tree anyway.",
+      "confidence": 0.65,
+      "suggestion": "Inline the minimal shape needed (a `prompt` function and a `showToast` function) as separate parameters, or accept a smaller, task-specific interface."
+    },
+    {
+      "file": "src/runtime/subprocess.ts",
+      "line": 349,
+      "category": "naming",
+      "description": "`resolveAuthEnv` only resolves the GitHub auth token. The name implies general auth resolution, but the function is a single-field normalizer.",
+      "confidence": 0.7,
+      "suggestion": "Rename to `normalizeCopilotTokenEnv` or similar to reflect the single concern."
+    },
+    {
+      "file": "tests/subprocess.test.ts",
+      "line": 1180,
+      "category": "unnecessary-indirection",
+      "description": "`loadModules` uses `Reflect.get` to dynamically extract exports. This adds a layer of runtime indirection that TypeScript cannot check, and the `requireFunction` helper only asserts `typeof === 'function'`.",
+      "confidence": 0.6,
+      "suggestion": "Use static ES imports (`import { spawnCopilot } from '../src/runtime/subprocess'`) and let the type checker validate the shapes."
+    },
+    {
+      "file": "src/runtime/task-registry.ts",
+      "line": 460,
+      "category": "dead-code",
+      "description": "`TaskState` declares `endedAt?: number` but nothing in the diff writes to this field. If it is meant to be set by a future consumer, it is currently dead weight; if it is forgotten, it is a bug.",
+      "confidence": 0.7,
+      "suggestion": "Populate `endedAt` in `cleanupAll` or in a post-completion hook, or remove the field until needed."
+    }
+  ],
+  "residual_risks": [
+    "The `inFlightCounters` Map in `notify.ts` is shared mutable state without locking. While the decrement happens synchronously, concurrent increments/decrements across event-loop ticks could still race if `incrementInFlight` and `notifyCompletion` are called from different async contexts.",
+    "`spawnCopilot` attaches event listeners (`child.stdout.on('data')`, `child.stderr.on('data')`) but never removes them. If the `ChildProcess` object is retained in the registry, these closures keep the `task` object alive, creating a potential memory leak.",
+    "`fkill` is wrapped in a thin wrapper (`killProcessTree`) that hard-codes timeouts (`forceAfterTimeout: 2000`, `waitForExit: 5000`). If these values need tuning per-environment, the constants are buried in a library module and not configurable.",
+    "`scanDir` in `agents.ts` only looks at filenames, not file contents. A malformed `.md` file (e.g., empty, invalid frontmatter) will still surface as an available agent, which may lead to confusing runtime failures later."
+  ],
+  "testing_gaps": [
+    "No test verifies that `task-registry.ts` `cleanupAll` correctly sets `endedAt` (if that field is intended to be used).",
+    "No test for `agents.ts` `scanDir` when a directory exists but is unreadable (permissions error).",
+    "No test for `kill-tree.ts` behavior when `pid` is `-1` (the sentinel from `spawnCopilot`).",
+    "No test for `notify.ts` memory-leak scenario: repeatedly calling `incrementInFlight` with new session IDs and verifying that counters are evicted when they reach zero.",
+    "No integration test showing `spawnCopilot` + `task-registry` working together; the two modules are tested in isolation, hiding the double-ID problem."
+  ]
+}

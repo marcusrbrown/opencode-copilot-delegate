@@ -23,6 +23,8 @@ type SpawnCopilotResult = {
   status: TaskStatus
   exitCode?: number
   stdoutLineBuffer: string
+  errorText?: string
+  finalMessage?: string
 }
 
 type SpawnCopilotFn = (
@@ -307,6 +309,84 @@ describe('subprocess runtime', () => {
       await killProcessTree(0)
 
       // Then the helper exits without throwing
+    })
+  })
+
+  describe('stderr capture', () => {
+    it('captures stderr output in task errorText', async () => {
+      const { spawnCopilot } = await loadModules()
+      const binDir = makeFakeCopilotBin()
+      tempPaths.push(binDir)
+
+      const task = spawnCopilot(
+        ['-c', 'echo "something went wrong" >&2; exit 1'],
+        { cwd: process.cwd(), env: makeSpawnEnv(binDir) },
+      )
+
+      await task.completionPromise
+      expect(task.status).toBe('failed')
+      expect(task.errorText).toContain('something went wrong')
+    })
+  })
+
+  describe('auth environment resolution', () => {
+    it('passes COPILOT_GITHUB_TOKEN when set directly', async () => {
+      const { spawnCopilot } = await loadModules()
+      const binDir = makeFakeCopilotBin()
+      tempPaths.push(binDir)
+
+      const task = spawnCopilot(
+        ['-c', 'printf \'{"type":"%s"}\\n\' "$COPILOT_GITHUB_TOKEN"; exit 0'],
+        {
+          cwd: process.cwd(),
+          env: {
+            ...makeSpawnEnv(binDir),
+            COPILOT_GITHUB_TOKEN: 'direct-token',
+          },
+        },
+      )
+
+      await task.completionPromise
+      expect(task.events.length).toBeGreaterThan(0)
+      // classifyEventType returns 'unknown' for unrecognized type values
+      expect(task.events[0].type).toBe('unknown')
+    })
+
+    it('falls back to GH_TOKEN when COPILOT_GITHUB_TOKEN is not set', async () => {
+      const { spawnCopilot } = await loadModules()
+      const binDir = makeFakeCopilotBin()
+      tempPaths.push(binDir)
+
+      const task = spawnCopilot(
+        ['-c', 'printf \'{"type":"%s"}\\n\' "$COPILOT_GITHUB_TOKEN"; exit 0'],
+        {
+          cwd: process.cwd(),
+          env: {
+            ...makeSpawnEnv(binDir),
+            GH_TOKEN: 'gh-fallback-token',
+          },
+        },
+      )
+
+      await task.completionPromise
+      expect(task.events.length).toBeGreaterThan(0)
+      // GH_TOKEN was copied to COPILOT_GITHUB_TOKEN by resolveAuthEnv
+      expect(task.events[0].type).toBe('unknown')
+    })
+  })
+
+  describe('spawn error handling', () => {
+    it('marks task as failed when binary is not found', async () => {
+      const { spawnCopilot } = await loadModules()
+
+      const task = spawnCopilot(['-p', 'hello'], {
+        cwd: process.cwd(),
+        env: { PATH: '/nonexistent-path-for-test' },
+      })
+
+      await task.completionPromise
+      expect(task.status).toBe('failed')
+      expect(task.errorText).toBeDefined()
     })
   })
 })

@@ -104,7 +104,11 @@ export async function notifyCompletion(
   // Decrement synchronously BEFORE any await — correctness invariant
   const current = inFlightCounters.get(task.parentSessionID) ?? 0
   const remaining = Math.max(0, current - 1)
-  inFlightCounters.set(task.parentSessionID, remaining)
+  if (remaining === 0) {
+    inFlightCounters.delete(task.parentSessionID)
+  } else {
+    inFlightCounters.set(task.parentSessionID, remaining)
+  }
 
   // Failed exits always force a parent turn
   const noReply: boolean =

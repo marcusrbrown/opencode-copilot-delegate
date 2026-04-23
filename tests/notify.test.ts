@@ -278,6 +278,28 @@ describe('notification injection', () => {
     })
   })
 
+  describe('cancelled status', () => {
+    it('should set noReply false for cancelled tasks', async () => {
+      const client = mockClient()
+      incrementInFlight('session-A')
+      incrementInFlight('session-A')
+
+      await notifyCompletion(client, makeTaskInfo({ status: 'cancelled' }))
+
+      expect(client.promptCalls[0].noReply).toBe(false)
+    })
+
+    it('should show error toast variant for cancelled tasks', async () => {
+      const client = mockClient()
+      incrementInFlight('session-A')
+
+      await notifyCompletion(client, makeTaskInfo({ status: 'cancelled' }))
+
+      expect(client.toastCalls[0].variant).toBe('error')
+      expect(client.toastCalls[0].message).toContain('cancelled')
+    })
+  })
+
   describe('error handling', () => {
     it('should not throw when prompt call fails', async () => {
       // Given a client whose prompt throws
