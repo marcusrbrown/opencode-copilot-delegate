@@ -32,6 +32,7 @@ export type EnvelopeInput = {
   events: ParsedEvent[]
   status: TaskStatus
   startedAt: number
+  endedAt?: number
   exitCode?: number
   agentName?: string
   modelName?: string
@@ -112,6 +113,7 @@ export function buildEnvelope(input: EnvelopeInput): OutputEnvelope {
     events,
     status,
     startedAt,
+    endedAt,
     exitCode,
     agentName,
     modelName,
@@ -119,7 +121,7 @@ export function buildEnvelope(input: EnvelopeInput): OutputEnvelope {
     timedOut,
   } = input
 
-  const durationMs = Date.now() - startedAt
+  const durationMs = (endedAt ?? Date.now()) - startedAt
   const finalMessage = extractFinalMessage(events)
   const toolCalls = aggregateToolCalls(events)
   const tokens = extractTokens(events)

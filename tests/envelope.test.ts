@@ -44,17 +44,28 @@ describe('buildEnvelope', () => {
       expect(envelope.events_count).toBe(0)
     })
 
-    it('should compute duration_ms from startedAt', () => {
-      // Given input with a known startedAt
-      const now = Date.now()
-      const input = makeInput({ startedAt: now - 3000 })
+    it('should compute duration_ms from startedAt and endedAt', () => {
+      // Given input with known startedAt and endedAt
+      const input = makeInput({ startedAt: 1000, endedAt: 4000 })
 
       // When the envelope is built
       const envelope = buildEnvelope(input)
 
-      // Then duration_ms should be approximately 3000ms (allow ±100ms)
-      expect(envelope.duration_ms).toBeGreaterThanOrEqual(2900)
-      expect(envelope.duration_ms).toBeLessThanOrEqual(3200)
+      // Then duration_ms should be exactly 3000ms (deterministic)
+      expect(envelope.duration_ms).toBe(3000)
+    })
+
+    it('should fall back to Date.now() when endedAt is not provided', () => {
+      // Given input with only startedAt
+      const now = Date.now()
+      const input = makeInput({ startedAt: now - 1000 })
+
+      // When the envelope is built
+      const envelope = buildEnvelope(input)
+
+      // Then duration_ms should be approximately 1000ms
+      expect(envelope.duration_ms).toBeGreaterThanOrEqual(900)
+      expect(envelope.duration_ms).toBeLessThanOrEqual(1200)
     })
   })
 
