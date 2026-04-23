@@ -1,26 +1,78 @@
-# OpenCode Copilot Delegate Plugin — Implementation Plan
+---
+title: "feat: OpenCode Copilot Delegate Plugin"
+type: feat
+status: active
+date: 2026-04-21
+origin: "~/.context/systematic/ce-brainstorm/2026-04-21-copilot-delegate-plugin-requirements.md"
+deepened: 2026-04-23
+confidence_checked: 2026-04-23
+testing_strategy_updated: 2026-04-23
+---
 
-**Date:** 2026-04-21
-**Status:** Plan ready for review (Metis pass 1 incorporated 2026-04-22)
-**Predecessor:** `~/.context/systematic/ce-brainstorm/2026-04-21-copilot-delegate-plugin-requirements.md`
-**Predecessor (ideation):** `~/.context/systematic/ce-ideation/2026-04-21-copilot-cli-delegation.md`
+# feat: OpenCode Copilot Delegate Plugin
 
-## Mental Model (Corrected)
+## Overview
 
-The parent OpenCode agent is **not** single-threaded. It can call other tools, spawn subagents via the native `task` tool, perform direct work, and continue interacting with the user while a delegated Copilot subprocess runs. The plugin's job is:
+An OpenCode plugin that lets the parent agent delegate work to the GitHub Copilot CLI (`copilot`) as a non-blocking background subprocess. The parent gets a `task_id` synchronously, does other work, and receives a `<system-reminder>` injection when Copilot finishes. A second tool retrieves the structured result; a third cancels an in-flight delegation.
 
-1. Spawn `copilot -p ... --output-format json` in the background.
-2. Return a `task_id` synchronously so the parent agent never blocks.
-3. When the subprocess completes, **push a `<system-reminder>` notification into the parent session** so the parent agent gets a turn and knows results are ready.
-4. Provide a separate tool to retrieve the structured envelope on demand.
+The parent OpenCode agent is **not** single-threaded. It can call other tools, spawn subagents via the native `task` tool, perform direct work, and continue interacting with the user while a delegated Copilot subprocess runs. This is exactly the pattern OMO (`oh-my-openagent`) uses internally for its `background_task` / `background_output` tools, and the pattern `opencode-pty` uses publicly for PTY notifications.
 
-This is exactly the pattern OMO (`oh-my-openagent`) uses internally for its `background_task` / `background_output` tools, and it's the pattern `opencode-pty` uses publicly for PTY notifications.
+## Problem Frame
 
-## Verified Evidence (from research, 2026-04-21)
+Agents using OpenCode want to offload longer-running or Copilot-specific tasks to the GitHub Copilot CLI without blocking the parent session. There is no native mechanism to do this today — the CLI must be invoked as a subprocess, managed for output/cancellation, and results surfaced back into the active session asynchronously. This plugin provides that bridge as a standalone npm package.
 
-### Plugin API surface
+## Requirements Trace
 
-`PluginInput` exposes (verified at `~/.local/share/mise/installs/npm-cortexkit-aft-opencode/0.14.0/node_modules/@opencode-ai/plugin/dist/index.d.ts`):
+- R1. Parent agent calls `copilot_delegate`, receives `task_id` synchronously, does unrelated work while subprocess runs.
+- R2. When Copilot finishes, a `<system-reminder>` is injected into the parent session; parent then calls `copilot_output(task_id)` to retrieve the structured envelope.
+- R3. `copilot_delegate` description lists merged built-in + user + repo agents, refreshed at plugin load.
+- R4. `copilot_cancel` cleanly terminates a running delegation; subsequent `copilot_output` returns `status: 'cancelled'`.
+- R5. With plugin installed the `copilot-cli` skill branches to prefer plugin tools; without it, the skill falls back to the direct subprocess pattern.
+- R6. Plugin published as a standalone npm package with semver and `.changeset`-managed changelog.
+
+## Scope Boundaries
+
+- No persona file system management (Copilot owns `~/.copilot/agents/`).
+- No transcript/`--share` artifact handling.
+- No auth shim (sanitizing `GH_TOKEN`, etc.) — out of scope for v1.
+- No MCP-over-Copilot or trajectory capture.
+- No streaming returns from `execute` — unverified runtime capability.
+- No dynamic SKILL.md rewriting from the plugin.
+
+### Deferred to Separate Tasks
+
+- `ce:compound` integration: future iteration.
+- Cross-process task sharing (sqlite registry + IPC + notification fanout): future major version.
+- `copilot_list_agents` tool: v1.x, only needed if agent list exceeds 20 entries.
+- PID-file reaper for orphaned subprocesses: v1.x.
+
+## Context & Research
+
+### Async Notification Mechanism
+
+Verified against `oh-my-openagent@3.17.4`. OMO injects notifications via `client.session.promptAsync`:
+
+```typescript
+await client.session.promptAsync({
+  path: { id: task.parentSessionID },
+  body: {
+    noReply: !allComplete,
+    parts: [{ type: 'text', text: notification, synthetic: true }],
+  },
+});
+```
+
+`noReply` semantics (verified):
+- `noReply: true` → message injected but does NOT force a parent turn. Used when other tasks still in flight.
+- `noReply: false` → forces parent to take a turn now. OMO uses this only when ALL in-flight tasks complete.
+
+OMO detects completion via polling `client.session.status()` every 2s and reacting to `session.idle` events. Our plugin detects completion via the subprocess `close` event directly.
+
+`synthetic: true` on a `TextPartInput` is the public SDK equivalent of OMO's internal `OMO_INTERNAL_INITIATOR_MARKER`. `createInternalAgentTextPart()` is an OMO-internal helper not present in `@opencode-ai/plugin` or `@opencode-ai/sdk`; do not reference it in plugin code.
+
+### Plugin API Surface
+
+`PluginInput` exposes (verified against `@opencode-ai/plugin` v1.14.21 — stable since v1.4.17):
 
 - `client: ReturnType<typeof createOpencodeClient>` — full SDK client.
 - `directory: string` — working directory.
@@ -30,49 +82,9 @@ This is exactly the pattern OMO (`oh-my-openagent`) uses internally for its `bac
 - `$: BunShell` — shell execution helper.
 - `experimental_workspace.register(type, adaptor)` — workspace adaptor registration.
 
-### Async notification injection (the key mechanism)
+### Tool Registration Pattern
 
-OMO uses (verified at `~/.cache/opencode/packages/oh-my-openagent@3.17.4/node_modules/oh-my-openagent/dist/index.js` line `62018`, plus additional callsites at `64261` and `66174`; types verified at `@opencode-ai/sdk/dist/gen/types.gen.d.ts` lines `2241` and `2326` — both `SessionPromptData` and `SessionPromptAsyncData` accept `noReply?: boolean`):
-
-```typescript
-await client.session.promptAsync({
-  path: { id: task.parentSessionID },
-  body: {
-    noReply: !allComplete,             // true while other tasks still running; false when last completes
-    ...(agent !== undefined ? { agent } : {}),
-    ...(model !== undefined ? { model } : {}),
-    ...(resolvedTools ? { tools: resolvedTools } : {}),
-    parts: [createInternalAgentTextPart(notification)],
-  },
-});
-```
-
-**`noReply` semantics (verified):**
-
-- `noReply: true` → message is injected into the parent session but does NOT force the parent agent to take a turn. The next time the parent agent runs (e.g., when another task completes with `noReply: false`, or when the user types), the reminder is visible in context.
-- `noReply: false` → forces the parent to take a turn now. OMO uses this only when ALL in-flight tasks have completed (so the parent gets exactly one wake-up regardless of how many tasks finished in the same window).
-
-The notification text itself is built as a `<system-reminder>` block. `createInternalAgentTextPart()` (verified at `~/.cache/opencode/packages/oh-my-openagent@3.17.4/node_modules/oh-my-openagent/dist/index.js` near line `62713`) wraps the text and appends `OMO_INTERNAL_INITIATOR_MARKER` so the runtime can identify the part as system-injected:
-
-```
-<system-reminder>
-[BACKGROUND TASK COMPLETED]
-**ID:** `<task_id>`
-**Description:** <description>
-**Duration:** <duration>
-
-**N tasks still in progress.** You WILL be notified when ALL complete.
-Do NOT poll - continue productive work.
-
-Use `background_output(task_id="<task_id>")` to retrieve this result when ready.
-</system-reminder>
-```
-
-OMO detects completion via two paths: polling `client.session.status()` every 2s (`POLL_INTERVAL_BACKGROUND_MS = 2000`) and reacting to `session.idle` events from `client.event.subscribe()`. Our plugin doesn't have parent OpenCode sessions to watch — it has Copilot subprocesses. We detect completion via the subprocess `close` event directly, then call `client.session.promptAsync()` with the parent session ID.
-
-### Tool registration
-
-Verified at `~/src/github.com/marcusrbrown/systematic/`:
+Verified at `src/` in the `marcusrbrown/systematic` repo:
 
 ```typescript
 import type { Plugin } from '@opencode-ai/plugin'
@@ -81,7 +93,7 @@ import { tool } from '@opencode-ai/plugin/tool'
 export const CopilotDelegate: Plugin = async ({ client, directory }) => ({
   tool: {
     copilot_delegate: tool({
-      description: '...',                           // string or getter
+      description: '...',
       args: { prompt: tool.schema.string().describe('...') },
       async execute(args, ctx) {
         // ctx.sessionID, ctx.ask({...}), ctx.metadata({...})
@@ -94,139 +106,66 @@ export const CopilotDelegate: Plugin = async ({ client, directory }) => ({
 
 `ctx.sessionID` is the parent session ID — exactly what we pass to `client.session.promptAsync({ path: { id: ctx.sessionID } })` for completion injection.
 
-### Reference implementation: `opencode-pty`
+### Reference Implementations
 
-`shekohex/opencode-pty` uses the same pattern publicly:
+- **`shekohex/opencode-pty`** (`src/plugin.ts`): uses `client.session.prompt` with `noReply: true` + text part — same pattern.
+- **`cloveric/cc-telegram-bridge`** (`src/codex/process-adapter.ts`): subprocess wrapping with `spawn`, line-buffered JSONL stdout, `turnState` accumulator, `AbortSignal` → `killProcessTree`, `close` event → resolve.
 
-```typescript
-await client.session.prompt({
-  path: { id: input.sessionID },
-  body: {
-    noReply: true,
-    parts: [{ type: 'text', text: message }],
-  },
-})
+### Subprocess Pattern
+
 ```
-
-### Subprocess wrapping pattern
-
-Reference implementation: `cloveric/cc-telegram-bridge` (`src/codex/process-adapter.ts`). Confirmed pattern:
-
-- `spawn(command, args, { stdio: ['pipe', 'pipe', 'pipe'], shell, env, cwd, windowsHide: true })`
-- Line-buffer `stdout` and parse JSONL events incrementally (`stdoutLineBuffer.split(/\r?\n/)`).
-- Maintain a `turnState` accumulator that updates from each parsed JSON line (extract `thread_id`, agent messages, `usage`, errors).
-- On `close` event, resolve the promise with `{ state, stderrTail, exitCode }`.
+spawn(command, args, { stdio: ['pipe', 'pipe', 'pipe'], shell, env, cwd, windowsHide: true })
+```
+- Line-buffer `stdout`, parse JSONL events incrementally.
+- Maintain a `turnState` accumulator (extract `thread_id`, messages, `usage`, errors).
+- On `close` event, resolve with `{ state, stderrTail, exitCode }`.
 - Honor `AbortSignal` → `killProcessTree(child.pid)` for cancellation.
 
-### Copilot CLI invocation contract
+### Copilot CLI Invocation Contract
 
-Already documented in `~/.agents/skills/copilot-cli/SKILL.md`. The plugin always invokes:
+Already documented in the `copilot-cli` skill. Always invokes:
 
 ```
 copilot -p "<prompt>" --output-format json -s --allow-all-tools --no-ask-user [extras]
 ```
 
-With optional `--agent`, `--model`, `--add-dir`, `--allow-tool`, `--deny-tool` extras passed through from tool args.
+Optional extras: `--agent`, `--model`, `--add-dir`, `--allow-tool`, `--deny-tool`.
 
-Auth precedence: `COPILOT_GITHUB_TOKEN` > `GH_TOKEN` > `GITHUB_TOKEN` > `~/.copilot/auth`. Plugin does NOT sanitize — out of scope for v1 (per brainstorm non-goals).
+Auth precedence: `COPILOT_GITHUB_TOKEN` > `GH_TOKEN` > `GITHUB_TOKEN` > `~/.copilot/auth`.
 
-## Scope (v1)
+### Institutional Learnings
 
-### In scope
+- OMO in-flight counter pattern: track per-parent-session task count; `noReply: false` only on last completion.
+- `fkill` npm package (v10.0.3, Jan 2026, actively maintained) preferred over `tree-kill` (unmaintained since 2019) for SIGTERM→SIGKILL escalation with timeout.
+- JSONL schema is version-specific — snapshot real Copilot output as test fixtures to detect drift.
 
-- Three registered tools: `copilot_delegate`, `copilot_output`, `copilot_cancel`.
-- Async lifecycle with `<system-reminder>` injection on completion via `client.session.promptAsync`.
-- Agent discovery in `copilot_delegate` description (built-in + `~/.copilot/agents/*.md` + `<cwd>/.github/agents/*.md`), refreshed on plugin load.
-- JSONL event parsing into a structured envelope (`status`, `exit_code`, `model`, `duration_ms`, `tokens`, `final_message`, `tool_calls_summary`, `error?`).
-- Cancellation via SIGTERM with SIGKILL escalation after grace period.
-- Standalone npm package + GitHub repo with semver and changelog.
-- Skill update at `~/.agents/skills/copilot-cli/SKILL.md` to branch on plugin presence.
+## Key Technical Decisions
 
-### Out of scope (deferred)
+- **Three tools only:** `copilot_delegate`, `copilot_output`, `copilot_cancel` cover the full lifecycle for v1.
+- **In-memory registry:** `Map<string, TaskState>` at plugin scope. Keyed by `cpl_` + UUID v4. Cleaned on plugin shutdown. Cross-process sharing deferred to v1.x (see Resolved Decision #5).
+- **`noReply` tracking:** Mirror OMO — per-parent-session in-flight counter. First N-1 completions → `noReply: true`; final completion → `noReply: false`. Failed exits always `noReply: false`.
+- **Description refresh cadence:** Plugin load only. Re-scanning per call adds I/O on the hot path with no benefit.
+- **`fkill` for process cleanup:** Use `fkill` npm package (v10.0.3, Jan 2026, 229K weekly downloads, zero dependencies) rather than `tree-kill` (unmaintained since Dec 2019, no SIGTERM→SIGKILL escalation, no timeout). Use `fkill(pid, { force: false, forceTimeout: 2000, waitForExit: 5000 })` pattern. `fkill` v10 requires `pid` as a number (not string); import: `import fkill from 'fkill'`.
+- **Cap agent list at 20:** If more, show first 20 + "… and N more (use copilot_list_agents to see all)"; `copilot_list_agents` ships in v1.x.
+- **TUI toast on completion:** Yes — call `client.tui.showToast({ body: { message: '<text>', variant: 'success' } })` alongside session-prompt injection. `variant` is non-optional: `'info'|'success'|'warning'|'error'`. Confirmed present in SDK v1.14.21.
+- **`TaskState` lifetime:** Keep until plugin shutdown so repeat `copilot_output` calls are idempotent. No `discard` arg in v1.
 
-- Persona file system (Copilot owns `~/.copilot/agents/`).
-- Transcript/`--share` artifact handling.
-- `ce:compound` integration.
-- Auth shim (sanitizing `GH_TOKEN`, etc.).
-- MCP-over-Copilot or trajectory capture.
-- Streaming returns from `execute` (unverified runtime capability).
-- Dynamic SKILL.md rewriting from the plugin.
+## Open Questions
 
-## Tool I/O Contracts
+### Resolved During Planning
 
-### `copilot_delegate`
+- **Repo/package name:** `opencode-copilot-delegate`. Public unscoped npm package, same name.
+- **Versioning:** Start at `0.1.0`, stay on `0.x` during initial development (unstable).
+- **Cross-session task visibility:** Single-session scope — `TaskState` is in-memory inside one OpenCode process. Cross-process access returns `task_id not found in this OpenCode process`. Document boundary in README.
+- **`promptAsync` + `noReply`:** Confirmed in `@opencode-ai/sdk` v1.14.21. Both `prompt()` and `promptAsync()` accept `noReply?: boolean` in body. `promptAsync` returns 204 void (fire-and-forget). `noReply: true` suppresses automatic LLM reply; `noReply: false` forces parent turn.
+- **Built-in Copilot agent names:** Confirmed from official docs. All lowercase with hyphens: `explore`, `task`, `general-purpose`, `code-review`, `research`, `critic` (experimental — requires `--experimental` flag). Verify exact list via `copilot agent list` at impl time as a sanity check only.
 
-**Args (validated via `tool.schema`):**
+### Deferred to Implementation
 
-```typescript
-{
-  prompt: string                      // required, min length 1
-  agent?: string                      // optional; must match a discovered agent name or be 'default'
-  model?: string                      // optional; passed through to --model
-  add_dir?: string[]                  // optional; each becomes --add-dir <path>
-  allow_tool?: string[]               // optional; each becomes --allow-tool <pattern>
-  deny_tool?: string[]                // optional; each becomes --deny-tool <pattern>
-}
-```
+- Does `client.tui.showToast(...)` exist in the current SDK and what is its exact signature? Verify at impl time during T4. If absent, drop Resolved Decision #4 and document in README.
+- `noReply: true` behavior with the OpenCode TUI: does an injected message appear in conversation history, or only when the parent next takes a turn? Test during T7 (E2E verification).
 
-**Returns:**
-
-```typescript
-{ task_id: string }                   // 'cpl_' + uuid v4
-```
-
-**Errors:** Throws if `copilot` binary not on PATH (clear message with install hint). Logs (not throws) on unknown agent name and falls through to default.
-
-### `copilot_output`
-
-**Args:**
-
-```typescript
-{
-  task_id: string                     // required, must start with 'cpl_'
-  block?: boolean                     // default false
-  timeout_ms?: number                 // default 30000, max 120000
-}
-```
-
-**Returns (envelope):**
-
-```typescript
-{
-  task_id: string
-  status: 'running' | 'complete' | 'failed' | 'cancelled'
-  exit_code?: number                  // present when status !== 'running'
-  agent?: string                      // resolved agent name or undefined for default
-  model?: string                      // resolved model name or undefined for default
-  duration_ms: number                 // wall clock so far (or final)
-  tokens?: { input: number; output: number; total: number }  // best-effort from JSONL usage events
-  final_message?: string              // ANSI-stripped last assistant message; undefined while running
-  tool_calls_summary: { name: string; count: number }[]      // aggregated from tool_use events
-  error?: string                      // stderr tail (last 4KB) when status === 'failed'
-  timed_out?: boolean                 // true when block: true and timeout_ms elapsed before close
-  events_count: number                // diagnostic: how many JSONL lines were parsed
-}
-```
-
-**Errors:** Returns `{ task_id, status: 'unknown', error: 'task_id not found in this OpenCode process' }` when registry miss. Does NOT throw \u2014 lets the agent continue.
-
-### `copilot_cancel`
-
-**Args:**
-
-```typescript
-{ task_id: string }                   // required
-```
-
-**Returns:**
-
-```typescript
-{ cancelled: boolean; was_running: boolean }
-```
-
-`cancelled: true, was_running: true` is the success case. `cancelled: false, was_running: false` if already terminated. Does NOT throw on unknown `task_id`; returns `{ cancelled: false, was_running: false }`.
-
-### Module layout
+## Output Structure
 
 ```
 opencode-copilot-delegate/
@@ -249,333 +188,600 @@ opencode-copilot-delegate/
 │       ├── ansi.ts             # Strip ANSI escapes
 │       └── kill-tree.ts        # killProcessTree helper
 ├── tests/
+│   ├── fixtures/
+│   │   ├── happy-path.jsonl
+│   │   ├── model-error.jsonl
+│   │   ├── multi-tool.jsonl
+│   │   └── README.md
+│   ├── integration/
+│   │   ├── opencode.test.ts        # Server-spawning integration tests (T6.5)
+│   │   ├── helpers/
+│   │   │   ├── server.ts           # Spawn / health-poll / teardown
+│   │   │   └── client.ts           # SDK client factory
+│   │   └── fixtures/               # Minimal project dir for spawned server
 │   ├── jsonl-parser.test.ts
 │   ├── envelope.test.ts
 │   ├── agents.test.ts
-│   └── subprocess.test.ts
+│   ├── subprocess.test.ts
+│   ├── notify.test.ts
+│   └── tools.test.ts
 ├── package.json
 ├── tsconfig.json
 ├── README.md
 ├── CHANGELOG.md
+├── VERIFICATION.md
 └── LICENSE
 ```
 
-### TaskState shape
+## High-Level Technical Design
 
-```typescript
-type TaskState = {
-  taskId: string
-  parentSessionID: string         // captured from ctx.sessionID at delegate time
-  pid: number
-  startedAt: number               // Date.now()
-  endedAt?: number
-  status: 'running' | 'complete' | 'failed' | 'cancelled'
-  exitCode?: number
-  args: string[]                  // resolved CLI args (for debugging)
-  cwd: string
-  agentName?: string
-  modelName?: string
-  stdoutLineBuffer: string        // partial line from line-splitting
-  events: ParsedEvent[]           // accumulated JSONL events
-  finalMessage?: string
-  errorText?: string
-  child: ChildProcess             // node:child_process handle
-  abortController: AbortController
-}
+> *This illustrates the intended approach and is directional guidance for review, not implementation specification. The implementing agent should treat it as context, not code to reproduce.*
+
+**Event flow (single delegation):**
+
+```
+Parent agent
+  → copilot_delegate(prompt, agent?, model?, ...)
+      builds CLI args
+      spawn('copilot', args) → child process
+      registers TaskState under task_id
+      returns { task_id } synchronously
+
+Child process (background)
+  stdout → line-buffer → JSON.parse each line
+          → ParsedEvent → accumulate in state.events
+  close event
+      → set state.status, endedAt, exitCode
+      → build <system-reminder> notification
+      → client.session.promptAsync(parentSessionID, { noReply, parts: [notification] })
+
+Parent agent (next turn)
+  sees <system-reminder>[COPILOT DELEGATION COMPLETED] in context
+  → copilot_output(task_id)
+      reads TaskState from registry
+      builds structured envelope from events
+      returns envelope
 ```
 
-Stored in a single in-memory `Map<string, TaskState>` (`taskRegistry`) at plugin scope. Keyed by `task_id` (UUID v4 prefixed `cpl_`). Cleaned up on plugin shutdown via `Bun.signal` / process exit.
+**`noReply` logic (mirroring OMO):**
 
-### Event flow (single delegation)
+```
+inFlightCounter[parentSessionID]++  on delegate
+const remaining = --inFlightCounter[parentSessionID]  // atomic: decrement before any await
 
-1. Parent agent calls `copilot_delegate({ prompt, agent?, model?, ... })`.
-2. Tool builds CLI args, calls `spawn('copilot', args, ...)`, captures `child.pid`.
-3. Tool builds `TaskState`, registers under `task_id`, attaches stdout line-buffer parser.
-4. Tool returns `{ task_id }` synchronously.
-5. Parent agent does other work.
-6. Subprocess emits JSONL lines on stdout → parser extracts thread_id, agent messages, usage, errors → updates `state.events`.
-7. Subprocess `close` event fires → tool computes `endedAt`, sets `status` from exit code, builds completion notification, calls `client.session.promptAsync({ path: { id: parentSessionID }, body: { noReply: false, parts: [createInternalTextPart(notification)] } })`.
-8. Parent agent receives a turn with the `<system-reminder>` content visible.
-9. Parent agent calls `copilot_output(task_id)`.
-10. Tool reads `TaskState` from registry, builds envelope from accumulated events, returns it.
+noReply = remaining > 0
+          (true while other tasks still running → silent injection)
+          (false when last task completes → forces parent turn)
+          (always false on failed exit → forces parent turn)
+```
 
-### Cancellation flow
+**Tool I/O contracts:**
 
-1. Parent agent calls `copilot_cancel({ task_id })`.
-2. Tool looks up `TaskState`, calls `killProcessTree(state.pid, 'SIGTERM')`.
-3. After 2s grace period, escalates to SIGKILL if still alive.
-4. Sets `state.status = 'cancelled'`, fires the same completion notification path as natural exit.
-5. Returns `{ cancelled: true }`.
+`copilot_delegate` args:
+```
+prompt: string (required, min 1)
+agent?: string
+model?: string
+add_dir?: string[]
+allow_tool?: string[]
+deny_tool?: string[]
+```
+Returns: `{ task_id: string }` — `'cpl_' + uuid v4`.
 
-### `notification` message shape
+`copilot_output` args:
+```
+task_id: string (required, must start with 'cpl_')
+block?: boolean (default false)
+timeout_ms?: number (default 30000, max 120000)
+```
+Returns envelope:
+```
+task_id, status ('running'|'complete'|'failed'|'cancelled'),
+exit_code?, agent?, model?, duration_ms,
+tokens?, final_message?, tool_calls_summary[],
+error?, timed_out?, events_count
+```
+On registry miss: returns `{ task_id, status: 'unknown', error: '...' }` — does NOT throw.
 
-Mirroring OMO's format so the parent agent gets a familiar pattern:
+`copilot_cancel` args: `{ task_id: string }`.
+Returns: `{ cancelled: boolean; was_running: boolean }`.
+Does NOT throw on unknown `task_id`.
 
+**Notification message shape:**
 ```
 <system-reminder>
 [COPILOT DELEGATION COMPLETED]
 **Task ID:** `<task_id>`
 **Agent:** <agent or "default">
 **Model:** <model or "default">
-**Duration:** <human-readable duration>
+**Duration:** <human-readable>
 **Status:** <complete | failed | cancelled>
 
 Use `copilot_output(task_id="<task_id>")` to retrieve the structured result.
 </system-reminder>
 ```
+On `status: failed` — append `**ACTION REQUIRED:** Subprocess exited with code <N>.`
 
-When `status = failed`, append `**ACTION REQUIRED:** Subprocess exited with code <N>. Check copilot_output for error details.` and set `noReply: false` (force a turn). When `status = complete` and only one task is in flight, set `noReply: false` so the parent gets a turn. When multiple delegations are running and only one finishes, OMO's pattern is `noReply: true` until all complete; we mirror that by tracking a per-parent-session count of in-flight tasks.
-
-### Description string for `copilot_delegate`
-
-Built once at plugin load by `discovery/description.ts`. Pseudocode:
-
+**`TaskState` shape:**
 ```typescript
-function buildDescription(directory: string): string {
-  const builtIn: AgentInfo[] = [
-    { name: 'default', source: 'builtin', summary: 'Copilot picks the best path' },
-    // (Verify Copilot's actual built-in agent names at implementation time —
-    // brainstorm doc lists "Explore", "Task", "General-purpose", "Code-review"
-    // but we'll cross-check against `copilot agent list` or docs.)
-  ]
-  const userAgents = scanAgentDir(`${homedir()}/.copilot/agents`)
-  const repoAgents = scanAgentDir(`${directory}/.github/agents`)
-  const merged = mergeAgents(builtIn, userAgents, repoAgents) // user/repo override builtin
-
-  return [
-    'Delegate a task to GitHub Copilot CLI as a background subprocess.',
-    'Returns a task_id immediately; parent agent continues other work.',
-    'When Copilot completes, a system-reminder is injected into this session.',
-    'Retrieve the structured result with `copilot_output(task_id)`.',
-    '',
-    'Available Copilot agents (pass via `agent` arg, or omit for default):',
-    ...merged.map(a => `  - ${a.name} (${a.source})${a.summary ? ` — ${a.summary}` : ''}`),
-  ].join('\n')
+type TaskState = {
+  taskId: string
+  parentSessionID: string
+  pid: number
+  startedAt: number
+  endedAt?: number
+  status: 'running' | 'complete' | 'failed' | 'cancelled'
+  exitCode?: number
+  args: string[]
+  cwd: string
+  agentName?: string
+  modelName?: string
+  stdoutLineBuffer: string
+  events: ParsedEvent[]
+  finalMessage?: string
+  errorText?: string
+  child: ChildProcess
+  completionPromise: Promise<void>  // resolved on close; copilot_output block:true races this vs timeout
+  abortController: AbortController
 }
 ```
 
-Refresh cadence: plugin load only (= OpenCode restart). Re-scanning per call adds I/O on the hot path with no clear benefit.
+## Implementation Units
 
-## Tasks (ordered)
+- [x] **T1: Repo bootstrap** *(complete)*
 
-### T1. Repo bootstrap
+**Goal:** Publish an installable npm package skeleton with working build and changeset tooling.
 
-- Create `opencode-copilot-delegate` GitHub repo at `marcusrbrown/opencode-copilot-delegate`. Local clone at `~/src/github.com/marcusrbrown/opencode-copilot-delegate`.
-- `package.json`: name `opencode-copilot-delegate` (unscoped public package), `version: "0.1.0"`, `type: "module"`, `main: "dist/index.js"`, `types: "dist/index.d.ts"`, `files: ["dist", "README.md", "LICENSE", "CHANGELOG.md"]`, `engines.node: ">=20"`, `peerDependencies`: `@opencode-ai/plugin`, `@opencode-ai/sdk`. Stay on `0.x` during initial development.
-- `repository.url`, `bugs.url`, `homepage` all point to `github.com/marcusrbrown/opencode-copilot-delegate`. `keywords: ["opencode", "opencode-plugin", "copilot", "github-copilot", "agent", "delegation"]` for npm discoverability.
-- `tsconfig.json`: target ES2022, module ESNext, strict.
-- `bun` as build runner; ship pre-built `dist/index.js` + `dist/index.d.ts`.
-- Test runner: `bun test` (matches OpenCode ecosystem).
-- License: MIT.
-- `.changeset/` for changelog (matches Marcus's `.dotfiles` workflow with Renovate/Changesets).
+**Requirements:** R6
 
-**QA scenarios:**
-1. `gh repo view marcusrbrown/opencode-copilot-delegate --json name,visibility,defaultBranchRef` → returns `name: "opencode-copilot-delegate"`, `visibility: "PUBLIC"`, `defaultBranchRef.name: "main"`.
-2. From repo root: `bun install && bun pm ls` → exits `0`, lists `@opencode-ai/plugin` and `@opencode-ai/sdk` under peerDependencies.
-3. `cat package.json | jq '.name, .version, .type, .main, .types, .engines.node'` → returns `"opencode-copilot-delegate"`, `"0.1.0"`, `"module"`, `"dist/index.js"`, `"dist/index.d.ts"`, `">=20"`.
-4. `ls .changeset/config.json LICENSE tsconfig.json` → all three files exist.
-5. `bun run build` → exits `0`, produces `dist/index.js` and `dist/index.d.ts`.
+**Dependencies:** None
 
-### T2. JSONL parser + envelope builder
+**Files:**
+- `package.json`, `tsconfig.json`, `biome.json`, `.changeset/config.json`
+- `src/index.ts`, `src/tools/delegate.ts`, `src/tools/output.ts`, `src/tools/cancel.ts`
+- `src/runtime/task-registry.ts`, `src/runtime/subprocess.ts`, `src/runtime/jsonl-parser.ts`, `src/runtime/notify.ts`, `src/runtime/envelope.ts`
+- `src/discovery/agents.ts`, `src/discovery/description.ts`
+- `src/lib/ansi.ts`, `src/lib/kill-tree.ts`
+- `README.md`, `LICENSE`, `CHANGELOG.md`
 
-- `runtime/jsonl-parser.ts`: line buffer + `JSON.parse` per line, defensive (skip malformed lines, log via `client.app.log`).
+**Verification:**
+- `bun run build` exits 0, produces `dist/index.js` and `dist/index.d.ts`.
+- `cat package.json | jq '.name, .version, .type'` → `"opencode-copilot-delegate"`, `"0.1.0"`, `"module"`.
+
+---
+
+- [ ] **T2.5: JSONL fixture capture** *(blocks T2)*
+
+**Goal:** Capture real Copilot CLI JSONL output as test fixtures before writing the parser.
+
+**Requirements:** R1, R2
+
+**Dependencies:** T1, live `copilot` binary
+
+**Files:**
+- Create: `tests/fixtures/happy-path.jsonl`
+- Create: `tests/fixtures/model-error.jsonl`
+- Create: `tests/fixtures/multi-tool.jsonl`
+- Create: `tests/fixtures/README.md`
+
+**Approach:**
+- Run `copilot -p "Read README.md and summarize in 2 sentences" --output-format json -s --allow-all-tools --no-ask-user --model claude-haiku-4.5 > tests/fixtures/happy-path.jsonl` from inside the plugin repo (so Copilot's allowlist accepts the path).
+- Capture three fixtures: happy path, model-not-found error, multi-tool-call session.
+- Strip paths under `$HOME` and session-specific identifiers before committing.
+- Document fixture provenance and `copilot --version` in `tests/fixtures/README.md`.
+
+**Test scenarios:**
+- Happy path: `head -1 tests/fixtures/happy-path.jsonl | jq 'has("type")'` → `true`.
+- PII scrub: `grep -RnE '/Users/[a-z]+/' tests/fixtures/` → no matches.
+- Non-empty: `wc -l tests/fixtures/*.jsonl` — each fixture has at least one line.
+
+**Verification:**
+- All four files exist; each `.jsonl` is valid JSON per line; `README.md` contains `copilot --version` output.
+
+---
+
+- [ ] **T2: JSONL parser + envelope builder**
+
+**Goal:** Parse Copilot CLI JSONL stdout into typed events; fold events into the structured `copilot_output` envelope.
+
+**Requirements:** R1, R2
+
+**Dependencies:** T1, T2.5
+
+**Execution note (TDD — mandatory):** Red-Green-Refactor cycle strictly. Write failing tests first (`bun test` must fail), then implement until green, then refactor without breaking green. All test files use BDD structure (`describe` / `it`) with Given-When-Then comments on each `it` block. Write failing tests in `tests/jsonl-parser.test.ts` and `tests/envelope.test.ts` against the fixture contracts before writing `src/runtime/jsonl-parser.ts` and `src/runtime/envelope.ts`.
+
+**Files:**
+- Modify: `src/runtime/jsonl-parser.ts`
+- Modify: `src/runtime/envelope.ts`
+- Test: `tests/jsonl-parser.test.ts`
+- Test: `tests/envelope.test.ts`
+
+**Approach:**
+- `jsonl-parser.ts`: line buffer + `JSON.parse` per line, defensive (skip malformed lines, log via `client.app.log`).
 - Output type: `ParsedEvent = { type: 'message' | 'tool_use' | 'tool_result' | 'usage' | 'error' | 'unknown', ...payload }`.
-- `runtime/envelope.ts`: fold events into the `copilot_output` envelope shape from the brainstorm doc.
-- Tests: feed canned JSONL fixtures (capture real Copilot output once during T2 dev) → assert envelope shape; degrade gracefully on missing fields.
-- Reference: `devopspass/devopspass` `agent_events.py` parsing patterns (already in memory).
+- `envelope.ts`: fold `ParsedEvent[]` into the full envelope shape; every field optional-safe.
 
-**QA scenarios:**
-1. `bun test tests/jsonl-parser.test.ts` → exits `0`; suite includes `parses happy-path fixture`, `skips malformed lines`, `extracts thread_id from first event`, `accumulates usage tokens across events`.
-2. `bun test tests/envelope.test.ts` → exits `0`; suite includes `builds envelope from happy-path events`, `returns status: 'failed' with stderr tail when error event present`, `aggregates tool_use events into tool_calls_summary`, `degrades gracefully when usage event missing`.
-3. From repo root: `bun -e "import {parseJsonlLine} from './src/runtime/jsonl-parser.ts'; console.log(parseJsonlLine('not-json').type)"` → prints `unknown` (does not throw).
-4. `bun -e "import {buildEnvelope} from './src/runtime/envelope.ts'; const env = buildEnvelope({events: [], status: 'running', startedAt: Date.now()}); console.log(JSON.stringify(Object.keys(env).sort()))"` → output includes `task_id`, `status`, `duration_ms`, `events_count`, `tool_calls_summary`.
+**Patterns to follow:**
+- `devopspass/devopspass` `agent_events.py` parsing patterns (reference in memory).
+- `cloveric/cc-telegram-bridge` `process-adapter.ts` accumulator pattern.
 
-### T2.5. JSONL fixture capture (one-time, blocks T2 tests)
+**Test scenarios:**
+- Happy path: parse happy-path fixture → envelope has non-empty `final_message`, correct `events_count`.
+- Tool aggregation: multi-tool fixture → `tool_calls_summary` aggregates correctly.
+- Error path: model-error fixture → `status: 'failed'`, `error` contains stderr tail.
+- Malformed lines: skip malformed lines without throwing; `unknown` type returned.
+- Missing usage: degrade gracefully when no usage event present (`tokens` is undefined, not error).
+- Integration: `buildEnvelope({events: [], status: 'running', startedAt: Date.now()})` returns object with required keys.
 
-- Run `copilot -p "Read README.md and summarize in 2 sentences" --output-format json -s --allow-all-tools --no-ask-user --model claude-haiku-4.5 > tests/fixtures/happy-path.jsonl` (use a path inside the plugin repo so Copilot's default cwd allowlist accepts it) against the live Copilot CLI.
-- Capture 3 fixtures total: happy path, model-not-found error, and a multi-tool-call session (e.g., explore agent reading multiple files).
-- Strip any session-specific identifiers (paths under `/Users/mrbrown/`, etc.) before committing. Document fixture provenance and Copilot CLI version (`copilot --version`) in `tests/fixtures/README.md`.
-- These fixtures pin the JSONL schema for v0.1.0; any failing test on a future Copilot CLI version is a signal to refresh fixtures and bump the plugin minor.
+**Verification:**
+- `bun test tests/jsonl-parser.test.ts tests/envelope.test.ts` exits 0.
+- `bun -e "import {parseJsonlLine} from './src/runtime/jsonl-parser.ts'; console.log(parseJsonlLine('not-json').type)"` prints `unknown`.
 
-**QA scenarios:**
-1. `ls tests/fixtures/happy-path.jsonl tests/fixtures/model-error.jsonl tests/fixtures/multi-tool.jsonl tests/fixtures/README.md` → all four files exist.
-2. `wc -l tests/fixtures/*.jsonl | tail -1` → total non-zero (each fixture has at least one event).
-3. `head -1 tests/fixtures/happy-path.jsonl | jq 'has("type")'` → returns `true` (each line is valid JSON with a `type` field).
-4. `grep -RnE '/Users/[a-z]+/' tests/fixtures/` → no matches (PII scrubbed).
-5. `grep -F 'copilot --version' tests/fixtures/README.md` → matches (provenance documented).
+---
 
+- [ ] **T3: Subprocess wrapper + registry**
 
+**Goal:** Spawn the `copilot` process, line-buffer its stdout through the JSONL parser, manage `TaskState` in the registry, and support cancellation.
 
-### T3. Subprocess wrapper + registry
+**Requirements:** R1, R4
 
-- `runtime/subprocess.ts`: `spawn` with explicit env (preserve auth precedence), `cwd = directory`, line-buffered stdout pipe.
-- `lib/kill-tree.ts`: cross-platform process tree kill (Bun's `process.kill` + tree-kill fallback for child PIDs).
+**Dependencies:** T2
+
+**Execution note (TDD — mandatory):** Red-Green-Refactor cycle strictly. Write failing tests first (`bun test` must fail), then implement until green, then refactor without breaking green. All test files use BDD structure (`describe` / `it`) with Given-When-Then comments on each `it` block. Write failing tests in `tests/subprocess.test.ts` (using `bash -c` fixture spawns) before implementing `src/runtime/subprocess.ts`, `src/lib/kill-tree.ts`, and `src/lib/ansi.ts`.
+
+**Files:**
+- Modify: `src/runtime/subprocess.ts`
+- Modify: `src/runtime/task-registry.ts`
+- Modify: `src/lib/kill-tree.ts`
+- Modify: `src/lib/ansi.ts`
+- Test: `tests/subprocess.test.ts`
+
+**Approach:**
+- `subprocess.ts`: `spawn` with explicit env (preserve auth precedence), `cwd = directory`, line-buffered stdout pipe.
+- `task-registry.ts`: `Map<string, TaskState>` at plugin scope; keyed by `cpl_` + UUID v4; clean up on plugin shutdown.
+- **`lib/kill-tree.ts`:** use `fkill` npm package rather than rolling our own. `fkill(pid, { force: false, forceTimeout: 2000, waitForExit: 5000 })`. PID must be a number.
 - `lib/ansi.ts`: strip ANSI before storing `finalMessage`.
-- Tests: spawn `bash -c 'echo {"type":"message","text":"hi"}'`-style fixtures; verify `close` triggers state transition.
+- On `close` event: set `endedAt`, `status` from exit code.
 
-**QA scenarios:**
-1. `bun test tests/subprocess.test.ts` → exits `0`; suite includes `spawn → close transitions status to 'complete' on exit 0`, `spawn → close transitions status to 'failed' on non-zero exit`, `line-buffer accumulates partial JSONL across chunk boundaries`, `kill-tree terminates child + grandchild process`.
-2. `bun test tests/subprocess.test.ts -t 'kill-tree'` → exits `0` (cross-platform process tree kill verified).
-3. From repo root in a Bun REPL: spawn `sleep 30`, capture `pid`, call `killProcessTree(pid, 'SIGTERM')`, then `kill -0 <pid>` from another shell → returns non-zero (process dead) within 3 seconds.
-4. `bun -e "import {stripAnsi} from './src/lib/ansi.ts'; console.log(stripAnsi('\\x1b[31mred\\x1b[0m'))"` → prints `red` (no escape sequences).
+**Patterns to follow:**
+- `cloveric/cc-telegram-bridge` `process-adapter.ts` for spawn pattern and accumulator structure.
 
-### T4. Notification injection
+**Test scenarios:**
+- Happy path: spawn → close → `status: 'complete'` on exit 0.
+- Error path: spawn → close → `status: 'failed'` on non-zero exit.
+- Line buffering: partial JSONL across chunk boundaries accumulates correctly.
+- Cancellation: kill-tree terminates child + grandchild process within 3 seconds.
+- ANSI stripping: `stripAnsi('\x1b[31mred\x1b[0m')` → `red`.
 
-- `runtime/notify.ts`: wrapper around `client.session.promptAsync` with the `<system-reminder>` template.
-- Track per-parent-session in-flight task count to set `noReply` correctly (mirror OMO behavior: false when all complete, true when others still running).
-- Test manually first: spawn one Copilot delegation in a real OpenCode session, confirm the notification appears as a `<system-reminder>` user-message-like turn.
+**Verification:**
+- `bun test tests/subprocess.test.ts` exits 0.
 
-**QA scenarios:**
-1. In a real OpenCode session with the plugin loaded: invoke `copilot_delegate({prompt: 'echo PONG', model: 'claude-haiku-4.5'})` → `task_id` returned synchronously within 500ms; subsequent assistant turn shows the `<system-reminder>` block with `[COPILOT DELEGATION COMPLETED]` heading.
-2. `bun test tests/notify.test.ts -t 'in-flight counter'` → exits `0`; verifies that with 3 simulated tasks, completing #1 and #2 calls `promptAsync` with `noReply: true` and #3 with `noReply: false`.
-3. `bun test tests/notify.test.ts -t 'failed status forces turn'` → exits `0`; verifies that `status: 'failed'` always sets `noReply: false` regardless of in-flight count.
-4. Inspect `client.session.promptAsync` call args via a stubbed client in `tests/notify.test.ts` → asserts `body.noReply` boolean is set explicitly (never `undefined`) and `body.parts[0].text` contains `<system-reminder>` and `[COPILOT DELEGATION COMPLETED]` literals.
+---
 
-### T5. Agent discovery + description
+- [ ] **T4: Notification injection**
 
-- `discovery/agents.ts`: scan `~/.copilot/agents/*.md` and `<directory>/.github/agents/*.md`, parse frontmatter + first paragraph for summary.
-- `discovery/description.ts`: merge built-in (verified list at impl time) + user + repo, render as multi-line description string.
-- Tests: fixture directories with known agent files → assert merged ordering and override behavior.
+**Goal:** Inject `<system-reminder>` notifications into the parent session when a Copilot subprocess completes, with correct `noReply` semantics mirroring OMO.
 
-**QA scenarios:**
-1. `bun test tests/agents.test.ts` → exits `0`; suite includes `built-in agents listed first`, `user agents from ~/.copilot/agents merged after built-in`, `repo agents from .github/agents/ merged after user`, `repo agent overrides user agent with same name`, `missing agent dir returns empty list (no throw)`.
-2. `bun -e "import {scanAgentDir} from './src/discovery/agents.ts'; console.log((await scanAgentDir('tests/fixtures/agents/user')).map(a => a.name).sort().join(','))"` → prints comma-separated list matching the fixture filenames (sans `.md`).
-3. `bun -e "import {buildDescription} from './src/discovery/description.ts'; console.log(buildDescription('tests/fixtures/repo-with-agents'))"` → output contains `Available Copilot agents`, lists `default (builtin)` first, and includes at least one `(user)` and one `(repo)` agent line.
-4. `bun -e "import {buildDescription} from './src/discovery/description.ts'; const d = buildDescription('/nonexistent'); console.log(d.includes('default (builtin)'))"` → prints `true` (degrades gracefully when no user/repo agents found).
+**Requirements:** R2
 
-### T6. Tool wiring
+**Dependencies:** T3
 
-- `tools/delegate.ts`: build args, call subprocess wrapper, register `TaskState`, return `task_id`.
-- `tools/output.ts`: read state, build envelope, return. Args: `task_id: string` (required), `block?: boolean` (default `false`), `timeout_ms?: number` (default `30000`, max `120000`). When `block: true`, await subprocess `close` event up to `timeout_ms`; on timeout return current state with `status: 'running'` and a `timed_out: true` flag. When `block: false` (default), return immediately regardless of subprocess status.
-- `tools/cancel.ts`: cancel + return.
-- `index.ts`: export `Plugin` that registers all three tools and wires `client` into the runtime.
+**Execution note (TDD — mandatory):** Red-Green-Refactor cycle strictly. Write failing tests first (`bun test` must fail), then implement until green, then refactor without breaking green. All test files use BDD structure (`describe` / `it`) with Given-When-Then comments on each `it` block. Write failing tests in `tests/notify.test.ts` with a mocked `client.session.promptAsync` before implementing `src/runtime/notify.ts`.
 
-**QA scenarios:**
-1. `bun run build && bun -e "import plugin from './dist/index.js'; const stub = {client: {}, directory: process.cwd(), worktree: process.cwd(), project: {}, serverUrl: new URL('http://localhost'), \$: {}}; const result = await plugin(stub); console.log(Object.keys(result.tool).sort().join(','))"` → prints `copilot_cancel,copilot_delegate,copilot_output`.
-2. `bun -e "import plugin from './dist/index.js'; const stub = {client: {}, directory: process.cwd(), worktree: process.cwd(), project: {}, serverUrl: new URL('http://localhost'), \$: {}}; const r = await plugin(stub); console.log(typeof r.tool.copilot_delegate.execute)"` → prints `function` (each registered tool has an `execute` function).
-3. `bun test tests/tools.test.ts` → exits `0`; suite includes `copilot_delegate returns task_id matching /^cpl_[0-9a-f-]+$/`, `copilot_output returns status: 'unknown' for missing task_id (does not throw)`, `copilot_cancel returns {cancelled: false, was_running: false} for missing task_id`, `copilot_output with block:true honors timeout_ms`.
-4. `bun -e "import plugin from './dist/index.js'; const stub = {client: {}, directory: process.cwd(), worktree: process.cwd(), project: {}, serverUrl: new URL('http://localhost'), \$: {}}; const r = await plugin(stub); console.log(r.tool.copilot_delegate.description.length > 50)"` → prints `true` (description string built and non-trivial).
+**Files:**
+- Modify: `src/runtime/notify.ts`
+- Test: `tests/notify.test.ts`
 
-### T7. End-to-end manual verification
+**Approach:**
+- `notify.ts`: wrapper around `client.session.promptAsync` with the `<system-reminder>` template.
+- Track per-parent-session in-flight count: decrement on each close, set `noReply = count > 0`.
+- Failed exits always `noReply: false` regardless of in-flight count.
+- Call `client.tui.showToast({ body: { message: '<text>', variant: 'success' } })` alongside (confirmed in SDK v1.14.21). `variant` is non-optional.
 
-Each scenario below MUST be exercised in a real OpenCode session with the plugin installed before tagging v0.1.0. Capture the result (✅/❌ + notes) in a `VERIFICATION.md` checked into the repo.
+**Test scenarios:**
+- In-flight counter: with 3 tasks, completing #1 → `noReply: true`; completing #3 (last) → `noReply: false`.
+- Failed status forces turn: `status: 'failed'` always sets `noReply: false`.
+- Notification shape: `body.parts[0].text` contains `<system-reminder>` and `[COPILOT DELEGATION COMPLETED]` literals.
+- `noReply` never undefined: explicitly set (not left as `undefined`).
+- Integration (manual): in a real OpenCode session, invoke `copilot_delegate` → `<system-reminder>` appears as a turn.
 
-1. **Happy path:** `copilot_delegate({ prompt: 'Read README.md and summarize what this plugin does in 2 sentences.', model: 'claude-haiku-4.5' })` → returns `task_id` synchronously. (Use repo-internal path; do not hand Copilot a `$HOME`-rooted path unless `add_dirs` is also set.) Parent agent reads another file while subprocess runs. `<system-reminder>` arrives in session. `copilot_output(task_id)` returns envelope with non-empty `final_message`.
-2. **Cancellation mid-flight:** Delegate a long-running prompt (e.g., agent that runs many tool calls). Call `copilot_cancel({ task_id })` after 5s. Verify SIGTERM → SIGKILL escalation works and subsequent `copilot_output` returns `status: 'cancelled'` with the partial transcript intact.
-3. **Failed exit:** Delegate with `model: 'nonexistent-model-name'`. Verify `<system-reminder>` arrives with `Status: failed`, `noReply: false` forces a parent turn, and envelope contains the stderr tail in `error`.
-4. **Concurrent delegations:** Fire 3 delegations back-to-back to different agents. Verify only the LAST completion sets `noReply: false`; the first two arrive silently as `noReply: true`. Verify per-parent-session in-flight counter decrements correctly even when one fails.
-5. **`copilot_output` blocking mode:** Delegate a 10s task. Immediately call `copilot_output({ task_id, block: true, timeout_ms: 3000 })`. Verify `timed_out: true` returns; then call again without `block` and confirm final state once subprocess finishes naturally.
-6. **Plugin reload mid-flight:** Delegate, then trigger an OpenCode plugin reload (or restart). Verify the orphaned subprocess is documented in README as a known v1 limitation (PID-file reaper deferred to v1.x).
-7. **TUI toast:** Verify `client.tui.showToast(...)` fires on completion. Verify behavior when the session is focused vs background; if it double-fires with the session prompt, drop the toast (resolved decision #4 caveat).
-8. **Description string accuracy:** With one fixture agent in `~/.copilot/agents/test-agent.md` and one in `<repo>/.github/agents/repo-agent.md`, restart OpenCode, inspect tool catalog — confirm both appear in `copilot_delegate` description with correct `(user)` / `(repo)` source labels and built-in agents are listed first.
+**Verification:**
+- `bun test tests/notify.test.ts` exits 0.
+- In a real OpenCode session: `copilot_delegate({prompt: 'echo PONG', model: 'claude-haiku-4.5'})` returns `task_id` within 500ms; `<system-reminder>` block with `[COPILOT DELEGATION COMPLETED]` appears in a subsequent turn.
 
-### T8. Skill update (REQUIRED, not optional)
+---
 
-This is part of the v0.1.0 release, not a follow-up. Without it, agents won't know to prefer the plugin tools over the raw subprocess pattern.
+- [ ] **T5: Agent discovery + description**
 
-Edit `~/.agents/skills/copilot-cli/SKILL.md` to add the runtime branch at the top:
+**Goal:** Build the `copilot_delegate` tool description by merging built-in, user, and repo Copilot agents at plugin load.
 
-> **If your tool catalog includes `copilot_delegate`, `copilot_output`, and `copilot_cancel`** (provided by the `opencode-copilot-delegate` plugin), prefer those tools for delegation. They handle subprocess lifecycle, JSONL parsing, structured returns, and async completion notifications for you. See [plugin README](https://github.com/...) for tool args.
->
-> **Otherwise**, use the direct subprocess pattern below.
+**Requirements:** R3
 
-Existing manual subprocess content stays unchanged beneath the branch. Commit through the dotfiles bare-repo workflow.
+**Dependencies:** T1
 
-**QA scenarios:**
-1. `GIT_DIR=$HOME/.dotfiles GIT_WORK_TREE=$HOME git diff -- .agents/skills/copilot-cli/SKILL.md` → shows the new "If your tool catalog includes..." branch added at the top, original subprocess content unchanged below.
-2. `head -20 ~/.agents/skills/copilot-cli/SKILL.md | grep -F 'copilot_delegate'` → matches (branch present in first 20 lines).
-3. In a fresh OpenCode session with the plugin installed: invoke the skill and confirm the agent picks the plugin branch by referencing `copilot_delegate` instead of constructing a raw `copilot -p ...` command.
+**Execution note (TDD — mandatory):** Red-Green-Refactor cycle strictly. Write failing tests first (`bun test` must fail), then implement until green, then refactor without breaking green. All test files use BDD structure (`describe` / `it`) with Given-When-Then comments on each `it` block. Write failing tests in `tests/agents.test.ts` using fixture agent directories before implementing `src/discovery/agents.ts` and `src/discovery/description.ts`.
 
-### T9. Publish
+**Files:**
+- Modify: `src/discovery/agents.ts`
+- Modify: `src/discovery/description.ts`
+- Test: `tests/agents.test.ts`
+- Create: `tests/fixtures/agents/` (user + repo fixture dirs)
 
+**Approach:**
+- `agents.ts`: scan `~/.copilot/agents/*.md` and `<directory>/.github/agents/*.md` (runtime paths, resolved at execution time — not repo-relative paths in the plugin source).
+- Merge order: built-in first, then user, then repo. Repo agent overrides user agent with same name.
+- Built-in agent list: verify actual names via `copilot agent list` at impl time. Brainstorm listed "Explore", "Task", "General-purpose", "Code-review" — confirm casing.
+- `description.ts`: render merged list as multi-line string. Cap at 20 entries.
+- Missing agent dirs return empty list, no throw.
+
+**Test scenarios:**
+- Ordering: built-in agents listed first.
+- User merge: agents from `~/.copilot/agents/` appear after built-in.
+- Repo merge: agents from `.github/agents/` appear after user.
+- Override: repo agent with same name as user agent replaces it.
+- Graceful degradation: missing agent dir → empty list, no throw.
+- Description output: contains "Available Copilot agents", lists `default (builtin)` first, includes `(user)` and `(repo)` labels.
+- Non-existent paths: `buildDescription('/nonexistent')` returns string containing `default (builtin)`.
+
+**Verification:**
+- `bun test tests/agents.test.ts` exits 0.
+
+---
+
+- [ ] **T6: Tool wiring**
+
+**Goal:** Wire the three tools and plugin entrypoint; integration-test with a stubbed `PluginInput`.
+
+**Requirements:** R1, R2, R3, R4
+
+**Dependencies:** T2, T3, T4, T5
+
+**Execution note (TDD — mandatory):** Red-Green-Refactor cycle strictly. Write failing tests first (`bun test` must fail), then implement until green, then refactor without breaking green. All test files use BDD structure (`describe` / `it`) with Given-When-Then comments on each `it` block. Write failing integration tests in `tests/tools.test.ts` with a stubbed `PluginInput` before wiring `src/tools/*.ts` and `src/index.ts`.
+
+**Files:**
+- Modify: `src/tools/delegate.ts`
+- Modify: `src/tools/output.ts`
+- Modify: `src/tools/cancel.ts`
+- Modify: `src/index.ts`
+- Test: `tests/tools.test.ts`
+
+**Approach:**
+- `delegate.ts`: build args, call subprocess wrapper, register `TaskState`, return `{ task_id }`. Throw on missing `copilot` binary with clear install hint.
+- `output.ts`: read state, build envelope. When `block: true`, await close event up to `timeout_ms`; on timeout return current state with `timed_out: true`. When `block: false`, return immediately.
+- `cancel.ts`: SIGTERM → 2s grace → SIGKILL escalation. Set `status: 'cancelled'`, fire notification. Return `{ cancelled, was_running }`.
+- `index.ts`: export `Plugin` that registers all three tools, wires `client` into runtime.
+
+**Test scenarios:**
+- Happy path: `copilot_delegate` returns `task_id` matching `/^cpl_[0-9a-f-]+$/`.
+- Unknown task: `copilot_output` returns `status: 'unknown'` for missing task_id — does not throw.
+- Unknown cancel: `copilot_cancel` returns `{cancelled: false, was_running: false}` for missing task_id.
+- Blocking mode: `copilot_output({task_id, block: true, timeout_ms: 500})` returns `timed_out: true` when subprocess outlasts timeout.
+- Tool registration: `Object.keys(result.tool).sort()` → `['copilot_cancel', 'copilot_delegate', 'copilot_output']`.
+- Description non-trivial: `result.tool.copilot_delegate.description.length > 50` → `true`.
+
+**Verification:**
+- `bun run build && bun test tests/tools.test.ts` exits 0.
+- `bun run build` produces `dist/index.js` + `dist/index.d.ts`.
+
+---
+
+- [ ] **T6.5: OpenCode server integration tests**
+
+**Goal:** Automated integration tests that spawn a real OpenCode server subprocess with the plugin installed, send actual session prompts via the SDK client, and assert on tool execution results — validating the full plugin lifecycle without manual steps.
+
+**Requirements:** R1, R2, R3
+
+**Dependencies:** T6 (tools must exist to test)
+
+**Execution note (TDD — mandatory):** Red-Green-Refactor cycle. Write the test scaffolding (server spawn, health poll, SDK client setup, teardown) first — tests will fail because tools don't exist yet. Implement tools in T2–T6 until tests pass. BDD structure (`describe` / `it`) with Given-When-Then comments on each `it`. Do **not** mock the OpenCode server; use a real spawned process.
+
+**Files:**
+- New: `tests/integration/opencode.test.ts`
+- New: `tests/integration/helpers/server.ts` — server lifecycle (spawn, health poll, teardown)
+- New: `tests/integration/helpers/client.ts` — SDK client factory
+- New: `tests/integration/fixtures/` — minimal `package.json` + plugin config for test project directory
+
+**Approach:**
+- `server.ts`: `Bun.spawn(['opencode', 'serve', '--port', PORT])` in a temp project dir with plugin symlinked; poll `GET /global/health` at 100ms intervals up to 30s before resolving.
+- `client.ts`: `createOpencodeClient({ baseUrl: 'http://127.0.0.1:PORT', throwOnError: true })`.
+- Teardown: SIGTERM → 5s grace → SIGKILL (matching librarian-researched pattern).
+- Plugin loading: place built `dist/index.js` in `tests/integration/fixtures/.opencode/plugins/` (or symlink); OpenCode auto-loads on server start.
+- Port: use `4097` (avoid conflicting with any running OpenCode on `4096`).
+- Unique test isolation: each `describe` block uses its own session; sessions are deleted in `afterEach`.
+
+**Test scenarios:**
+- Server starts and `/global/health` returns `{ ok: true }` within 10s.
+- `copilot_delegate` tool is discoverable via session message tool-use parts.
+- Given a prompt that invokes `copilot_delegate`, when the session completes, then `task_id` matching `/^cpl_[0-9a-f-]+$/` appears in the assistant message.
+- Given a `task_id` from `copilot_delegate`, when `copilot_output` is called with `block: true`, then it returns within `timeout_ms` with either output or `timed_out: true`.
+- Given a running task, when `copilot_cancel` is called, then `{ cancelled: true, was_running: true }` is returned.
+- Given a nonexistent `task_id`, when `copilot_output` is called, then `{ status: 'unknown' }` is returned without throwing.
+- `<system-reminder>` notification appears as a subsequent assistant turn after `copilot_delegate` completes.
+- Server shuts down cleanly after SIGTERM within 5s (no zombie processes).
+
+**Verification:**
+- `bun test tests/integration/` exits 0 with all scenarios passing.
+- No leftover `opencode` processes after test run (`pgrep opencode` returns empty).
+
+---
+
+- [ ] **T7: End-to-end manual verification**
+
+**Goal:** Exercise all user-facing behaviors in a real OpenCode session before tagging v0.1.0. Capture results in `VERIFICATION.md`.
+
+**Requirements:** R1, R2, R3, R4
+
+**Dependencies:** T6
+
+**Files:**
+- Create: `VERIFICATION.md`
+
+**Approach:** Each scenario must be exercised in a real OpenCode session with the plugin installed. Record ✅/❌ + notes for each.
+
+**Test scenarios:**
+1. Happy path: `copilot_delegate({ prompt: 'Read README.md and summarize what this plugin does in 2 sentences.', model: 'claude-haiku-4.5' })` → `task_id` returned synchronously; parent reads another file; `<system-reminder>` arrives; `copilot_output(task_id)` returns envelope with non-empty `final_message`.
+2. Cancellation mid-flight: delegate a long-running prompt; `copilot_cancel` after 5s; verify SIGTERM → SIGKILL works; `copilot_output` returns `status: 'cancelled'` with partial transcript.
+3. Failed exit: delegate with `model: 'nonexistent-model-name'`; `<system-reminder>` arrives with `Status: failed`; `noReply: false` forces a parent turn; envelope contains stderr tail in `error`.
+4. Concurrent delegations: fire 3 delegations back-to-back; only LAST completion sets `noReply: false`; per-parent-session in-flight counter decrements correctly even when one fails.
+5. Blocking mode: delegate a ~10s task; immediately `copilot_output({ task_id, block: true, timeout_ms: 3000 })` → `timed_out: true`; then call again without `block` → final state after subprocess finishes.
+6. Plugin reload mid-flight: delegate, then trigger OpenCode restart; verify orphaned subprocess is documented in README as a known v1 limitation.
+7. TUI toast: verify `client.tui.showToast(...)` fires on completion; verify behavior when session is focused vs background; if it double-fires, drop the toast.
+8. Description string accuracy: with one agent in `~/.copilot/agents/test-agent.md` and one in `<repo>/.github/agents/repo-agent.md`, restart OpenCode, inspect tool catalog — both appear with correct `(user)` / `(repo)` labels; built-in agents listed first.
+
+**Verification:**
+- `VERIFICATION.md` exists with ✅/❌ result recorded for all 8 scenarios.
+
+---
+
+- [ ] **T8: Skill update**
+
+**Goal:** Update `~/.agents/skills/copilot-cli/SKILL.md` to branch on plugin presence. Ships with v0.1.0.
+
+**Requirements:** R5
+
+**Dependencies:** T7 (plugin must be verified before updating the skill)
+
+**Files:**
+- Modify: `~/.agents/skills/copilot-cli/SKILL.md` (external, via dotfiles bare-repo workflow)
+
+**Approach:**
+- Add runtime branch at the top of the skill: "If your tool catalog includes `copilot_delegate`, `copilot_output`, and `copilot_cancel` (provided by `opencode-copilot-delegate`), prefer those tools. See plugin README for tool args. Otherwise, use the direct subprocess pattern below."
+- Existing manual subprocess content stays unchanged beneath the branch.
+- Commit through the dotfiles bare-repo workflow.
+
+**Test scenarios:**
+- Branch present: `head -20 ~/.agents/skills/copilot-cli/SKILL.md | grep -F 'copilot_delegate'` → matches.
+- Diff: `GIT_DIR=$HOME/.dotfiles GIT_WORK_TREE=$HOME git diff -- .agents/skills/copilot-cli/SKILL.md` shows branch added at top, original content unchanged below.
+- In a fresh OpenCode session with plugin: invoke the skill → agent references `copilot_delegate` instead of constructing raw `copilot -p ...`.
+
+**Verification:**
+- `GIT_DIR=$HOME/.dotfiles GIT_WORK_TREE=$HOME git diff -- .agents/skills/copilot-cli/SKILL.md` shows only the expected branch addition.
+
+---
+
+- [ ] **T9: Publish**
+
+**Goal:** Publish `opencode-copilot-delegate@0.1.0` to npm, tag the release, and install in Marcus's OpenCode config.
+
+**Requirements:** R6
+
+**Dependencies:** T8
+
+**Files:**
+- `package.json` (version bump via changeset)
+- `CHANGELOG.md` (generated)
+- `~/.config/opencode/opencode.json` (add plugin entry)
+
+**Approach:**
 - `bun run build` → `dist/`.
-- `npm publish --access=public` (or scoped equivalent).
+- `npm publish --access=public`.
 - Tag `v0.1.0`, push to GitHub, generate release notes from `.changeset/`.
-- Add the package to Marcus's installed plugins via OpenCode config (`~/.config/opencode/opencode.json` `plugin: ["opencode-copilot-delegate"]` or equivalent).
+- Add to Marcus's installed plugins: `"plugin": ["opencode-copilot-delegate"]` in `~/.config/opencode/opencode.json`.
 
-**QA scenarios:**
-1. `npm view opencode-copilot-delegate version` → returns `0.1.0`.
-2. `npm view opencode-copilot-delegate dist.tarball` → returns a non-empty `https://registry.npmjs.org/...` URL.
-3. `gh release view v0.1.0 --repo marcusrbrown/opencode-copilot-delegate --json tagName,isLatest` → returns `tagName: "v0.1.0"`, `isLatest: true`.
-4. Restart OpenCode; in a fresh session, run `/help` or inspect the tool catalog → `copilot_delegate`, `copilot_output`, `copilot_cancel` are listed.
-5. `jq '.plugin' ~/.config/opencode/opencode.json` → array contains `"opencode-copilot-delegate"` (or pinned version spec).
+**Test scenarios:**
+- Published: `npm view opencode-copilot-delegate version` → `0.1.0`.
+- Release: `gh release view v0.1.0 --repo marcusrbrown/opencode-copilot-delegate --json tagName,isLatest` → `isLatest: true`.
+- Installed: restart OpenCode; tool catalog includes `copilot_delegate`, `copilot_output`, `copilot_cancel`.
+- Config: `jq '.plugin' ~/.config/opencode/opencode.json` → array contains `"opencode-copilot-delegate"`.
 
-### T10. File dotfiles PR for skill update (REQUIRED)
+**Verification:**
+- All four test scenarios pass.
 
-This ships with v0.1.0. Sequence: publish plugin → file PR with skill update referencing the published version.
+---
 
+- [ ] **T10: Dotfiles PR for skill update**
+
+**Goal:** Land the `copilot-cli` skill update in the `.dotfiles` repo via a PR.
+
+**Requirements:** R5
+
+**Dependencies:** T9 (reference published version in PR body)
+
+**Files:**
+- `.agents/skills/copilot-cli/SKILL.md` in `marcusrbrown/.dotfiles` (single-file PR)
+
+**Approach:**
 - Branch `skills/copilot-cli-plugin-branch` off `main`.
-- Single commit: `feat(skills): branch copilot-cli skill on plugin presence`.
-- PR body links to plugin repo + plugin v0.1.0 release notes + this plan.
+- Single commit with the branch addition from T8.
+- PR body links to plugin repo + v0.1.0 release notes + this plan.
 
-**QA scenarios:**
-1. `gh pr view <pr-number> --repo marcusrbrown/.dotfiles --json state,headRefName,mergeable` → `state: "OPEN"`, `headRefName: "skills/copilot-cli-plugin-branch"`, `mergeable: "MERGEABLE"`.
-2. `gh pr view <pr-number> --repo marcusrbrown/.dotfiles --json files | jq '.files[].path'` → lists exactly `.agents/skills/copilot-cli/SKILL.md` (single-file PR).
-3. `gh pr checks <pr-number> --repo marcusrbrown/.dotfiles` → all four required checks (`Devcontainer CI`, `Fro Bot`, `Install mise`, `Renovate`) report `pass`.
-4. PR body contains links to: (a) `github.com/marcusrbrown/opencode-copilot-delegate`, (b) the v0.1.0 release notes, (c) this plan.
+**Test scenarios:**
+- PR state: `gh pr view --repo marcusrbrown/.dotfiles --json state,headRefName,mergeable` → open, correct branch, mergeable.
+- Single-file: `gh pr view --repo marcusrbrown/.dotfiles --json files | jq '.files[].path'` → exactly `.agents/skills/copilot-cli/SKILL.md`.
+- Checks: all required CI checks pass.
+- PR body: contains links to plugin repo, v0.1.0 release notes, and this plan.
 
-### T11. CI / quality gates (REQUIRED for v0.1.0)
+**Verification:**
+- PR open, all checks passing.
 
-- GitHub Actions workflow `.github/workflows/ci.yml`: install Bun, `bun install`, `bun test`, `bun run typecheck` (`tsc --noEmit`), `bun run lint` (Biome or oxlint).
+---
+
+- [ ] **T11: CI / quality gates**
+
+**Goal:** Add GitHub Actions CI workflow; set branch protection on `main`.
+
+**Requirements:** R6
+
+**Dependencies:** T6 *(gate enables after all src/* implementation is complete)*
+
+**Files:**
+- Create: `.github/workflows/ci.yml`
+
+**Approach:**
+- Install Bun, `bun install`, `bun test`, `bun run typecheck` (`tsc --noEmit`), `bun run lint`.
 - Branch protection on `main` requires `ci` to pass.
-- `.changeset/` config: changesets bot enabled; PRs without a changeset for `src/**` changes fail CI.
+- `.changeset/` config: PRs without a changeset for `src/**` changes fail CI.
 - Pre-commit: optional husky hook running `bun run typecheck` on staged TS files.
+- **Security:** Pin all GitHub Actions to full commit SHAs in `ci.yml`; use `permissions: read-all` at workflow level, with `contents: write` added only for jobs that need to write (e.g., publish).
 
-**QA scenarios:**
-1. `gh workflow list --repo marcusrbrown/opencode-copilot-delegate` → includes `ci`.
-2. Push a trivial commit on a throwaway branch → `gh run list --workflow=ci.yml --branch=<branch> --limit 1 --json conclusion` returns `conclusion: "success"`.
-3. `gh api repos/marcusrbrown/opencode-copilot-delegate/branches/main/protection --jq '.required_status_checks.contexts'` → array contains `"ci"`.
-4. Open a no-op PR touching `src/foo.ts` without a changeset → `gh pr checks <pr-number>` shows the changeset gate failing; add a changeset, re-run → it passes.
-5. From repo root: `bun install && bun test && bun run typecheck && bun run lint` → all four exit `0`.
+**Test scenarios:**
+- Workflow present: `gh workflow list --repo marcusrbrown/opencode-copilot-delegate` includes `ci`.
+- CI passes: push on a throwaway branch → `gh run list --workflow=ci.yml --limit 1 --json conclusion` → `success`.
+- Branch protection: `gh api repos/marcusrbrown/opencode-copilot-delegate/branches/main/protection --jq '.required_status_checks.contexts'` → includes `ci`.
+- Changeset gate: PR touching `src/**` without changeset → gate fails; add changeset → passes.
+- Local check: `bun install && bun test && bun run typecheck && bun run lint` → all exit 0.
 
-## Telemetry / Privacy posture
+**Verification:**
+- All five scenarios pass.
 
-The plugin collects ZERO telemetry. It does NOT phone home, does NOT track usage, does NOT log to remote services. All logging goes through `client.app.log(...)` which OpenCode handles locally per its own settings. The plugin never logs the resolved auth token value \u2014 only the auth source name (`COPILOT_GITHUB_TOKEN | GH_TOKEN | GITHUB_TOKEN | ~/.copilot/auth`) at delegate start. Document this explicitly in README under a `Privacy` heading.
+## System-Wide Impact
 
-## Open questions (deferred, not blockers for v0.1.0)
+- **Interaction graph:** Plugin hooks into the OpenCode tool dispatch (via `PluginInput`) and injects messages into the parent session via `client.session.promptAsync`. No other callbacks or middleware involved.
+- **Error propagation:** `copilot_delegate` throws on missing binary. `copilot_output` and `copilot_cancel` never throw on unknown task_id — they return structured error envelopes. Subprocess failures surface via `status: 'failed'` + forced `noReply: false` turn.
+- **State lifecycle risks:** `TaskState` persists until plugin shutdown; plugin restart orphans in-flight subprocesses (documented v1 limitation). No cleanup hook exists across OpenCode restarts.
+- **API surface parity:** All three tools expose consistent `task_id` routing; `copilot_output` envelope is the single source of truth for task state — no state leaks through other return paths.
+- **Integration coverage:** T7 (manual E2E) is the primary cross-layer coverage. Unit tests stub `PluginInput`; real behavior requires a live `copilot` binary and OpenCode session.
+- **Unchanged invariants:** The plugin does not modify OpenCode session state directly — it only injects messages via the documented `promptAsync` API. Other OpenCode plugins, tools, and sessions are unaffected.
 
-- Does `client.tui.showToast(...)` exist in the current OpenCode SDK, and what's its exact signature? Verify at impl time during T4. If absent, drop resolved decision #4 and document in README.
-- Built-in Copilot agent names: brainstorm doc lists `Explore`, `Task`, `General-purpose`, `Code-review`. Verify at impl time \u2014 some Copilot docs use different casing. Hardcoded list is in `discovery/agents.ts`.
-- `noReply: true` behavior with the OpenCode TUI: does an injected message visibly appear in the conversation history, or is it silent until the parent's next turn? Test during T7.
-
-
+## Risks & Dependencies
 
 | Risk | Mitigation |
-| --- | --- |
-| OpenCode plugin runtime crashes mid-delegation → orphaned `copilot` subprocess. | Document in README. v1.x: write PID file under `${XDG_RUNTIME_DIR}/opencode-copilot-delegate/<task_id>.pid`; plugin start scans for stale PIDs and reaps. |
-| Copilot CLI changes JSONL schema. | Defensive parsing (every field optional, unknown event types stored verbatim). Snapshot a real JSONL fixture at v0.1.0 to detect drift via tests. |
-| `noReply` semantics differ between `prompt` and `promptAsync` in current SDK. | Verify against `OpencodeClient` types at impl time; if `promptAsync` doesn't accept `noReply`, fall back to `prompt` (used by `opencode-pty` reference). |
-| Description string bloats with many user agents. | Cap merged list at 20; if more, show first 20 + `... and N more (use copilot_list_agents to see all)` and ship `copilot_list_agents` in v1.x. |
-| Auth misconfiguration (stale `GH_TOKEN` overrides login) → silent failures. | Plugin logs the resolved auth source via `client.app.log` at delegate start (without leaking the token). |
-| Built-in Copilot agent names guessed wrong. | At impl time, run `copilot agent list` (or scan docs) to confirm. Hardcoded list lives in one place (`discovery/agents.ts`) for easy update. |
-| `kill-tree` flakiness on macOS vs Linux. | Use `tree-kill` npm package (battle-tested) instead of rolling our own. |
+|------|------------|
+| Plugin restart mid-delegation → orphaned `copilot` subprocess. | Document in README. v1.x: PID file under `${XDG_RUNTIME_DIR}/opencode-copilot-delegate/<task_id>.pid`; plugin start reaps stale PIDs. |
+| Copilot CLI changes JSONL schema. | Defensive parsing (every field optional, unknown event types stored verbatim). Snapshot real JSONL fixtures at v0.1.0 to detect drift via tests. |
+| `promptAsync` doesn't accept `noReply` in current SDK. | Verify at impl time; if absent, fall back to `prompt` (used by `opencode-pty` reference). |
+| Description string bloats with many user agents. | Cap merged list at 20; show "… and N more" + ship `copilot_list_agents` in v1.x. |
+| Auth misconfiguration (stale `GH_TOKEN` overrides login) → silent failures. | Plugin logs resolved auth source via `client.app.log` at delegate start (token value never logged). |
+| Built-in Copilot agent names guessed wrong. | Verify via `copilot agent list` at impl time. Hardcoded list lives in one place (`src/discovery/agents.ts`). |
+| `kill-tree` flakiness on macOS vs Linux. | Use `fkill` npm package (v10.0.3, actively maintained, zero dependencies, SIGTERM→SIGKILL escalation with `forceTimeout`) instead of `tree-kill` (unmaintained Dec 2019). |
 
-## Resolved decisions
+## Documentation / Operational Notes
 
-1. **Repo/package name:** `opencode-copilot-delegate`. Local clone at `~/src/github.com/marcusrbrown/opencode-copilot-delegate`. Public unscoped npm package with the same name.
-2. **Versioning:** Start at `0.1.0` and stay on `0.x` during initial development (unstable).
-3. **`TaskState` lifecycle:** Keep until plugin shutdown so repeat `copilot_output` calls are idempotent. No `discard` arg in v1.
-4. **TUI toast on completion:** Yes. Call `client.tui.showToast(...)` alongside the session-prompt injection. Verify against the SDK at impl time that it doesn't double-fire when the session is already focused.
-5. **Cross-session task visibility:** Single-session scope. `TaskState` is in-memory inside one OpenCode process; `copilot_output` from a different OpenCode process returns a clean `task_id not found in this OpenCode process` error. Document the boundary in the README. Defer cross-process sharing (sqlite registry + IPC + notification fanout) to a future major version if demand emerges.
+- README must include a `Privacy` section: plugin collects zero telemetry, never phones home, all logging via `client.app.log`, auth token value never logged (only auth source name).
+- Document known v1 limitation: orphaned subprocesses on plugin restart.
+- Document cross-session task visibility boundary: `TaskState` is in-memory per OpenCode process.
+- `VERIFICATION.md` must be checked in before tagging v0.1.0 with results from all T7 scenarios.
 
-## Success criteria (carry-over from brainstorm)
+## Sources & References
 
-1. Parent agent calls `copilot_delegate` with prompt + agent name, receives `task_id`, does other work, then receives a `<system-reminder>` injection when Copilot finishes, then calls `copilot_output(task_id)` to retrieve the envelope.
-2. `copilot_delegate` tool description lists merged built-in + user + repo Copilot agents in a fresh session, verifiable via the OpenCode tool catalog inspector.
-3. `copilot_cancel` cleanly terminates a long-running delegation; subsequent `copilot_output` returns `status: cancelled`.
-4. With plugin installed, the `copilot-cli` skill points to the plugin tools. Without it, the skill falls back to the manual subprocess pattern.
-5. Plugin published as a standalone npm package with its own GitHub repo, semver, and `.changeset/`-managed changelog.
-
-## References
-
-- Brainstorm: `~/.context/systematic/ce-brainstorm/2026-04-21-copilot-delegate-plugin-requirements.md`
-- Ideation: `~/.context/systematic/ce-ideation/2026-04-21-copilot-cli-delegation.md`
-- Existing skill: `~/.agents/skills/copilot-cli/SKILL.md`
-- OMO async notification source (verified against installed `oh-my-openagent@3.17.4`): `~/.cache/opencode/packages/oh-my-openagent@3.17.4/node_modules/oh-my-openagent/dist/index.js` line `62018` (primary `client.session.promptAsync` injection with `noReply: !allComplete`); additional callsites at `64261` and `66174`; `OMO_INTERNAL_INITIATOR_MARKER` constant + `createInternalAgentTextPart` near line `62713`; visibility filter at line `147627`tTextPart` wraps text and appends `OMO_INTERNAL_INITIATOR_MARKER`).
-- OpenCode SDK type confirmation: `@opencode-ai/sdk/dist/gen/types.gen.d.ts` lines `2241` (`SessionPromptData.body.noReply`) and `2326` (`SessionPromptAsyncData.body.noReply`) \u2014 both endpoints accept `noReply?: boolean`.
-- Public reference for `client.session.prompt` injection: `shekohex/opencode-pty` `src/plugin.ts`.
-- Subprocess wrapping reference: `cloveric/cc-telegram-bridge` `src/codex/process-adapter.ts`.
-- Plugin tool API reference: `~/src/github.com/marcusrbrown/systematic/`.
-- OpenCode plugin types: `~/.local/share/mise/installs/npm-cortexkit-aft-opencode/0.14.0/node_modules/@opencode-ai/plugin/dist/index.d.ts`.
-- Copilot CLI custom agents docs: <https://docs.github.com/en/copilot/how-tos/copilot-cli/use-copilot-cli-agents/invoke-custom-agents>.
-- Copilot CLI delegation patterns docs: <https://docs.github.com/en/copilot/how-tos/copilot-cli/use-copilot-cli-agents/delegate-tasks-to-cca>.
+- **Brainstorm (origin):** `~/.context/systematic/ce-brainstorm/2026-04-21-copilot-delegate-plugin-requirements.md`
+- **Ideation:** `~/.context/systematic/ce-ideation/2026-04-21-copilot-cli-delegation.md`
+- **Copilot CLI skill:** `~/.agents/skills/copilot-cli/SKILL.md`
+- **OMO async notification:** Verified against `oh-my-openagent@3.17.4` — `client.session.promptAsync` with `noReply: !allComplete`; `createInternalAgentTextPart`; `OMO_INTERNAL_INITIATOR_MARKER`
+- **OpenCode SDK types:** `@opencode-ai/sdk` — `SessionPromptData.body.noReply` and `SessionPromptAsyncData.body.noReply` both accept `noReply?: boolean`
+- **Public session injection reference:** `shekohex/opencode-pty` — `src/plugin.ts`
+- **Subprocess wrapping reference:** `cloveric/cc-telegram-bridge` — `src/codex/process-adapter.ts`
+- **Plugin tool API reference:** `marcusrbrown/systematic` repo
+- **OpenCode plugin types:** `@opencode-ai/plugin` v0.14.0
+- **Copilot CLI custom agents:** <https://docs.github.com/en/copilot/how-tos/copilot-cli/use-copilot-cli-agents/invoke-custom-agents>
+- **Copilot CLI delegation patterns:** <https://docs.github.com/en/copilot/how-tos/copilot-cli/use-copilot-cli-agents/delegate-tasks-to-cca>
