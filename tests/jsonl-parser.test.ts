@@ -201,6 +201,15 @@ describe('parseJsonlLine', () => {
       // Then it should return unknown
       expect(result.type).toBe('unknown')
     })
+
+    it('should return type "unknown" for JSON null value', () => {
+      // Given a line that is valid JSON but null
+      const result = parseJsonlLine('null')
+
+      // Then it should return unknown without throwing
+      expect(result.type).toBe('unknown')
+      expect(result.raw).toEqual({})
+    })
   })
 
   describe('ParsedEvent structure', () => {

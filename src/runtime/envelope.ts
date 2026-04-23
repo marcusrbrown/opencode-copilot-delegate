@@ -56,15 +56,17 @@ export type OutputEnvelope = {
   events_count: number
 }
 
-/** Extract the last assistant message content from events. */
+/** Extract the last non-empty assistant message content from events. */
 function extractFinalMessage(events: ParsedEvent[]): string | undefined {
   const messages = events.filter((e) => e.type === 'message')
   if (messages.length === 0) return undefined
 
-  // Take the last message event
-  const last = messages[messages.length - 1]
-  const content = last.data.content as string | undefined
-  return content && content.length > 0 ? content : undefined
+  // Walk backwards to find the last message with non-empty content
+  for (let i = messages.length - 1; i >= 0; i--) {
+    const content = messages[i].data.content as string | undefined
+    if (content && content.length > 0) return content
+  }
+  return undefined
 }
 
 /** Aggregate tool call summaries from tool_use and tool_result events. */

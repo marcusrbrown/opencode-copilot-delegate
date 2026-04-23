@@ -23,7 +23,7 @@ Invalid model name triggers immediate exit. Only a single `session.mcp_server_st
 
 Prompt: "List all files in the src/ directory, then read package.json and tell me the package name". Multiple tool calls (`glob`, `view`), successful completion.
 
-**Known issue:** Some lines contain literal (unescaped) newlines inside JSON string values — particularly in `assistant.reasoning_delta`, `assistant.message_delta`, `assistant.message`, `tool.execution_complete`, and `user.message` events. This breaks the one-JSON-object-per-line contract. The parser must handle this gracefully (skip malformed lines or accumulate across line boundaries).
+**Note:** All lines are valid JSON. Copilot CLI may in some scenarios emit unescaped newlines inside JSON string values, which would break the one-JSON-object-per-line contract. If encountered at runtime, the parser returns `{ type: 'unknown' }` for malformed lines. Stream-level recovery (bracket-counting accumulation) is planned for the subprocess wrapper.
 
 ## Sanitization
 

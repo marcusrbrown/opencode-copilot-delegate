@@ -229,6 +229,87 @@ describe('buildEnvelope', () => {
     })
   })
 
+  describe('edge cases', () => {
+    it('should select last non-empty message when last message has empty content', () => {
+      // Given messages where the last has empty content (tool-request scaffolding)
+      const events: ParsedEvent[] = [
+        {
+          type: 'message',
+          data: { content: 'This is the real answer', toolRequests: [] },
+          raw: { type: 'assistant.message' },
+        },
+        {
+          type: 'message',
+          data: { content: '', toolRequests: [{ name: 'view' }] },
+          raw: { type: 'assistant.message' },
+        },
+      ]
+      const input = makeInput({ events, status: 'complete' })
+
+      // When the envelope is built
+      const envelope = buildEnvelope(input)
+
+      // Then final_message should be the earlier non-empty message
+      expect(envelope.final_message).toBe('This is the real answer')
+    })
+
+    it('should return undefined final_message when all messages have empty content', () => {
+      // Given only empty-content messages
+      const events: ParsedEvent[] = [
+        {
+          type: 'message',
+          data: { content: '', toolRequests: [{ name: 'view' }] },
+          raw: { type: 'assistant.message' },
+        },
+      ]
+      const input = makeInput({ events, status: 'complete' })
+
+      // When the envelope is built
+      const envelope = buildEnvelope(input)
+
+      // Then final_message should be undefined
+      expect(envelope.final_message).toBeUndefined()
+    })
+
+    it('should handle tool_use with no matching tool_result', () => {
+      // Given a tool_use event with no corresponding tool_result
+      const events: ParsedEvent[] = [
+        {
+          type: 'tool_use',
+          data: { toolCallId: 'tc-orphan', toolName: 'bash' },
+          raw: { type: 'tool.execution_start' },
+        },
+      ]
+      const input = makeInput({ events, status: 'complete' })
+
+      // When the envelope is built
+      const envelope = buildEnvelope(input)
+
+      // Then tool_calls_summary should list it with success undefined
+      expect(envelope.tool_calls_summary).toHaveLength(1)
+      expect(envelope.tool_calls_summary?.[0].name).toBe('bash')
+      expect(envelope.tool_calls_summary?.[0].success).toBeUndefined()
+    })
+
+    it('should handle malformed usage data gracefully', () => {
+      // Given a usage event where usage is a string instead of an object
+      const events: ParsedEvent[] = [
+        {
+          type: 'usage',
+          data: { exitCode: 0, usage: 'not an object' },
+          raw: { type: 'result' },
+        },
+      ]
+      const input = makeInput({ events, status: 'complete' })
+
+      // When the envelope is built
+      const envelope = buildEnvelope(input)
+
+      // Then tokens should be undefined (graceful degradation)
+      expect(envelope.tokens).toBeUndefined()
+    })
+  })
+
   describe('error handling', () => {
     it('should set error field when status is failed', () => {
       // Given failed status with error text
