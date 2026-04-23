@@ -7,6 +7,7 @@ origin: "~/.context/systematic/ce-brainstorm/2026-04-21-copilot-delegate-plugin-
 deepened: 2026-04-23
 confidence_checked: 2026-04-23
 testing_strategy_updated: 2026-04-23
+fro_bot_review_integrated: 2026-04-23
 ---
 
 # feat: OpenCode Copilot Delegate Plugin
@@ -372,7 +373,7 @@ type TaskState = {
 
 **Test scenarios:**
 - Happy path: `head -1 tests/fixtures/happy-path.jsonl | jq 'has("type")'` → `true`.
-- PII scrub: `grep -RnE '/Users/[a-z]+/' tests/fixtures/` → no matches.
+- PII scrub: `grep -RnE '/Users/[^/]+/|/home/[^/]+/' tests/fixtures/` → no matches.
 - Non-empty: `wc -l tests/fixtures/*.jsonl` — each fixture has at least one line.
 
 **Verification:**
@@ -480,6 +481,7 @@ type TaskState = {
 
 **Test scenarios:**
 - In-flight counter: with 3 tasks, completing #1 → `noReply: true`; completing #3 (last) → `noReply: false`.
+- Multi-session isolation: sessions A and B each have tasks; interleave completions; assert each session's `noReply` is isolated by `parentSessionId` (completing A's last task must not affect B's counter).
 - Failed status forces turn: `status: 'failed'` always sets `noReply: false`.
 - Notification shape: `body.parts[0].text` contains `<system-reminder>` and `[COPILOT DELEGATION COMPLETED]` literals.
 - `noReply` never undefined: explicitly set (not left as `undefined`).
@@ -550,12 +552,15 @@ type TaskState = {
 - `output.ts`: read state, build envelope. When `block: true`, await close event up to `timeout_ms`; on timeout return current state with `timed_out: true`. When `block: false`, return immediately.
 - `cancel.ts`: SIGTERM → 2s grace → SIGKILL escalation. Set `status: 'cancelled'`, fire notification. Return `{ cancelled, was_running }`.
 - `index.ts`: export `Plugin` that registers all three tools, wires `client` into runtime.
+- `copilot_output` and `copilot_cancel` validate at the tool boundary: `task_id` must be non-empty and match the `cpl_` prefix; malformed inputs return a structured error envelope without throwing.
 
 **Test scenarios:**
 - Happy path: `copilot_delegate` returns `task_id` matching `/^cpl_[0-9a-f-]+$/`.
 - Unknown task: `copilot_output` returns `status: 'unknown'` for missing task_id — does not throw.
+- Malformed task_id: `copilot_output({task_id: ''})` and `copilot_output({task_id: 'bad_id'})` return structured error envelopes without throwing.
 - Unknown cancel: `copilot_cancel` returns `{cancelled: false, was_running: false}` for missing task_id.
 - Blocking mode: `copilot_output({task_id, block: true, timeout_ms: 500})` returns `timed_out: true` when subprocess outlasts timeout.
+- Near-timeout race: `completionPromise` resolves just before `timeout_ms` fires — result must not be `timed_out: true`.
 - Tool registration: `Object.keys(result.tool).sort()` → `['copilot_cancel', 'copilot_delegate', 'copilot_output']`.
 - Description non-trivial: `result.tool.copilot_delegate.description.length > 50` → `true`.
 
@@ -586,7 +591,7 @@ type TaskState = {
 - `client.ts`: `createOpencodeClient({ baseUrl: 'http://127.0.0.1:PORT', throwOnError: true })`.
 - Teardown: SIGTERM → 5s grace → SIGKILL (matching librarian-researched pattern).
 - Plugin loading: place built `dist/index.js` in `tests/integration/fixtures/.opencode/plugins/` (or symlink); OpenCode auto-loads on server start.
-- Port: use `4097` (avoid conflicting with any running OpenCode on `4096`).
+- Port: use ephemeral allocation — `Bun.spawn(['opencode', 'serve', '--port', '0', ...])` (or equivalent); read the assigned port from subprocess stdout or a startup-ready signal; `server.ts` returns the resolved base URL. If the subprocess exits before the health check completes, `server.ts` throws immediately with the last N lines of stderr.
 - Unique test isolation: each `describe` block uses its own session; sessions are deleted in `afterEach`.
 
 **Test scenarios:**
@@ -596,7 +601,7 @@ type TaskState = {
 - Given a `task_id` from `copilot_delegate`, when `copilot_output` is called with `block: true`, then it returns within `timeout_ms` with either output or `timed_out: true`.
 - Given a running task, when `copilot_cancel` is called, then `{ cancelled: true, was_running: true }` is returned.
 - Given a nonexistent `task_id`, when `copilot_output` is called, then `{ status: 'unknown' }` is returned without throwing.
-- `<system-reminder>` notification appears as a subsequent assistant turn after `copilot_delegate` completes.
+- `<system-reminder>` notification appears as a subsequent assistant turn after `copilot_delegate` completes — assert by polling session messages with bounded timeout (max 30s, 250ms interval) until the reminder turn is found.
 - Server shuts down cleanly after SIGTERM within 5s (no zombie processes).
 
 **Verification:**
@@ -729,6 +734,7 @@ type TaskState = {
 
 **Approach:**
 - Install Bun, `bun install`, `bun test`, `bun run typecheck` (`tsc --noEmit`), `bun run lint`.
+- Install `opencode` binary before running `bun test tests/integration/` — download from `anomalyco/opencode` GitHub releases (see `fro-bot/agent` `src/services/setup/opencode.ts` for the platform detection + download pattern). T6.5 integration tests fail loudly if `opencode` is not on PATH.
 - Branch protection on `main` requires `ci` to pass.
 - `.changeset/` config: PRs without a changeset for `src/**` changes fail CI.
 - Pre-commit: optional husky hook running `bun run typecheck` on staged TS files.
