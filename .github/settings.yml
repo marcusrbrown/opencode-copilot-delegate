@@ -1,0 +1,21 @@
+---
+_extends: .github:common-settings.yaml
+
+repository:
+  name: opencode-copilot-delegate
+  description: OpenCode plugin that spawns GitHub Copilot CLI (copilot -p) as a background subprocess
+  homepage: https://www.npmjs.com/package/opencode-copilot-delegate
+  topics: opencode, plugin, copilot, github-copilot, typescript, bun
+
+branches:
+  - name: main
+    protection:
+      required_status_checks:
+        strict: true
+        # T11 will expand this list once CI workflows exist (Build, Typecheck, Lint, Test, etc.)
+        contexts:
+          - Fro Bot
+      enforce_admins: true
+      required_pull_request_reviews: null
+      restrictions: null
+      required_linear_history: true
