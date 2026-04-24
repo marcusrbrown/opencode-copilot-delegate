@@ -1,4 +1,5 @@
 import { type ChildProcess, spawn } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import { stripAnsi } from '../lib/ansi'
 import { killProcessTree } from '../lib/kill-tree'
 import type { TaskStatus } from './envelope'
@@ -18,6 +19,7 @@ type SpawnCopilotResult = {
   child: ChildProcess
   status: TaskStatus
   exitCode?: number
+  endedAt?: number
   stdoutLineBuffer: string
   finalMessage?: string
   errorText?: string
@@ -50,6 +52,7 @@ function finalizeTask(
   stderrText: string,
 ): void {
   flushBufferedStdout(task)
+  task.endedAt = Date.now()
   task.exitCode = exitCode ?? undefined
 
   if (task.status !== 'cancelled') {
@@ -95,7 +98,7 @@ export function spawnCopilot(
 
   const events: ParsedEvent[] = []
   const task: SpawnCopilotResult = {
-    taskId: `cpl_${crypto.randomUUID()}`,
+    taskId: `cpl_${randomUUID()}`,
     pid: child.pid ?? -1,
     events,
     abortController: new AbortController(),

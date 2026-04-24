@@ -118,17 +118,21 @@ describe('discoverAgents', () => {
     })
 
     it('should not override built-in agents with user or repo agents of the same name', () => {
-      // Given user and repo dirs (neither contains a file named "default.md")
+      // Given user and repo dirs that BOTH contain a "default.md" fixture
       // When discovering agents
       const agents = discoverAgents({
         userAgentsDir: userDir,
         repoAgentsDir: repoDir,
       })
 
-      // Then built-in "default" remains
+      // Then built-in "default" remains as the only "default" entry
       const defaults = agents.filter((a) => a.name === 'default')
       expect(defaults).toHaveLength(1)
       expect(defaults[0].source).toBe('builtin')
+
+      // And the total count excludes both colliding fixtures
+      // builtins(6) + user(my-reviewer) + repo(custom-helper, project-bot) = 9
+      expect(agents).toHaveLength(9)
     })
   })
 

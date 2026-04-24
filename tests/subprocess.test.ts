@@ -225,6 +225,37 @@ describe('subprocess runtime', () => {
       expect(task.stdoutLineBuffer).toBe('')
     })
 
+    it('handles interleaved valid and malformed JSONL lines', async () => {
+      // Given a fake copilot binary that emits valid, malformed, and valid lines
+      const { spawnCopilot } = await loadModules()
+      const cwd = mkdtempSync(join(tmpdir(), 'copilot-cwd-'))
+      const binDir = makeFakeCopilotBin()
+      tempPaths.push(cwd, binDir)
+
+      const task = spawnCopilot(
+        [
+          '-c',
+          [
+            'printf \'%s\\n\' \'{"type":"assistant.message","data":{"messageId":"m1","content":"hello","toolRequests":[]}}\'',
+            "printf '%s\\n' 'NOT-JSON-AT-ALL'",
+            'printf \'%s\\n\' \'{"type":"result","sessionId":"s1","exitCode":0,"usage":{}}\'',
+            'exit 0',
+          ].join('; '),
+        ],
+        { cwd, env: makeSpawnEnv(binDir) },
+      )
+
+      // When the subprocess finishes
+      await task.completionPromise
+
+      // Then all three lines are parsed: valid → unknown → valid
+      expect(task.status).toBe('complete')
+      expect(task.events).toHaveLength(3)
+      expect(task.events[0]?.type).toBe('message')
+      expect(task.events[1]?.type).toBe('unknown')
+      expect(task.events[2]?.type).toBe('usage')
+    })
+
     it('cancels the subprocess tree through the abort controller', async () => {
       // Given a fake copilot binary that starts a long-lived child process
       const { spawnCopilot } = await loadModules()

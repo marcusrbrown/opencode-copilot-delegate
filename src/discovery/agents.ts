@@ -48,9 +48,13 @@ export function discoverAgents(opts: DiscoverOptions): Agent[] {
     ? scanDir(opts.repoAgentsDir, 'repo')
     : []
 
-  // Repo overrides user with same name
+  // Repo overrides user with same name; builtins are never overridden
+  const builtinNames = new Set(BUILTIN_AGENTS)
   const overriddenNames = new Set(repoAgents.map((a) => a.name))
-  const filteredUser = userAgents.filter((a) => !overriddenNames.has(a.name))
+  const filteredUser = userAgents
+    .filter((a) => !builtinNames.has(a.name))
+    .filter((a) => !overriddenNames.has(a.name))
+  const filteredRepo = repoAgents.filter((a) => !builtinNames.has(a.name))
 
-  return [...builtins, ...filteredUser, ...repoAgents]
+  return [...builtins, ...filteredUser, ...filteredRepo]
 }

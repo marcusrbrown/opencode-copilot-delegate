@@ -1,4 +1,5 @@
 import type { ChildProcess } from 'node:child_process'
+import { randomUUID } from 'node:crypto'
 import { killProcessTree } from '../lib/kill-tree'
 import type { TaskStatus } from './envelope'
 import type { ParsedEvent } from './jsonl-parser'
@@ -29,7 +30,7 @@ export type CreateTaskInput = Omit<TaskState, 'taskId'>
 const tasks = new Map<string, TaskState>()
 
 export function createTask(input: CreateTaskInput): TaskState {
-  const taskId = `cpl_${crypto.randomUUID()}`
+  const taskId = `cpl_${randomUUID()}`
   const task: TaskState = {
     ...input,
     taskId,
