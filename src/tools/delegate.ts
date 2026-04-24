@@ -1,10 +1,7 @@
+import type { PluginInput } from '@opencode-ai/plugin'
 import { tool } from '@opencode-ai/plugin/tool'
 import type { NotifyClient } from '../runtime/notify'
-import {
-  decrementInFlight,
-  incrementInFlight,
-  notifyCompletion,
-} from '../runtime/notify'
+import { incrementInFlight, notifyCompletion } from '../runtime/notify'
 import type { SpawnCopilotResult } from '../runtime/subprocess'
 import { spawnCopilot } from '../runtime/subprocess'
 import type { TaskState } from '../runtime/task-registry'
@@ -13,10 +10,9 @@ import { createTask, getAllTasks } from '../runtime/task-registry'
 const MAX_CONCURRENT = 10
 
 type DelegateToolOptions = {
-  client: unknown
+  client: PluginInput['client']
   description: string
   directory: string
-  isShuttingDown: () => boolean
 }
 
 function appendRepeatedFlag(
@@ -138,11 +134,6 @@ export function createDelegateTool(options: DelegateToolOptions) {
             finalMessage: spawnResult.finalMessage,
             errorText: spawnResult.errorText,
           })
-
-          if (options.isShuttingDown()) {
-            decrementInFlight(task.parentSessionID)
-            return
-          }
 
           try {
             await notifyCompletion(options.client as NotifyClient, {

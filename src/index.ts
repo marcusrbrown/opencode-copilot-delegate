@@ -18,7 +18,6 @@ function getAgentsDirectories(directory: string): {
 const CopilotDelegate: Plugin = async ({ client, directory }) => {
   const agents = discoverAgents(getAgentsDirectories(directory))
   const delegateDescription = buildDescription(agents)
-  const lifecycle = { isShuttingDown: false }
 
   return {
     tool: {
@@ -26,7 +25,6 @@ const CopilotDelegate: Plugin = async ({ client, directory }) => {
         client,
         description: delegateDescription,
         directory,
-        isShuttingDown: () => lifecycle.isShuttingDown,
       }),
       copilot_output: createOutputTool(),
       copilot_cancel: createCancelTool(),

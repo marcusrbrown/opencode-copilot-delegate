@@ -57,7 +57,7 @@ export function incrementInFlight(parentSessionID: string): void {
 }
 
 /** Decrement the in-flight counter for a parent session. Returns remaining count. */
-export function decrementInFlight(parentSessionID: string): number {
+function decrementInFlight(parentSessionID: string): number {
   const current = inFlightCounters.get(parentSessionID) ?? 0
   const remaining = Math.max(0, current - 1)
 

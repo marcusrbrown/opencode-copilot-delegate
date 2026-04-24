@@ -7,7 +7,6 @@ import type { ToolContext } from '@opencode-ai/plugin/tool'
 import plugin from '../src/index'
 import { cleanupAll } from '../src/runtime/task-registry'
 import { createDelegateTool } from '../src/tools/delegate'
-import { createOutputTool } from '../src/tools/output'
 
 type PromptCall = {
   sessionId: string
@@ -362,7 +361,6 @@ describe('plugin tools', () => {
       client,
       description: 'delegate test',
       directory: invalidCwd,
-      isShuttingDown: () => false,
     })
 
     // When delegation is attempted
@@ -377,56 +375,39 @@ describe('plugin tools', () => {
     })
   })
 
-  it('decrements in-flight count even when shutdown suppresses notifications', async () => {
-    // Given one completed task during shutdown and a later completed task after shutdown
-    const cwd = mkdtempSync(join(tmpdir(), 'copilot-tools-shutdown-'))
+  it('cancels a running task and reports cancelled status', async () => {
+    // Given a delegated task that takes a long time
+    const cwd = mkdtempSync(join(tmpdir(), 'copilot-tools-cancel-running-'))
     const binDir = makeFakeCopilotBin()
     tempPaths.push(cwd, binDir)
-
     process.env.PATH = `${binDir}:${process.env.PATH ?? ''}`
 
-    const client = makeMockClient()
-    let shuttingDown = true
-    const delegateTool = createDelegateTool({
-      client,
-      description: 'delegate test',
-      directory: cwd,
-      isShuttingDown: () => shuttingDown,
-    })
-    const outputTool = createOutputTool()
-    const ctx = makeToolContext({
-      directory: cwd,
-      worktree: cwd,
-      sessionID: 'session-shutdown',
-    })
+    const input = makePluginInput(cwd)
+    const result = await plugin(input)
+    const tools = requireTools(result)
+    const delegateRaw = await tools.copilot_delegate.execute(
+      { prompt: 'sleep then return' },
+      makeToolContext({ directory: cwd, worktree: cwd }),
+    )
+    const taskId = String(expectObject(delegateRaw).task_id)
 
-    const firstRaw = await delegateTool.execute({ prompt: 'Return JSONL' }, ctx)
-    const firstTaskId = String(expectObject(firstRaw).task_id)
-    await outputTool.execute(
-      { task_id: firstTaskId, block: true, timeout_ms: 1000 },
-      ctx,
+    // When the running task is cancelled
+    const cancelRaw = await tools.copilot_cancel.execute(
+      { task_id: taskId },
+      makeToolContext(),
     )
 
-    shuttingDown = false
+    // Then cancel reports success
+    const cancelResult = expectObject(cancelRaw)
+    expect(cancelResult).toMatchObject({ cancelled: true, was_running: true })
 
-    // When a later task completes after shutdown ends
-    const secondRaw = await delegateTool.execute(
-      { prompt: 'Return JSONL' },
-      ctx,
+    // And subsequent output shows cancelled status
+    const outputRaw = await tools.copilot_output.execute(
+      { task_id: taskId, block: true, timeout_ms: 5000 },
+      makeToolContext(),
     )
-    const secondTaskId = String(expectObject(secondRaw).task_id)
-    await outputTool.execute(
-      { task_id: secondTaskId, block: true, timeout_ms: 1000 },
-      ctx,
-    )
-    await new Promise((resolve) => setTimeout(resolve, 0))
-
-    // Then the remaining task notification does not think older tasks are still in flight
-    expect(client.promptCalls).toHaveLength(1)
-    expect(client.promptCalls[0]).toMatchObject({
-      sessionId: 'session-shutdown',
-      noReply: false,
-    })
+    const outputResult = expectObject(outputRaw)
+    expect(outputResult.status).toBe('cancelled')
   })
 
   it('enforces the MAX_CONCURRENT delegation limit', async () => {

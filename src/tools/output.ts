@@ -20,6 +20,8 @@ export function createOutputTool() {
         .describe('Wait for completion. Default false.'),
       timeout_ms: tool.schema
         .number()
+        .int()
+        .min(0)
         .max(120000)
         .optional()
         .describe('Max wait ms when block is true. Default 30000.'),
@@ -43,7 +45,10 @@ export function createOutputTool() {
       }
 
       if (args.block && task.status === 'running') {
-        const timeoutMs = Math.min(args.timeout_ms ?? 30000, 120000)
+        const timeoutMs = Math.max(
+          0,
+          Math.min(args.timeout_ms ?? 30000, 120000),
+        )
         let timer: ReturnType<typeof setTimeout> | undefined
         const completed = await Promise.race([
           task.completionPromise.then(() => {
