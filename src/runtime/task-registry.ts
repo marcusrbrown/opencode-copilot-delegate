@@ -11,7 +11,7 @@ export type TaskState = SpawnCopilotResult & {
   modelName?: string
 }
 
-export type CreateTaskInput = SpawnCopilotResult & {
+export type CreateTaskInput = Omit<SpawnCopilotResult, 'taskId'> & {
   parentSessionID: string
   startedAt: number
   args: string[]

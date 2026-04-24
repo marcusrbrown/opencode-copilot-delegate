@@ -1,7 +1,13 @@
 import { tool } from '@opencode-ai/plugin/tool'
 import type { NotifyClient } from '../runtime/notify'
-import { incrementInFlight, notifyCompletion } from '../runtime/notify'
+import {
+  decrementInFlight,
+  incrementInFlight,
+  notifyCompletion,
+} from '../runtime/notify'
+import type { SpawnCopilotResult } from '../runtime/subprocess'
 import { spawnCopilot } from '../runtime/subprocess'
+import type { TaskState } from '../runtime/task-registry'
 import { createTask, getAllTasks } from '../runtime/task-registry'
 
 const MAX_CONCURRENT = 10
@@ -11,12 +17,6 @@ type DelegateToolOptions = {
   description: string
   directory: string
   isShuttingDown: () => boolean
-}
-
-type DelegateResult = { task_id: string } | { error: string }
-
-function asToolResult(result: DelegateResult): DelegateResult & string {
-  return result as unknown as DelegateResult & string
 }
 
 function appendRepeatedFlag(
@@ -72,7 +72,7 @@ export function createDelegateTool(options: DelegateToolOptions) {
       ).length
 
       if (runningCount >= MAX_CONCURRENT) {
-        return asToolResult({
+        return JSON.stringify({
           error:
             'Concurrent delegation limit reached (10 running). Cancel or wait for existing tasks.',
         })
@@ -101,25 +101,46 @@ export function createDelegateTool(options: DelegateToolOptions) {
       appendRepeatedFlag(cliArgs, '--deny-tool', args.deny_tool)
 
       const startedAt = Date.now()
-      const spawnResult = spawnCopilot(cliArgs, { cwd: options.directory })
-      const task = createTask(
-        {
-          ...spawnResult,
-          parentSessionID: ctx.sessionID,
-          startedAt,
-          args: cliArgs,
-          cwd: options.directory,
-          agentName: args.agent,
-          modelName: args.model,
-        },
-        spawnResult.taskId,
-      )
+      let spawnResult: SpawnCopilotResult
+      let task: TaskState
+
+      try {
+        spawnResult = spawnCopilot(cliArgs, { cwd: options.directory })
+        const { taskId: spawnTaskId, ...spawnFields } = spawnResult
+
+        task = createTask(
+          {
+            ...spawnFields,
+            parentSessionID: ctx.sessionID,
+            startedAt,
+            args: cliArgs,
+            cwd: options.directory,
+            agentName: args.agent,
+            modelName: args.model,
+          },
+          spawnTaskId,
+        )
+      } catch (error) {
+        return JSON.stringify({
+          error: `Failed to spawn copilot: ${error instanceof Error ? error.message : String(error)}`,
+        })
+      }
 
       incrementInFlight(ctx.sessionID)
 
       void task.completionPromise
         .then(async () => {
+          Object.assign(task, {
+            status: spawnResult.status,
+            exitCode: spawnResult.exitCode,
+            endedAt: spawnResult.endedAt,
+            stdoutLineBuffer: spawnResult.stdoutLineBuffer,
+            finalMessage: spawnResult.finalMessage,
+            errorText: spawnResult.errorText,
+          })
+
           if (options.isShuttingDown()) {
+            decrementInFlight(task.parentSessionID)
             return
           }
 
@@ -141,7 +162,7 @@ export function createDelegateTool(options: DelegateToolOptions) {
           // completionPromise should resolve, but ignore unexpected rejections
         })
 
-      return asToolResult({ task_id: task.taskId })
+      return JSON.stringify({ task_id: task.taskId })
     },
   })
 }

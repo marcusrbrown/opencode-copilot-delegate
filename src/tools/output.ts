@@ -2,12 +2,6 @@ import { tool } from '@opencode-ai/plugin/tool'
 import { buildEnvelope } from '../runtime/envelope'
 import { getTask } from '../runtime/task-registry'
 
-type OutputResult = Record<string, unknown>
-
-function asToolResult(result: OutputResult): OutputResult & string {
-  return result as unknown as OutputResult & string
-}
-
 function isValidTaskId(taskId: string): boolean {
   return taskId.length > 0 && taskId.startsWith('cpl_')
 }
@@ -32,7 +26,7 @@ export function createOutputTool() {
     },
     async execute(args) {
       if (!isValidTaskId(args.task_id)) {
-        return asToolResult({
+        return JSON.stringify({
           task_id: args.task_id,
           status: 'unknown',
           error: 'Invalid task_id format',
@@ -41,7 +35,7 @@ export function createOutputTool() {
 
       const task = getTask(args.task_id)
       if (!task) {
-        return asToolResult({
+        return JSON.stringify({
           task_id: args.task_id,
           status: 'unknown',
           error: 'Task not found in this OpenCode process',
@@ -50,24 +44,28 @@ export function createOutputTool() {
 
       if (args.block && task.status === 'running') {
         const timeoutMs = Math.min(args.timeout_ms ?? 30000, 120000)
+        let timer: ReturnType<typeof setTimeout> | undefined
         const completed = await Promise.race([
-          task.completionPromise.then(() => true),
+          task.completionPromise.then(() => {
+            clearTimeout(timer)
+            return true
+          }),
           new Promise<boolean>((resolve) => {
-            setTimeout(() => resolve(false), timeoutMs)
+            timer = setTimeout(() => resolve(false), timeoutMs)
           }),
         ])
 
         if (!completed) {
-          return asToolResult(
+          return JSON.stringify(
             buildEnvelope({
               ...task,
               timedOut: true,
-            }) as unknown as OutputResult,
+            }),
           )
         }
       }
 
-      return asToolResult(buildEnvelope(task) as unknown as OutputResult)
+      return JSON.stringify(buildEnvelope(task))
     },
   })
 }

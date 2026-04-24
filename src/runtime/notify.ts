@@ -56,6 +56,20 @@ export function incrementInFlight(parentSessionID: string): void {
   inFlightCounters.set(parentSessionID, current + 1)
 }
 
+/** Decrement the in-flight counter for a parent session. Returns remaining count. */
+export function decrementInFlight(parentSessionID: string): number {
+  const current = inFlightCounters.get(parentSessionID) ?? 0
+  const remaining = Math.max(0, current - 1)
+
+  if (remaining === 0) {
+    inFlightCounters.delete(parentSessionID)
+  } else {
+    inFlightCounters.set(parentSessionID, remaining)
+  }
+
+  return remaining
+}
+
 /** Reset all counters (for testing only). */
 export function resetInFlightCounters(): void {
   inFlightCounters.clear()
@@ -107,13 +121,7 @@ export async function notifyCompletion(
   task: NotifyTaskInfo,
 ): Promise<void> {
   // Decrement synchronously BEFORE any await — correctness invariant
-  const current = inFlightCounters.get(task.parentSessionID) ?? 0
-  const remaining = Math.max(0, current - 1)
-  if (remaining === 0) {
-    inFlightCounters.delete(task.parentSessionID)
-  } else {
-    inFlightCounters.set(task.parentSessionID, remaining)
-  }
+  const remaining = decrementInFlight(task.parentSessionID)
 
   // Failed exits always force a parent turn
   const noReply: boolean =

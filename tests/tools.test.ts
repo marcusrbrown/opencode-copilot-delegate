@@ -6,6 +6,8 @@ import type { PluginInput } from '@opencode-ai/plugin'
 import type { ToolContext } from '@opencode-ai/plugin/tool'
 import plugin from '../src/index'
 import { cleanupAll } from '../src/runtime/task-registry'
+import { createDelegateTool } from '../src/tools/delegate'
+import { createOutputTool } from '../src/tools/output'
 
 type PromptCall = {
   sessionId: string
@@ -164,10 +166,9 @@ function makeToolContext(overrides: Partial<ToolContext> = {}): ToolContext {
 }
 
 function expectObject(value: unknown): ToolResultObject {
-  expect(typeof value).toBe('object')
-  expect(value).not.toBeNull()
+  expect(typeof value).toBe('string')
 
-  return value as ToolResultObject
+  return JSON.parse(value as string) as ToolResultObject
 }
 
 function requireTools(result: Awaited<ReturnType<typeof plugin>>) {
@@ -351,5 +352,211 @@ describe('plugin tools', () => {
     const output = expectObject(raw)
     expect(output.task_id).toBe(taskId)
     expect(output.timed_out).not.toBe(true)
+  })
+
+  it('returns a structured error when copilot fails to spawn synchronously', async () => {
+    // Given a delegate tool configured with an invalid cwd string
+    const client = makeMockClient()
+    const invalidCwd = `bad\u0000cwd`
+    const delegateTool = createDelegateTool({
+      client,
+      description: 'delegate test',
+      directory: invalidCwd,
+      isShuttingDown: () => false,
+    })
+
+    // When delegation is attempted
+    const raw = await delegateTool.execute(
+      { prompt: 'Return JSONL' },
+      makeToolContext(),
+    )
+
+    // Then it returns a structured spawn error instead of throwing
+    expect(expectObject(raw)).toMatchObject({
+      error: expect.stringContaining('Failed to spawn copilot:'),
+    })
+  })
+
+  it('decrements in-flight count even when shutdown suppresses notifications', async () => {
+    // Given one completed task during shutdown and a later completed task after shutdown
+    const cwd = mkdtempSync(join(tmpdir(), 'copilot-tools-shutdown-'))
+    const binDir = makeFakeCopilotBin()
+    tempPaths.push(cwd, binDir)
+
+    process.env.PATH = `${binDir}:${process.env.PATH ?? ''}`
+
+    const client = makeMockClient()
+    let shuttingDown = true
+    const delegateTool = createDelegateTool({
+      client,
+      description: 'delegate test',
+      directory: cwd,
+      isShuttingDown: () => shuttingDown,
+    })
+    const outputTool = createOutputTool()
+    const ctx = makeToolContext({
+      directory: cwd,
+      worktree: cwd,
+      sessionID: 'session-shutdown',
+    })
+
+    const firstRaw = await delegateTool.execute({ prompt: 'Return JSONL' }, ctx)
+    const firstTaskId = String(expectObject(firstRaw).task_id)
+    await outputTool.execute(
+      { task_id: firstTaskId, block: true, timeout_ms: 1000 },
+      ctx,
+    )
+
+    shuttingDown = false
+
+    // When a later task completes after shutdown ends
+    const secondRaw = await delegateTool.execute(
+      { prompt: 'Return JSONL' },
+      ctx,
+    )
+    const secondTaskId = String(expectObject(secondRaw).task_id)
+    await outputTool.execute(
+      { task_id: secondTaskId, block: true, timeout_ms: 1000 },
+      ctx,
+    )
+    await new Promise((resolve) => setTimeout(resolve, 0))
+
+    // Then the remaining task notification does not think older tasks are still in flight
+    expect(client.promptCalls).toHaveLength(1)
+    expect(client.promptCalls[0]).toMatchObject({
+      sessionId: 'session-shutdown',
+      noReply: false,
+    })
+  })
+
+  it('enforces the MAX_CONCURRENT delegation limit', async () => {
+    // Given ten running delegated tasks
+    const cwd = mkdtempSync(join(tmpdir(), 'copilot-tools-limit-'))
+    const binDir = makeFakeCopilotBin()
+    tempPaths.push(cwd, binDir)
+
+    process.env.PATH = `${binDir}:${process.env.PATH ?? ''}`
+
+    const result = await plugin(makePluginInput(cwd))
+    const tools = requireTools(result)
+    const ctx = makeToolContext({ directory: cwd, worktree: cwd })
+
+    for (let index = 0; index < 10; index++) {
+      const raw = await tools.copilot_delegate.execute(
+        { prompt: 'sleep then return' },
+        ctx,
+      )
+      expect(expectObject(raw).task_id).toMatch(/^cpl_[0-9a-f-]+$/)
+    }
+
+    // When an eleventh task is delegated
+    const raw = await tools.copilot_delegate.execute(
+      { prompt: 'sleep then return' },
+      ctx,
+    )
+
+    // Then the tool rejects the request with a concurrency error
+    expect(expectObject(raw)).toMatchObject({
+      error:
+        'Concurrent delegation limit reached (10 running). Cancel or wait for existing tasks.',
+    })
+  })
+
+  it('returns a non-running result when cancelling a completed task', async () => {
+    // Given a delegated task that has already completed
+    const cwd = mkdtempSync(join(tmpdir(), 'copilot-tools-cancel-complete-'))
+    const binDir = makeFakeCopilotBin()
+    tempPaths.push(cwd, binDir)
+
+    process.env.PATH = `${binDir}:${process.env.PATH ?? ''}`
+
+    const result = await plugin(makePluginInput(cwd))
+    const tools = requireTools(result)
+    const ctx = makeToolContext({ directory: cwd, worktree: cwd })
+    const delegateRaw = await tools.copilot_delegate.execute(
+      { prompt: 'Return JSONL' },
+      ctx,
+    )
+    const taskId = String(expectObject(delegateRaw).task_id)
+    const outputRaw = await tools.copilot_output.execute(
+      { task_id: taskId, block: true, timeout_ms: 5000 },
+      ctx,
+    )
+    expect(expectObject(outputRaw)).toMatchObject({
+      task_id: taskId,
+      status: 'complete',
+    })
+
+    // When cancel is requested after completion
+    const raw = await tools.copilot_cancel.execute({ task_id: taskId }, ctx)
+
+    // Then the tool reports that nothing was running anymore
+    expect(expectObject(raw)).toMatchObject({
+      cancelled: false,
+      was_running: false,
+    })
+  })
+
+  it('delegates successfully with optional agent and model args', async () => {
+    // Given a delegated task with optional agent and model arguments
+    const cwd = mkdtempSync(join(tmpdir(), 'copilot-tools-optional-args-'))
+    const binDir = makeFakeCopilotBin()
+    tempPaths.push(cwd, binDir)
+
+    process.env.PATH = `${binDir}:${process.env.PATH ?? ''}`
+
+    const result = await plugin(makePluginInput(cwd))
+    const tools = requireTools(result)
+    const ctx = makeToolContext({ directory: cwd, worktree: cwd })
+
+    // When the task is delegated and its output is retrieved
+    const delegateRaw = await tools.copilot_delegate.execute(
+      {
+        prompt: 'Return JSONL',
+        agent: 'test-agent',
+        model: 'test-model',
+      },
+      ctx,
+    )
+    const taskId = String(expectObject(delegateRaw).task_id)
+    const outputRaw = await tools.copilot_output.execute(
+      { task_id: taskId, block: true, timeout_ms: 1000 },
+      ctx,
+    )
+
+    // Then the task completes and preserves the optional metadata in the envelope
+    expect(expectObject(delegateRaw).task_id).toMatch(/^cpl_[0-9a-f-]+$/)
+    expect(expectObject(outputRaw)).toMatchObject({
+      task_id: taskId,
+      agent: 'test-agent',
+      model: 'test-model',
+    })
+  })
+
+  it('returns a running envelope for non-blocking output on a running task', async () => {
+    // Given a delegated task that is still running
+    const cwd = mkdtempSync(join(tmpdir(), 'copilot-tools-running-output-'))
+    const binDir = makeFakeCopilotBin()
+    tempPaths.push(cwd, binDir)
+
+    process.env.PATH = `${binDir}:${process.env.PATH ?? ''}`
+
+    const result = await plugin(makePluginInput(cwd))
+    const tools = requireTools(result)
+    const ctx = makeToolContext({ directory: cwd, worktree: cwd })
+    const delegateRaw = await tools.copilot_delegate.execute(
+      { prompt: 'sleep then return' },
+      ctx,
+    )
+    const taskId = String(expectObject(delegateRaw).task_id)
+
+    // When output is requested without blocking
+    const raw = await tools.copilot_output.execute({ task_id: taskId }, ctx)
+
+    // Then the current running envelope is returned immediately
+    expect(expectObject(raw)).toMatchObject({
+      task_id: taskId,
+      status: 'running',
+    })
   })
 })
