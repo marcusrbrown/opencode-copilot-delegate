@@ -1,0 +1,148 @@
+{
+  "reviewer": "testing",
+  "findings": [
+    {
+      "file": "src/runtime/notify.ts",
+      "line": 111,
+      "severity": "high",
+      "category": "untested-branch",
+      "confidence": 0.92,
+      "message": "`cancelled` status in noReply logic is never tested. The condition `task.status === 'failed' || task.status === 'cancelled'` forces `noReply: false`, but only `failed` has a test case. A regression that accidentally dropped `cancelled` from this condition would not be caught.",
+      "suggestion": "Add a notify test with `status: 'cancelled'` and assert `noReply: false`."
+    },
+    {
+      "file": "src/runtime/notify.ts",
+      "line": 133,
+      "severity": "high",
+      "category": "untested-branch",
+      "confidence": 0.92,
+      "message": "Toast variant and message for `cancelled` status are untested. The ternary `task.status === 'complete' ? 'success' : 'error'` should yield `error` for cancelled, but no test exercises this branch.",
+      "suggestion": "Add a notify test with `status: 'cancelled'` asserting toast variant is `error` and message contains 'cancelled'."
+    },
+    {
+      "file": "src/runtime/notify.ts",
+      "line": 60,
+      "severity": "medium",
+      "category": "untested-branch",
+      "confidence": 0.85,
+      "message": "`formatDuration` has three branches (`<1000ms`, `<60s`, `>=60s`) but tests only implicitly hit the `<60s` path (startedAt is 5000ms ago). The `<1000ms` and `>=60s` branches have no coverage.",
+      "suggestion": "Add tests for durations 500ms and 90000ms to verify all three formatting branches."
+    },
+    {
+      "file": "src/runtime/subprocess.ts",
+      "line": 66,
+      "severity": "high",
+      "category": "untested-branch",
+      "confidence": 0.9,
+      "message": "`resolveAuthEnv` is completely untested. The token fallback chain (`COPILOT_GITHUB_TOKEN ?? GH_TOKEN ?? GITHUB_TOKEN`) and the passthrough when no token exists have zero test coverage.",
+      "suggestion": "Export `resolveAuthEnv` (or test via spawn with controlled env) and add cases for: no token, GH_TOKEN present, GITHUB_TOKEN present, COPILOT_GITHUB_TOKEN already set."
+    },
+    {
+      "file": "src/runtime/subprocess.ts",
+      "line": 59,
+      "severity": "high",
+      "category": "untested-branch",
+      "confidence": 0.9,
+      "message": "`finalizeTask` never captures stderr in tests. The branch `if (stderrText.trim().length > 0) { task.errorText = ... }` is not exercised. A regression that broke stderr capture would go unnoticed.",
+      "suggestion": "Add a subprocess test where the fake copilot binary writes to stderr and assert `task.errorText` contains the stripped content."
+    },
+    {
+      "file": "src/runtime/subprocess.ts",
+      "line": 147,
+      "severity": "high",
+      "category": "untested-branch",
+      "confidence": 0.88,
+      "message": "The `child.once('error', ...)` spawn error handler is untested. If `copilot` binary is missing or not executable, the task should be marked `failed` with `errorText` set. No test simulates this.",
+      "suggestion": "Add a test spawning a non-existent binary (or a path guaranteed to fail) and assert `task.status === 'failed'` and `errorText` is populated."
+    },
+    {
+      "file": "src/runtime/subprocess.ts",
+      "line": 136,
+      "severity": "medium",
+      "category": "untested-branch",
+      "confidence": 0.85,
+      "message": "The double-abort guard `if (task.status !== 'running') { return }` is untested. Calling `abortController.abort()` twice should not attempt to kill the process tree a second time.",
+      "suggestion": "Add a test that calls `abort()` twice and verifies `killProcessTree` is only invoked once (e.g., by mocking it) or simply that it does not throw."
+    },
+    {
+      "file": "src/runtime/subprocess.ts",
+      "line": 42,
+      "severity": "medium",
+      "category": "untested-branch",
+      "confidence": 0.8,
+      "message": "`assignFinalMessage` short-circuits when no `message` events exist. No test verifies that `finalMessage` remains undefined for a task that only emits `usage`/`result` events.",
+      "suggestion": "Add a subprocess test that emits only a `result` event (no `assistant.message`) and assert `task.finalMessage` is undefined."
+    },
+    {
+      "file": "src/runtime/notify.ts",
+      "line": 132,
+      "severity": "medium",
+      "category": "missing-edge-case",
+      "confidence": 0.9,
+      "message": "Toast failure swallowing is untested. The `try/catch` around `client.tui.showToast` exists to prevent toast errors from bubbling, but no test makes the toast throw.",
+      "suggestion": "Add a notify test where `client.tui.showToast` throws and assert `notifyCompletion` still resolves without error."
+    },
+    {
+      "file": "src/runtime/notify.ts",
+      "line": 105,
+      "severity": "medium",
+      "category": "missing-edge-case",
+      "confidence": 0.82,
+      "message": "Counter underflow defense is untested. If `notifyCompletion` is called without a matching `incrementInFlight`, `current` is 0 and `remaining` becomes 0 via `Math.max(0, current - 1)`. No test verifies this defensive behavior.",
+      "suggestion": "Add a test that calls `notifyCompletion` without prior `incrementInFlight` and assert `noReply: false` and the counter remains 0."
+    },
+    {
+      "file": "tests/subprocess.test.ts",
+      "line": 302,
+      "severity": "low",
+      "category": "weak-assertion",
+      "confidence": 0.7,
+      "message": "`ignores invalid pids when killing a process tree` only asserts the function doesn't throw. It does not verify that `fkill` is never called (the actual behavior enforced by the guard clause).",
+      "suggestion": "If possible, mock `fkill` and assert it is not invoked for invalid pids, or at minimum assert the function returns undefined immediately."
+    },
+    {
+      "file": "tests/agents.test.ts",
+      "line": 18,
+      "severity": "low",
+      "category": "brittle-test",
+      "confidence": 0.6,
+      "message": "Built-in agent count and exact name list are hardcoded (`toHaveLength(6)` and explicit array). Adding or renaming a built-in agent will break this test even though the behavior (discovering builtins) hasn't changed.",
+      "suggestion": "Consider asserting that all returned agents have `source: 'builtin'` and that the list is non-empty, rather than pinning the exact count and names."
+    },
+    {
+      "file": "src/runtime/subprocess.ts",
+      "line": 119,
+      "severity": "low",
+      "category": "missing-edge-case",
+      "confidence": 0.65,
+      "message": "Empty stdout lines between JSONL events are skipped via `if (line.length === 0) { continue }`, but no test emits empty lines to verify they don't create spurious `unknown` events.",
+      "suggestion": "Add a subprocess test that includes empty lines in stdout and assert they are ignored (events length should not increase for empty lines)."
+    },
+    {
+      "file": "src/discovery/agents.ts",
+      "line": 27,
+      "severity": "low",
+      "category": "missing-edge-case",
+      "confidence": 0.7,
+      "message": "`scanDir` filters for `.md` files, but no test has a directory with mixed file types (e.g., `.md` and `.txt`) to verify non-`.md` files are excluded.",
+      "suggestion": "Add a fixture directory with a `.txt` file and assert it does not appear in discovered agents."
+    }
+  ],
+  "residual_risks": [
+    "The untested `cancelled` paths in `notifyCompletion` mean a refactor of the noReply or toast logic could silently break cancellation UX.",
+    "Untested stderr capture (`errorText`) means production subprocess errors may be lost without regression detection.",
+    "Untested spawn error handling means a broken `copilot` binary path or permission issue would fail silently in production with no test signal.",
+    "`resolveAuthEnv` is entirely unverified; a typo in the env var fallback chain would break GitHub Copilot authentication in all delegated tasks."
+  ],
+  "testing_gaps": [
+    "`cancelled` status handling in notify (noReply semantics and toast variant)",
+    "Auth environment resolution (`resolveAuthEnv` token fallback)",
+    "Stderr capture and `errorText` propagation in subprocess runtime",
+    "Spawn error handling (`child.once('error')` branch)",
+    "Double-abort guard in subprocess abort listener",
+    "Toast error swallowing in notify",
+    "Duration formatting edge cases (<1s and >1min)",
+    "`assignFinalMessage` behavior when no message events exist",
+    "Counter underflow in notify when `notifyCompletion` is called without matching `incrementInFlight`"
+  ]
+}

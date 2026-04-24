@@ -1,0 +1,140 @@
+{
+  "reviewer": "correctness",
+  "findings": [
+    {
+      "title": "stdout data handler crashes on malformed JSONL and corrupts buffer state",
+      "severity": "P0",
+      "file": "src/runtime/subprocess.ts",
+      "line": 123,
+      "confidence": 0.88,
+      "autofix_class": "safe_auto",
+      "owner": "review-fixer",
+      "requires_verification": true,
+      "pre_existing": false,
+      "suggested_fix": "Wrap `parseJsonlLine(line)` in a try/catch inside the `child.stdout.on('data')` handler. On parse failure, push a synthetic `{ type: 'error', data: { message: ... } }` event (or skip the line), and ensure `task.stdoutLineBuffer` is still cleared so the bad line is not re-parsed on every subsequent chunk."
+    },
+    {
+      "title": "assignFinalMessage crashes when message event lacks `data` property",
+      "severity": "P1",
+      "file": "src/runtime/subprocess.ts",
+      "line": 40,
+      "confidence": 0.92,
+      "autofix_class": "safe_auto",
+      "owner": "review-fixer",
+      "requires_verification": true,
+      "pre_existing": false,
+      "suggested_fix": "Change `const content = lastMessage?.data.content` to `const content = lastMessage?.data?.content` to guard against `data` being undefined or null."
+    },
+    {
+      "title": "Spawn error status and errorText overwritten by close handler",
+      "severity": "P1",
+      "file": "src/runtime/subprocess.ts",
+      "line": 147,
+      "confidence": 0.85,
+      "autofix_class": "safe_auto",
+      "owner": "review-fixer",
+      "requires_verification": true,
+      "pre_existing": false,
+      "suggested_fix": "In `finalizeTask`, add an early return or guard `if (task.status === 'failed') return;` before overwriting `task.status` and `task.errorText`, so that spawn errors (set in the `child.once('error')` handler) are not lost when the `close` event fires."
+    },
+    {
+      "title": "User/repo agents can collide with built-in names",
+      "severity": "P2",
+      "file": "src/discovery/agents.ts",
+      "line": 52,
+      "confidence": 0.85,
+      "autofix_class": "gated_auto",
+      "owner": "review-fixer",
+      "requires_verification": true,
+      "pre_existing": false,
+      "suggested_fix": "Add `const builtinNames = new Set(BUILTIN_AGENTS)` and filter `userAgents` and `repoAgents` against it before concatenation, so the invariant 'built-ins are not overridden' is actually enforced. Also add a fixture named `default.md` to the collision test so it exercises the real case."
+    },
+    {
+      "title": "Task registry leaks completed tasks forever",
+      "severity": "P2",
+      "file": "src/runtime/task-registry.ts",
+      "line": 29,
+      "confidence": 0.8,
+      "autofix_class": "gated_auto",
+      "owner": "review-fixer",
+      "requires_verification": true,
+      "pre_existing": false,
+      "suggested_fix": "Provide a `removeTask(taskId: string)` function and call it from the subprocess completion path (or from `finalizeTask`) so the global `tasks` Map does not grow unbounded. Alternatively, wire `spawnCopilot` into `createTask` so the registry is actually used, and clean up on completion."
+    },
+    {
+      "title": "inFlightCounters Map leaks finished sessions",
+      "severity": "P2",
+      "file": "src/runtime/notify.ts",
+      "line": 105,
+      "confidence": 0.8,
+      "autofix_class": "safe_auto",
+      "owner": "review-fixer",
+      "requires_verification": true,
+      "pre_existing": false,
+      "suggested_fix": "After decrementing, delete the entry when it reaches zero: `if (remaining === 0) { inFlightCounters.delete(task.parentSessionID); }`."
+    },
+    {
+      "title": "Duplicate notifyCompletion calls drain counter prematurely",
+      "severity": "P2",
+      "file": "src/runtime/notify.ts",
+      "line": 105,
+      "confidence": 0.75,
+      "autofix_class": "gated_auto",
+      "owner": "review-fixer",
+      "requires_verification": true,
+      "pre_existing": false,
+      "suggested_fix": "Add a `Set<string>` of already-notified `taskId`s. At the top of `notifyCompletion`, return early if the task was already processed."
+    },
+    {
+      "title": "Unhandled rejection from fire-and-forget killProcessTree",
+      "severity": "P2",
+      "file": "src/runtime/subprocess.ts",
+      "line": 141,
+      "confidence": 0.7,
+      "autofix_class": "safe_auto",
+      "owner": "review-fixer",
+      "requires_verification": true,
+      "pre_existing": false,
+      "suggested_fix": "Change `void killProcessTree(task.pid)` to `killProcessTree(task.pid).catch((err) => { /* log or ignore */ })` to prevent unhandled promise rejections if `fkill` fails for any reason other than invalid PID."
+    },
+    {
+      "title": "Missing `crypto` import relies on global",
+      "severity": "P2",
+      "file": "src/runtime/subprocess.ts",
+      "line": 98,
+      "confidence": 0.7,
+      "autofix_class": "safe_auto",
+      "owner": "review-fixer",
+      "requires_verification": true,
+      "pre_existing": false,
+      "suggested_fix": "Add `import { randomUUID } from 'node:crypto'` and replace `crypto.randomUUID()` with `randomUUID()`. Apply the same fix in `src/runtime/task-registry.ts` line 32."
+    },
+    {
+      "title": "Cancelled tasks force parent turn even when other tasks are in flight",
+      "severity": "P3",
+      "file": "src/runtime/notify.ts",
+      "line": 111,
+      "confidence": 0.6,
+      "autofix_class": "advisory",
+      "owner": "human",
+      "requires_verification": false,
+      "pre_existing": false,
+      "suggested_fix": "Clarify whether cancelled tasks should force a parent turn. If only failures should force a turn, change the condition to `task.status === 'failed' ? false : remaining > 0`. Otherwise, update the comment to explicitly include 'cancelled'."
+    }
+  ],
+  "residual_risks": [
+    "`parseJsonlLine` implementation was not in the diff. If it throws on malformed input (likely), the uncaught-exception finding above is critical. If it already swallows errors and returns a safe object, the severity drops — verify its contract.",
+    "`fkill` with a negative PID relies on Unix process-group semantics. On Windows, behavior may differ and `killProcessTree` might not terminate grandchildren. Cross-platform correctness depends on `fkill` internals.",
+    "`stripAnsi` regex is heuristic. Exotic terminal sequences may slip through and corrupt the `finalMessage` or `errorText`, but this is cosmetic and low-risk.",
+    "`spawnCopilot` does not register the spawned task in `task-registry`. If production code expects the registry to contain all tasks, the two modules are effectively disconnected, which may indicate an incomplete integration rather than a standalone bug."
+  ],
+  "testing_gaps": [
+    "No test for malformed/non-JSONL stdout lines in `subprocess.test.ts`. Add a case where the fake copilot emits garbage on stdout to verify the parser does not crash the host.",
+    "No test for `lastMessage` event missing the `data` property. Add a parsed event `{ type: 'message' }` without `data` to verify `assignFinalMessage` does not throw.",
+    "No test for simultaneous spawn error + non-zero exit. Verify that `task.status` remains 'failed' and the original spawn error message is preserved in `task.errorText`.",
+    "The test 'should not override built-in agents with user or repo agents of the same name' does not actually create a name collision. Add a `default.md` fixture or temporarily create one to test the real merge behavior.",
+    "No test for duplicate `notifyCompletion` calls. Verify that calling it twice for the same task does not decrement the counter twice.",
+    "No test for `notifyCompletion` with `status: 'cancelled'` and remaining in-flight tasks. Verify the `noReply` behavior matches the intended design.",
+    "No test verifying `endedAt` is populated on task completion. Since the field exists on `TaskState` but is never assigned, a test would expose the missing implementation."
+  ]
+}

@@ -53,5 +53,8 @@
     "lint": "biome check .",
     "fix": "biome check . --write",
     "prepublishOnly": "bun run build"
+  },
+  "dependencies": {
+    "fkill": "10.0.3"
   }
 }

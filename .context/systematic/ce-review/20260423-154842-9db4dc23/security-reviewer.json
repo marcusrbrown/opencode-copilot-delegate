@@ -1,0 +1,84 @@
+{
+  "reviewer": "security",
+  "findings": [
+    {
+      "category": "command-injection",
+      "severity": "high",
+      "confidence": 0.85,
+      "file": "src/runtime/subprocess.ts",
+      "lines": "83-94",
+      "title": "Arbitrary binary execution via unvalidated PATH override in opts.env",
+      "description": "Caller-provided `opts.env` is merged with `process.env` without validation and passed to `spawn()`. A caller can inject `PATH` to redirect the `copilot` command resolution to an attacker-controlled binary. The existing test suite explicitly demonstrates this pattern (`makeSpawnEnv` overrides PATH to run a fake copilot binary). If `opts.env` is influenced by user input (e.g., agent configuration), this is a direct remote code execution vector.",
+      "attack_path": "User-controlled agent config → opts.env.PATH override → spawn('copilot') resolves to attacker binary → arbitrary code execution with parent privileges.",
+      "recommendation": "Validate `opts.env` against an allowlist of permitted keys, or explicitly strip `PATH` from caller input and construct a safe PATH internally."
+    },
+    {
+      "category": "information-disclosure",
+      "severity": "high",
+      "confidence": 0.8,
+      "file": "src/runtime/subprocess.ts",
+      "lines": "73-76, 83-86",
+      "title": "Full parent environment leaked to subprocess",
+      "description": "`resolveAuthEnv` spreads the entire environment object (`...env`) into the child process. The copilot subprocess receives every environment variable from the parent, including unrelated secrets (AWS credentials, other API tokens, SSH agent sockets, kubeconfig paths, internal service URLs). A compromised or malicious copilot subprocess can harvest these secrets.",
+      "attack_path": "Compromised/malicious copilot CLI or dependency → reads process.env → exfiltrates parent secrets.",
+      "recommendation": "Pass only the minimum required environment variables to the child (e.g., PATH, HOME, COPILOT_GITHUB_TOKEN). Do not spread the full parent env."
+    },
+    {
+      "category": "auth-bypass",
+      "severity": "moderate",
+      "confidence": 0.75,
+      "file": "src/runtime/subprocess.ts",
+      "lines": "83-86",
+      "title": "Auth token injection via caller-controlled opts.env",
+      "description": "`opts.env` is merged on top of `process.env` before `resolveAuthEnv` executes. A caller can inject `COPILOT_GITHUB_TOKEN` to override the parent's GitHub token. The child process will then authenticate to GitHub APIs using the attacker-controlled token, enabling potential data exfiltration to attacker-controlled endpoints or API gateways.",
+      "attack_path": "Attacker controls opts.env → injects COPILOT_GITHUB_TOKEN → child authenticates to GitHub with attacker token → code/prompts exfiltrated.",
+      "recommendation": "Do not allow caller-provided env to override security-critical variables. Resolve the auth token from a restricted, internally-managed source after merging env."
+    },
+    {
+      "category": "information-disclosure",
+      "severity": "moderate",
+      "confidence": 0.7,
+      "file": "src/runtime/subprocess.ts",
+      "lines": "67, 75-76",
+      "title": "Auth token duplicated across multiple environment variables",
+      "description": "When `GH_TOKEN` or `GITHUB_TOKEN` is present but `COPILOT_GITHUB_TOKEN` is absent, `resolveAuthEnv` copies the token into `COPILOT_GITHUB_TOKEN` while leaving the original variable in the environment. The child receives multiple copies of the same secret, increasing exposure if the child logs its environment or if any of these variables are inadvertently logged by downstream tools.",
+      "attack_path": "Child process or its dependencies log env vars → token appears under multiple names → harder to audit/revoke, increased leak surface.",
+      "recommendation": "After copying the token to `COPILOT_GITHUB_TOKEN`, delete `GH_TOKEN` and `GITHUB_TOKEN` from the child environment to minimize secret duplication."
+    },
+    {
+      "category": "race-condition",
+      "severity": "moderate",
+      "confidence": 0.65,
+      "file": "src/lib/kill-tree.ts",
+      "lines": "14",
+      "title": "PID reuse risk in asynchronous process tree kill",
+      "description": "`killProcessTree` is called asynchronously. Between the child process exiting and `fkill` executing, the OS may reuse the PID for a different process. `fkill(-pid, ...)` sends SIGTERM to the process group ID equal to the original child PID; if reused, an unrelated process or process group receives the signal. The `waitForExit: 5000` option does not verify process identity before signaling.",
+      "attack_path": "Child exits quickly → PID reused by unrelated process → abort triggers fkill(-pid) → legitimate process terminated.",
+      "recommendation": "Use Node.js `child.kill()` on the `ChildProcess` instance directly when possible, which references the OS handle rather than a numeric PID. If fkill is required, verify the process is still the expected child (e.g., via `process.kill(pid, 0)` and checking start time) before signaling the group."
+    },
+    {
+      "category": "information-disclosure",
+      "severity": "moderate",
+      "confidence": 0.6,
+      "file": "src/runtime/subprocess.ts",
+      "lines": "128-131, 59-61",
+      "title": "Unfiltered stderr capture may retain sensitive data",
+      "description": "Child stderr is captured verbatim into `task.errorText` without filtering or redaction. If the copilot CLI or any intermediate shell logs HTTP requests (including `Authorization` headers), file paths, or tokens to stderr, this sensitive data is stored in the in-memory task registry and may be exposed through task inspection APIs or error reporting.",
+      "attack_path": "Copilot CLI logs auth header to stderr → stderr captured in task.errorText → task registry retains token in memory → exposed via getTask or diagnostics.",
+      "recommendation": "Apply a redaction filter to stderr content before storing it, or avoid persisting full stderr in the task object."
+    }
+  ],
+  "residual_risks": [
+    "`opts.env` allowlist/filtering is not implemented. Even if PATH is restricted, other dangerous variables (LD_PRELOAD, DYLD_INSERT_LIBRARIES, NODE_OPTIONS) could be injected if the caller can influence opts.env.",
+    "`fkill` is an external npm dependency. Its security posture and supply-chain integrity are outside the scope of this review but represent a transitive trust boundary for signal delivery.",
+    "Process group signaling (`fkill(-pid)`) behavior differs across platforms (Unix vs Windows). The `detached: true` flag creates a process group on Unix but semantics vary on Windows, potentially leading to incomplete cleanup or unexpected signal targets.",
+    "`resolveAuthEnv` does not validate token format or length before propagation. A malformed or extremely long token could cause issues in downstream consumers."
+  ],
+  "testing_gaps": [
+    "No test verifies that dangerous environment variables (PATH, LD_PRELOAD, DYLD_INSERT_LIBRARIES, NODE_OPTIONS) are rejected or sanitized in `opts.env`.",
+    "No test verifies that the child process receives only the minimum required environment variables rather than the full parent env.",
+    "No test covers token precedence edge cases: empty string values (`''`), whitespace-only tokens, or multiple simultaneous tokens.",
+    "No test simulates rapid child exit followed by PID reuse to verify that `killProcessTree` does not affect unrelated processes.",
+    "No test verifies that stderr content containing patterns like `Authorization: token` or `ghp_` is redacted before storage in `task.errorText`."
+  ]
+}
