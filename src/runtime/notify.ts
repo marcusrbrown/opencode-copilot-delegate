@@ -19,12 +19,17 @@ export type NotifyClient = {
       path: { id: string }
       body: {
         noReply: boolean
-        parts: Array<{ type: string; text: string; synthetic: boolean }>
+        parts: Array<{ type: 'text'; text: string; synthetic: boolean }>
       }
     }) => Promise<unknown>
   }
   tui: {
-    showToast: (opts: { body: { message: string; variant: string } }) => void
+    showToast: (opts: {
+      body: {
+        message: string
+        variant: 'info' | 'success' | 'warning' | 'error'
+      }
+    }) => unknown
   }
   app: {
     log: (...args: unknown[]) => void
