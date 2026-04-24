@@ -1,0 +1,26 @@
+{
+  $schema: 'https://docs.renovatebot.com/renovate-schema.json',
+  description: ['Use the config preset for the @fro.bot/systematic repository'],
+  extends: ['github>marcusrbrown/renovate-config#4.5.8'],
+  packageRules: [
+    {
+      description: 'Only allow LTS versions of @types/node (even major versions)',
+      matchPackageNames: ['@types/node'],
+      allowedVersions: '/^v?([0-9]*[02468])\\./',
+    },
+    {
+      description: 'Only allow LTS versions of Node.js in GitHub Actions',
+      matchManagers: ['github-actions'],
+      matchPackageNames: ['node'],
+      allowedVersions: '/^([0-9]*[02468])$/',
+    },
+    {
+      matchPackageNames: ['@opencode-ai/{/,}**'],
+      semanticCommitType: 'build',
+    },
+  ],
+  postUpgradeTasks: {
+    commands: ['bun install', 'bun run fix', 'bun run build'],
+    executionMode: 'branch',
+  },
+}
