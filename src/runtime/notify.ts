@@ -19,12 +19,17 @@ export type NotifyClient = {
       path: { id: string }
       body: {
         noReply: boolean
-        parts: Array<{ type: string; text: string; synthetic: boolean }>
+        parts: Array<{ type: 'text'; text: string; synthetic: boolean }>
       }
     }) => Promise<unknown>
   }
   tui: {
-    showToast: (opts: { body: { message: string; variant: string } }) => void
+    showToast: (opts: {
+      body: {
+        message: string
+        variant: 'info' | 'success' | 'warning' | 'error'
+      }
+    }) => unknown
   }
   app: {
     log: (...args: unknown[]) => void
@@ -49,6 +54,20 @@ const inFlightCounters = new Map<string, number>()
 export function incrementInFlight(parentSessionID: string): void {
   const current = inFlightCounters.get(parentSessionID) ?? 0
   inFlightCounters.set(parentSessionID, current + 1)
+}
+
+/** Decrement the in-flight counter for a parent session. Returns remaining count. */
+function decrementInFlight(parentSessionID: string): number {
+  const current = inFlightCounters.get(parentSessionID) ?? 0
+  const remaining = Math.max(0, current - 1)
+
+  if (remaining === 0) {
+    inFlightCounters.delete(parentSessionID)
+  } else {
+    inFlightCounters.set(parentSessionID, remaining)
+  }
+
+  return remaining
 }
 
 /** Reset all counters (for testing only). */
@@ -102,13 +121,7 @@ export async function notifyCompletion(
   task: NotifyTaskInfo,
 ): Promise<void> {
   // Decrement synchronously BEFORE any await — correctness invariant
-  const current = inFlightCounters.get(task.parentSessionID) ?? 0
-  const remaining = Math.max(0, current - 1)
-  if (remaining === 0) {
-    inFlightCounters.delete(task.parentSessionID)
-  } else {
-    inFlightCounters.set(task.parentSessionID, remaining)
-  }
+  const remaining = decrementInFlight(task.parentSessionID)
 
   // Failed exits always force a parent turn
   const noReply: boolean =

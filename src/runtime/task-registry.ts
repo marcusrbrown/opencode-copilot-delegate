@@ -1,36 +1,31 @@
-import type { ChildProcess } from 'node:child_process'
 import { randomUUID } from 'node:crypto'
 import { killProcessTree } from '../lib/kill-tree'
-import type { TaskStatus } from './envelope'
-import type { ParsedEvent } from './jsonl-parser'
+import type { SpawnCopilotResult } from './subprocess'
 
-export type TaskState = {
-  taskId: string
+export type TaskState = SpawnCopilotResult & {
   parentSessionID: string
-  pid: number
   startedAt: number
-  endedAt?: number
-  status: TaskStatus
-  exitCode?: number
   args: string[]
   cwd: string
   agentName?: string
   modelName?: string
-  stdoutLineBuffer: string
-  events: ParsedEvent[]
-  finalMessage?: string
-  errorText?: string
-  child: ChildProcess
-  completionPromise: Promise<void>
-  abortController: AbortController
 }
 
-export type CreateTaskInput = Omit<TaskState, 'taskId'>
+export type CreateTaskInput = Omit<SpawnCopilotResult, 'taskId'> & {
+  parentSessionID: string
+  startedAt: number
+  args: string[]
+  cwd: string
+  agentName?: string
+  modelName?: string
+}
 
 const tasks = new Map<string, TaskState>()
 
-export function createTask(input: CreateTaskInput): TaskState {
-  const taskId = `cpl_${randomUUID()}`
+export function createTask(
+  input: CreateTaskInput,
+  taskId = `cpl_${randomUUID()}`,
+): TaskState {
   const task: TaskState = {
     ...input,
     taskId,
@@ -46,6 +41,10 @@ export function getTask(taskId: string): TaskState | undefined {
 
 export function getAllTasks(): TaskState[] {
   return [...tasks.values()]
+}
+
+export function deleteTask(taskId: string): boolean {
+  return tasks.delete(taskId)
 }
 
 export async function cleanupAll(): Promise<void> {

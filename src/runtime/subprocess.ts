@@ -10,7 +10,7 @@ type SpawnCopilotOptions = {
   env?: Record<string, string>
 }
 
-type SpawnCopilotResult = {
+export type SpawnCopilotResult = {
   taskId: string
   pid: number
   events: ParsedEvent[]
