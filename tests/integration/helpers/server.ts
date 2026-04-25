@@ -50,7 +50,12 @@ function attachStreamDrain(
       idx = buffer.indexOf('\n')
     }
   })
-  stream.on('error', () => {})
+  // Capture stream errors into the stderr ring buffer so they surface in diagnostics
+  // rather than being silently swallowed.
+  stream.on('error', (err: Error) => {
+    state.stderrLines.push(`[${sink} stream error] ${err.message}`)
+    if (state.stderrLines.length > STDERR_BUFFER_CAP) state.stderrLines.shift()
+  })
 }
 
 async function probeHealth(baseUrl: string): Promise<boolean> {
@@ -96,7 +101,8 @@ async function collectDescendants(rootPid: number): Promise<number[]> {
   const out: number[] = []
   const stack = [rootPid]
   while (stack.length > 0) {
-    const current = stack.pop() as number
+    const current = stack.pop()
+    if (current === undefined) break
     const kids = childrenByParent.get(current) ?? []
     for (const kid of kids) {
       out.push(kid)
@@ -133,10 +139,11 @@ async function killTreeAggressive(pid: number): Promise<void> {
   } catch {
     // process may already be gone; sweep below
   }
+  // Sweep descendants from the pre-fkill snapshot. We don't probe with signal 0 first because
+  // safeKill already swallows ESRCH on already-dead processes, and a probe-then-kill sequence
+  // introduces a TOCTOU race where the PID could be reused between the probe and the SIGKILL.
   for (const target of [...descendants, pid]) {
-    if (safeKill(target, 0)) {
-      safeKill(target, 'SIGKILL')
-    }
+    safeKill(target, 'SIGKILL')
   }
 }
 
@@ -167,6 +174,7 @@ export async function startServer(
     },
   })
   const pid = child.pid ?? -1
+  let stopped = false
 
   const stderrLines: string[] = []
   let baseUrl: string | undefined
@@ -190,8 +198,12 @@ export async function startServer(
   attachStreamDrain(child.stdout, 'stdout', drainState)
   attachStreamDrain(child.stderr, 'stderr', drainState)
 
+  // Idempotent: a second stop() on the same handle is a no-op. This prevents the rare but
+  // dangerous case where the original PID is reused by an unrelated process between the first
+  // stop() and a follow-up stop() in a finally block, causing us to SIGKILL the wrong process.
   const stop = async (): Promise<void> => {
-    if (pid <= 0) return
+    if (stopped || pid <= 0) return
+    stopped = true
     await killTreeAggressive(pid)
   }
 

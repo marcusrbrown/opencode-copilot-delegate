@@ -69,10 +69,74 @@ describe('opencode-copilot-delegate plugin (integration)', () => {
     expect(ids).toContain('copilot_output')
     expect(ids).toContain('copilot_cancel')
   }, 10_000)
+
+  it('exposes correct schemas for each plugin tool via tool.list()', async () => {
+    // Given a client connected to the running server
+    const client = makeClient(server.baseUrl)
+    // When we list tools for the always-available `opencode/big-pickle` model
+    // (a free model bundled with OpenCode that requires no auth, suitable for CI).
+    const response = await client.tool.list({
+      query: { provider: 'opencode', model: 'big-pickle' },
+    })
+    const tools = response.data ?? []
+
+    // Then each plugin tool appears with a non-empty description and a JSON-schema
+    // parameters object whose `required` and `properties` keys match the source-of-truth
+    // shapes defined in src/tools/*.ts.
+    const byId = new Map(tools.map((t) => [t.id, t]))
+
+    const delegate = byId.get('copilot_delegate')
+    expect(delegate).toBeDefined()
+    expect(delegate?.description).toMatch(/copilot/i)
+    const delegateSchema = asObjectSchema(delegate?.parameters)
+    expect(Object.keys(delegateSchema.properties ?? {}).sort()).toEqual([
+      'add_dir',
+      'agent',
+      'allow_tool',
+      'deny_tool',
+      'model',
+      'prompt',
+    ])
+    expect(delegateSchema.required).toEqual(['prompt'])
+
+    const output = byId.get('copilot_output')
+    expect(output).toBeDefined()
+    expect(output?.description).toMatch(/copilot|output|task/i)
+    const outputSchema = asObjectSchema(output?.parameters)
+    expect(Object.keys(outputSchema.properties ?? {}).sort()).toEqual([
+      'block',
+      'task_id',
+      'timeout_ms',
+    ])
+    expect(outputSchema.required).toEqual(['task_id'])
+
+    const cancel = byId.get('copilot_cancel')
+    expect(cancel).toBeDefined()
+    expect(cancel?.description).toMatch(/cancel/i)
+    const cancelSchema = asObjectSchema(cancel?.parameters)
+    expect(Object.keys(cancelSchema.properties ?? {})).toEqual(['task_id'])
+    expect(cancelSchema.required).toEqual(['task_id'])
+  }, 15_000)
 })
 
+interface JsonObjectSchema {
+  properties?: Record<string, unknown>
+  required?: string[]
+}
+
+// Narrows an unknown JSON Schema parameters value to the subset we assert on.
+// One cast at the JSON boundary keeps the rest of the test type-safe.
+function asObjectSchema(parameters: unknown): JsonObjectSchema {
+  if (typeof parameters !== 'object' || parameters === null) {
+    throw new Error(
+      `expected parameters to be an object, got ${typeof parameters}`,
+    )
+  }
+  return parameters as JsonObjectSchema
+}
+
 describe('helpers/server resilience', () => {
-  it('shuts down within 5s after stop() and leaves no zombie process', async () => {
+  it('shuts down cleanly via stop() and leaves no zombie process', async () => {
     // Given a freshly started server
     const projectDir = makeProjectDir('opencode-stop')
     let handle: ServerHandle | undefined
@@ -81,54 +145,62 @@ describe('helpers/server resilience', () => {
       const pid = handle.pid
 
       // When we stop it
-      const start = Date.now()
       await handle.stop()
-      const elapsed = Date.now() - start
 
-      // Then it shuts down within 5s
-      expect(elapsed).toBeLessThan(5000)
-
-      // And the process is gone (kill(pid, 0) throws ESRCH)
+      // Then the process is gone (kill(pid, 0) throws ESRCH).
+      // We assert behavior, not wall-clock time — fkill's waitForExit upper bound
+      // already enforces the deadline, and the bun:test outer timeout below catches hangs.
       let stillAlive = false
       try {
         process.kill(pid, 0)
         stillAlive = true
       } catch (err) {
-        const e = err as NodeJS.ErrnoException
-        expect(e.code).toBe('ESRCH')
+        expect(err).toBeInstanceOf(Error)
+        expect(err).toHaveProperty('code', 'ESRCH')
       }
       expect(stillAlive).toBe(false)
     } finally {
+      // stop() is idempotent — a second call after PID reuse would otherwise be dangerous,
+      // but the helper guards against this internally with a `stopped` flag.
       if (handle) await handle.stop().catch(() => {})
       rmSync(projectDir, { force: true, recursive: true })
     }
   }, 20_000)
 
   it('rejects with stderr tail if server exits before health', async () => {
-    // Given a project dir with no plugin (still valid) but spawned with a deliberately bad
-    // hostname that opencode will refuse to bind. Use --hostname with an invalid IP to trigger
-    // an early exit before health responds.
+    // Given a project dir spawned with a deliberately bad hostname so opencode refuses
+    // to bind and exits before health responds.
     const projectDir = makeProjectDir('opencode-fail')
     try {
       // When we try to start with an unbindable host
-      const promise = startServer({
-        cwd: projectDir,
-        extraArgs: ['--hostname', '256.256.256.256'],
-        timeoutMs: 8_000,
-      })
-      // Then it rejects with an error mentioning the early exit
-      await expect(promise).rejects.toThrow(
-        /exited|listen|EADDR|invalid|hostname/i,
-      )
+      let caught: unknown
+      try {
+        await startServer({
+          cwd: projectDir,
+          extraArgs: ['--hostname', '256.256.256.256'],
+          timeoutMs: 8_000,
+        })
+      } catch (err) {
+        caught = err
+      }
+
+      // Then the rejection is an Error whose message contains BOTH:
+      //   1. the early-exit marker (proves the exit-before-health path was taken), AND
+      //   2. the stderr tail header (proves stderr capture is wired up — protects against
+      //      regressions that would silently drop diagnostic content).
+      expect(caught).toBeInstanceOf(Error)
+      const message = (caught as Error).message
+      expect(message).toMatch(/exited with code/)
+      expect(message).toMatch(/stderr tail/)
     } finally {
       rmSync(projectDir, { force: true, recursive: true })
     }
   }, 15_000)
 })
 
-describe.skip('Deferred to T7 (manual E2E) — requires real LLM session', () => {
-  // The following plan scenarios cannot be automated without a configured LLM provider
-  // and API key in CI. They live in `VERIFICATION.md` (T7) instead:
+describe.skip('Deferred to T7 (manual E2E) — full LLM-driven flows', () => {
+  // The following plan scenarios are deferred to T7 (manual E2E in VERIFICATION.md) because
+  // they require an LLM to invoke the plugin tools through a real session prompt:
   //
   // - Given a prompt that invokes copilot_delegate, the assistant message contains
   //   a task_id matching /^cpl_[0-9a-f-]+$/.
@@ -136,5 +208,12 @@ describe.skip('Deferred to T7 (manual E2E) — requires real LLM session', () =>
   // - Given a running task, copilot_cancel returns { cancelled: true, was_running: true }.
   // - Given a nonexistent task_id, copilot_output returns { status: 'unknown' }.
   // - <system-reminder> appears as a subsequent assistant turn after delegation completes.
+  //
+  // The underlying tool-execute logic is already covered at the unit level:
+  //   - tests/tools.test.ts — task_id format, blocking timeout, cancel-running,
+  //                            unknown task_id, structured error envelopes
+  //   - tests/notify.test.ts — system-reminder injection and noReply semantics
+  // What's deferred is end-to-end orchestration through the OpenCode session prompt path,
+  // which the SDK only exposes via LLM invocation.
   it('requires LLM — see VERIFICATION.md', () => {})
 })
