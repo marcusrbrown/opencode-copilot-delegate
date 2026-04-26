@@ -1,10 +1,12 @@
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test'
 import {
   copyFileSync,
+  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -15,22 +17,81 @@ import { type ServerHandle, startServer } from './helpers/server'
 
 const REPO_ROOT = resolve(import.meta.dir, '..', '..')
 const PLUGIN_DIST = join(REPO_ROOT, 'dist', 'index.js')
+const REPO_OPENCODE_PLUGIN_PKG = join(
+  REPO_ROOT,
+  'node_modules',
+  '@opencode-ai',
+  'plugin',
+)
 
-function makeProjectDir(prefix: string): string {
-  const dir = mkdtempSync(join(tmpdir(), `${prefix}-`))
-  const pluginDir = join(dir, '.opencode', 'plugins')
+interface IntegrationFixture {
+  /** Parent temp dir; pass to rmSync on cleanup to remove all subdirs at once. */
+  rootDir: string
+  /** OpenCode subprocess `cwd`. Contains `.opencode/plugins/copilot-delegate.js`. */
+  projectDir: string
+  /** Maps to `OPENCODE_TEST_HOME` and `HOME` for the subprocess. */
+  homeDir: string
+  /** Maps to `OPENCODE_TEST_MANAGED_CONFIG_DIR` for the subprocess. */
+  managedConfigDir: string
+}
+
+/**
+ * Build an integration-test fixture under a fresh temp dir. The structure is:
+ * ```
+ * <rootDir>/
+ *   project/                     (cwd for `opencode serve`)
+ *     .opencode/plugins/copilot-delegate.js
+ *     package.json
+ *   home/                        (HOME / OPENCODE_TEST_HOME for the subprocess)
+ *   managed/                     (OPENCODE_TEST_MANAGED_CONFIG_DIR)
+ * ```
+ *
+ * Splitting `home/` from `project/` keeps OpenCode's project-level config
+ * discovery (`.opencode/plugins/`, `opencode.json`) and its user-level config
+ * discovery (`~/.config/opencode/opencode.json`) on separate paths so the
+ * subprocess never reads the developer's real `~/.config/opencode/` and never
+ * writes session data into the developer's real `~/.local/share/opencode/`.
+ */
+function makeProjectDir(prefix: string): IntegrationFixture {
+  const rootDir = mkdtempSync(join(tmpdir(), `${prefix}-`))
+  const projectDir = join(rootDir, 'project')
+  const homeDir = join(rootDir, 'home')
+  const managedConfigDir = join(rootDir, 'managed')
+  const pluginDir = join(projectDir, '.opencode', 'plugins')
   mkdirSync(pluginDir, { recursive: true })
+  mkdirSync(homeDir, { recursive: true })
+  mkdirSync(managedConfigDir, { recursive: true })
   copyFileSync(PLUGIN_DIST, join(pluginDir, 'copilot-delegate.js'))
   writeFileSync(
-    join(dir, 'package.json'),
+    join(projectDir, 'package.json'),
     `${JSON.stringify({ name: 'integration-fixture', version: '0.0.0', type: 'module' }, null, 2)}\n`,
   )
-  return dir
+
+  // Pre-install `@opencode-ai/plugin` into the project's `.opencode/` directory.
+  // OpenCode's `Config.waitForDependencies` runs `npm install @opencode-ai/plugin`
+  // for every `.opencode` dir on first project access — that single install can
+  // take 30+ seconds against an empty npm cache (which is the case under
+  // isolation, where the test home has no `~/.npm`). Pre-staging the package
+  // makes the install a no-op. We prefer a symlink (cheap, no copy) and fall
+  // back to a recursive copy when `symlinkSync` is unavailable (e.g. Windows).
+  if (existsSync(REPO_OPENCODE_PLUGIN_PKG)) {
+    const pluginDepDir = join(projectDir, '.opencode', 'node_modules')
+    const pluginScopeDir = join(pluginDepDir, '@opencode-ai')
+    mkdirSync(pluginScopeDir, { recursive: true })
+    const target = join(pluginScopeDir, 'plugin')
+    try {
+      symlinkSync(REPO_OPENCODE_PLUGIN_PKG, target, 'dir')
+    } catch {
+      cpSync(REPO_OPENCODE_PLUGIN_PKG, target, { recursive: true })
+    }
+  }
+
+  return { rootDir, projectDir, homeDir, managedConfigDir }
 }
 
 describe('opencode-copilot-delegate plugin (integration)', () => {
   let server: ServerHandle
-  let projectDir: string
+  let fixture: IntegrationFixture | undefined
 
   beforeAll(async () => {
     if (!existsSync(PLUGIN_DIST)) {
@@ -38,13 +99,17 @@ describe('opencode-copilot-delegate plugin (integration)', () => {
         `Plugin dist not found at ${PLUGIN_DIST}. Run: bun run build`,
       )
     }
-    projectDir = makeProjectDir('opencode-integration')
-    server = await startServer({ cwd: projectDir })
+    fixture = makeProjectDir('opencode-integration')
+    server = await startServer({
+      cwd: fixture.projectDir,
+      homeDir: fixture.homeDir,
+      managedConfigDir: fixture.managedConfigDir,
+    })
   }, 30_000)
 
   afterAll(async () => {
     if (server) await server.stop()
-    if (projectDir) rmSync(projectDir, { force: true, recursive: true })
+    if (fixture) rmSync(fixture.rootDir, { force: true, recursive: true })
   }, 10_000)
 
   it('starts and reports healthy', async () => {
@@ -69,7 +134,12 @@ describe('opencode-copilot-delegate plugin (integration)', () => {
     expect(ids).toContain('copilot_delegate')
     expect(ids).toContain('copilot_output')
     expect(ids).toContain('copilot_cancel')
-  }, 10_000)
+    // Generous timeout: this is the first request after server bootstrap that
+    // triggers OpenCode's project-instance creation, including external plugin
+    // loading. Under isolation the import path is cold and that boot can take
+    // 10–20s in CI. Subsequent requests against the same server are fast because
+    // the project instance is cached.
+  }, 45_000)
 
   it('exposes correct schemas for each plugin tool via tool.list()', async () => {
     // Given a client connected to the running server
@@ -153,10 +223,14 @@ function asObjectSchema(parameters: unknown): JsonObjectSchema {
 describe('helpers/server resilience', () => {
   it('shuts down cleanly via stop() and leaves no zombie process', async () => {
     // Given a freshly started server
-    const projectDir = makeProjectDir('opencode-stop')
+    const fixture = makeProjectDir('opencode-stop')
     let handle: ServerHandle | undefined
     try {
-      handle = await startServer({ cwd: projectDir })
+      handle = await startServer({
+        cwd: fixture.projectDir,
+        homeDir: fixture.homeDir,
+        managedConfigDir: fixture.managedConfigDir,
+      })
       const pid = handle.pid
 
       // When we stop it
@@ -178,20 +252,22 @@ describe('helpers/server resilience', () => {
       // stop() is idempotent — a second call after PID reuse would otherwise be dangerous,
       // but the helper guards against this internally with a `stopped` flag.
       if (handle) await handle.stop().catch(() => {})
-      rmSync(projectDir, { force: true, recursive: true })
+      rmSync(fixture.rootDir, { force: true, recursive: true })
     }
   }, 20_000)
 
   it('rejects with stderr tail if server exits before health', async () => {
     // Given a project dir spawned with a deliberately bad hostname so opencode refuses
     // to bind and exits before health responds.
-    const projectDir = makeProjectDir('opencode-fail')
+    const fixture = makeProjectDir('opencode-fail')
     try {
       // When we try to start with an unbindable host
       let caught: unknown
       try {
         await startServer({
-          cwd: projectDir,
+          cwd: fixture.projectDir,
+          homeDir: fixture.homeDir,
+          managedConfigDir: fixture.managedConfigDir,
           extraArgs: ['--hostname', '256.256.256.256'],
           timeoutMs: 8_000,
         })
@@ -208,7 +284,7 @@ describe('helpers/server resilience', () => {
       expect(message).toMatch(/exited with code/)
       expect(message).toMatch(/stderr tail/)
     } finally {
-      rmSync(projectDir, { force: true, recursive: true })
+      rmSync(fixture.rootDir, { force: true, recursive: true })
     }
   }, 15_000)
 
@@ -259,7 +335,7 @@ describe.skipIf(!COPILOT_AUTH)(
   'LLM-driven integration (requires COPILOT_PAT or GH_TOKEN)',
   () => {
     let server: ServerHandle
-    let projectDir: string
+    let fixture: IntegrationFixture | undefined
 
     beforeAll(async () => {
       if (!existsSync(PLUGIN_DIST)) {
@@ -267,7 +343,7 @@ describe.skipIf(!COPILOT_AUTH)(
           `Plugin dist not found at ${PLUGIN_DIST}. Run: bun run build`,
         )
       }
-      projectDir = makeProjectDir('opencode-llm')
+      fixture = makeProjectDir('opencode-llm')
       // Forward auth scoped to the opencode subprocess (and its copilot grandchildren).
       // We don't mutate process.env here — that would persist across test files in the
       // same `bun test` invocation and create implicit coupling.
@@ -275,12 +351,17 @@ describe.skipIf(!COPILOT_AUTH)(
       if (!process.env.GH_TOKEN && COPILOT_AUTH) {
         env.GH_TOKEN = COPILOT_AUTH
       }
-      server = await startServer({ cwd: projectDir, env })
+      server = await startServer({
+        cwd: fixture.projectDir,
+        homeDir: fixture.homeDir,
+        managedConfigDir: fixture.managedConfigDir,
+        env,
+      })
     }, 30_000)
 
     afterAll(async () => {
       if (server) await server.stop()
-      if (projectDir) rmSync(projectDir, { force: true, recursive: true })
+      if (fixture) rmSync(fixture.rootDir, { force: true, recursive: true })
     }, 15_000)
 
     // Helper: send a prompt to big-pickle and return assistant parts from messages

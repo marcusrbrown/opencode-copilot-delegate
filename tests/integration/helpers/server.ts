@@ -1,6 +1,57 @@
-import { type ChildProcessWithoutNullStreams, spawn } from 'node:child_process'
+import {
+  type ChildProcessWithoutNullStreams,
+  execSync,
+  spawn,
+} from 'node:child_process'
+import { existsSync } from 'node:fs'
+import { arch, platform } from 'node:os'
+import { dirname, join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import fkill from 'fkill'
+
+/**
+ * Resolve the native `opencode` binary path, bypassing any wrapper scripts that
+ * invoke `node` via `/usr/bin/env`. We do this because integration tests redirect
+ * `HOME` and `XDG_*` for isolation; on developer machines where `node` is a mise
+ * shim, the shim re-reads `mise.toml` trust state from the redirected XDG_DATA_HOME
+ * and refuses to launch the wrapper.
+ *
+ * Resolution order:
+ *   1. Explicit override via OPENCODE_BIN env var.
+ *   2. The platform-specific native binary inside the npm install (where the
+ *      `opencode-ai` wrapper points), which is a real Mach-O / ELF executable.
+ *   3. Fall back to plain `opencode` and let PATH resolve it (CI-friendly when
+ *      mise-action has already wired up PATH and trust).
+ */
+function resolveOpencodeBinary(): string {
+  if (process.env.OPENCODE_BIN) return process.env.OPENCODE_BIN
+  try {
+    const which = execSync('mise which opencode', {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim()
+    if (which) {
+      // wrapper is at <install>/bin/opencode; native is at
+      //   <install>/node_modules/opencode-<platform>-<arch>/bin/opencode
+      const installPrefix = dirname(dirname(which))
+      const platformDir = `opencode-${platform()}-${arch()}`
+      const native = join(
+        installPrefix,
+        'node_modules',
+        platformDir,
+        'bin',
+        'opencode',
+      )
+      if (existsSync(native)) return native
+      return which
+    }
+  } catch {
+    // fall through to PATH lookup
+  }
+  return 'opencode'
+}
+
+const RESOLVED_OPENCODE_BINARY = resolveOpencodeBinary()
 
 export interface ServerHandle {
   baseUrl: string
@@ -23,6 +74,75 @@ export interface StartOptions {
    * subprocess rather than mutating the parent test process's environment.
    */
   env?: Record<string, string>
+  /**
+   * Test home directory for OpenCode subprocess isolation. When provided, the subprocess
+   * runs under a redirected `HOME` so it does not read the developer's real
+   * `~/.config/opencode/opencode.json` (which would load OMO, Magic Context, and other
+   * user plugins into throwaway test sessions and write storage under the user's data
+   * dirs). Mirrors the `OPENCODE_TEST_HOME` pattern OpenCode itself uses in its own
+   * test preload.
+   */
+  homeDir?: string
+  /**
+   * Test managed-config directory. Pairs with `homeDir` to isolate the subprocess from
+   * any system-managed OpenCode configuration. Maps to `OPENCODE_TEST_MANAGED_CONFIG_DIR`.
+   */
+  managedConfigDir?: string
+}
+
+/**
+ * Build the env-var block that isolates an opencode subprocess from the developer's real
+ * `~/` and `~/.config/opencode/` (which would otherwise load every globally configured
+ * plugin into throwaway test sessions). Mirrors OpenCode's own test-preload pattern.
+ *
+ * The XDG_* vars are belt-and-suspenders: OPENCODE_TEST_HOME alone redirects OpenCode's
+ * own path resolution, but xdg-app-paths-style libraries used by transitive deps may have
+ * already pinned `~/.config` from the original HOME at module load. Setting both HOME and
+ * the XDG_* vars guarantees any path resolution under the subprocess tree sees the test
+ * home, no matter when it runs.
+ */
+/**
+ * Build the env-var block that isolates the spawned `opencode` subprocess from the
+ * developer's real `~/` and `~/.config/opencode/`. Without this, every throwaway test
+ * session would load every plugin listed in the developer's global `opencode.json`
+ * (OMO, Magic Context, etc.) and write storage under their real `~/.local/share/opencode/`.
+ *
+ * What gets redirected:
+ *   - `HOME`, `XDG_*`: redirect every config / data / cache / state path to the test home.
+ *   - `OPENCODE_TEST_HOME` / `OPENCODE_TEST_MANAGED_CONFIG_DIR`: matches OpenCode's own
+ *     test-preload pattern from `packages/opencode/test/preload.ts`.
+ *   - `OPENCODE_DISABLE_*`: cut out the slow first-boot work paths (LSP server download,
+ *     model registry fetch, prune, autoupdate, .claude scan).
+ *
+ * Why we redirect `HOME` rather than relying on `OPENCODE_PURE`: `OPENCODE_PURE=true`
+ * also skips OpenCode's project-directory plugin scan, which is what discovers our
+ * `.opencode/plugins/copilot-delegate.js`. Redirecting `HOME` is the only way to skip
+ * the developer's globally configured plugins while keeping our own discovered.
+ *
+ * Pre-condition for the caller: spawn the native opencode binary (not the JS wrapper),
+ * because the wrapper's `#!/usr/bin/env node` shebang resolves to a mise shim on
+ * developer machines, and mise's trust state lives under the original `XDG_DATA_HOME`.
+ */
+function buildIsolationEnv(
+  homeDir: string,
+  managedConfigDir: string,
+): Record<string, string> {
+  return {
+    HOME: homeDir,
+    XDG_CONFIG_HOME: `${homeDir}/.config`,
+    XDG_DATA_HOME: `${homeDir}/.local/share`,
+    XDG_CACHE_HOME: `${homeDir}/.cache`,
+    XDG_STATE_HOME: `${homeDir}/.local/state`,
+    OPENCODE_TEST_HOME: homeDir,
+    OPENCODE_TEST_MANAGED_CONFIG_DIR: managedConfigDir,
+    OPENCODE_DISABLE_DEFAULT_PLUGINS: 'true',
+    OPENCODE_DISABLE_AUTOUPDATE: 'true',
+    OPENCODE_DISABLE_LSP_DOWNLOAD: 'true',
+    OPENCODE_DISABLE_MODELS_FETCH: 'true',
+    OPENCODE_DISABLE_PRUNE: 'true',
+    OPENCODE_DISABLE_CLAUDE_CODE: 'true',
+    OPENCODE_DISABLE_EXTERNAL_SKILLS: 'true',
+  }
 }
 
 const STDERR_BUFFER_CAP = 200
@@ -227,7 +347,7 @@ export async function startServer(
   opts: StartOptions = {},
 ): Promise<ServerHandle> {
   const timeoutMs = opts.timeoutMs ?? 10_000
-  const command = opts.command ?? 'opencode'
+  const command = opts.command ?? RESOLVED_OPENCODE_BINARY
   const args = [
     'serve',
     '--port',
@@ -238,6 +358,11 @@ export async function startServer(
 
   const redact = buildRedactor(process.env)
 
+  const isolationEnv =
+    opts.homeDir && opts.managedConfigDir
+      ? buildIsolationEnv(opts.homeDir, opts.managedConfigDir)
+      : {}
+
   const child: ChildProcessWithoutNullStreams = spawn(command, args, {
     cwd: opts.cwd,
     detached: true,
@@ -245,6 +370,9 @@ export async function startServer(
     env: {
       ...process.env,
       OPENCODE_SERVER_PASSWORD: '',
+      ...isolationEnv,
+      // Caller-supplied env wins over isolation defaults so tests can still
+      // forward credentials (e.g. GH_TOKEN) into the isolated subprocess.
       ...opts.env,
     },
   })
