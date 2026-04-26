@@ -267,13 +267,15 @@ describe.skipIf(!COPILOT_AUTH)(
           `Plugin dist not found at ${PLUGIN_DIST}. Run: bun run build`,
         )
       }
-      // Forward COPILOT_PAT → GH_TOKEN so opencode and its child copilot subprocesses
-      // see the credential the CLI expects.
-      if (!process.env.GH_TOKEN && COPILOT_AUTH) {
-        process.env.GH_TOKEN = COPILOT_AUTH
-      }
       projectDir = makeProjectDir('opencode-llm')
-      server = await startServer({ cwd: projectDir })
+      // Forward auth scoped to the opencode subprocess (and its copilot grandchildren).
+      // We don't mutate process.env here — that would persist across test files in the
+      // same `bun test` invocation and create implicit coupling.
+      const env: Record<string, string> = {}
+      if (!process.env.GH_TOKEN && COPILOT_AUTH) {
+        env.GH_TOKEN = COPILOT_AUTH
+      }
+      server = await startServer({ cwd: projectDir, env })
     }, 30_000)
 
     afterAll(async () => {
@@ -575,13 +577,17 @@ describe.skipIf(!COPILOT_AUTH)(
       const taskId = startOutput.task_id
 
       // When we wait for the plugin's notification.ts to inject a synthetic <system-reminder>
-      // referencing this task_id (the plugin uses noReply: true, so it appears as a synthetic
-      // text part on a subsequent message in the same session).
+      // referencing this task_id. Notification path: completionPromise.then → notifyCompletion
+      // → client.session.prompt({ noReply, parts: [text + synthetic:true] }). When the parent
+      // session has no other in-flight tasks, noReply is false, which causes opencode to also
+      // kick off an LLM response — the await blocks on that. The reminder text is added to the
+      // session as soon as opencode accepts the prompt, but observing it via session.messages
+      // can lag by up to 60s in slow runs (LLM response generation, network round-trips).
       const found = await pollForReminder(sessionId, taskId, 60_000)
 
       // Then the reminder text appears in the session referencing this taskId. The
-      // synthetic flag is informational — we log it for diagnostic visibility but do
-      // not assert it because the SDK round-trip serialization is not stable.
+      // synthetic flag is informational — we don't assert it because SDK round-trip
+      // serialization of that flag is not contractually stable.
       if (!found) {
         throw new Error(
           `expected <system-reminder> for ${taskId} within 60s; none found in session messages`,
