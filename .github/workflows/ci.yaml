@@ -1,0 +1,80 @@
+---
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  check:
+    name: Lint, typecheck, build, unit tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup mise (bun, opencode, copilot)
+        uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v4.0.1
+        with:
+          experimental: true
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Typecheck
+        run: bun run typecheck
+
+      - name: Lint
+        run: bun run lint
+
+      - name: Build
+        run: bun run build
+
+      - name: Unit tests
+        run: bun run test:unit
+
+  integration:
+    name: Integration tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    needs: check
+    # Skip on PRs from forks (secrets unavailable)
+    if: >-
+      github.event_name != 'pull_request' ||
+      github.event.pull_request.head.repo.fork == false
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup mise (bun, opencode, copilot)
+        uses: jdx/mise-action@5228313ee0372e111a38da051671ca30fc5a96db # v4.0.1
+        with:
+          experimental: true
+
+      - name: Install dependencies
+        run: bun install --frozen-lockfile
+
+      - name: Build
+        run: bun run build
+
+      - name: Verify tool versions
+        run: |
+          bun --version
+          opencode --version
+          copilot --version
+
+      - name: Integration tests
+        run: bun run test:integration
+        env:
+          GH_TOKEN: ${{ secrets.COPILOT_PAT }}
