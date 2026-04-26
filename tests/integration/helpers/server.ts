@@ -91,16 +91,29 @@ export interface StartOptions {
 }
 
 /**
- * Build the env-var block that isolates an opencode subprocess from the developer's real
- * `~/` and `~/.config/opencode/` (which would otherwise load every globally configured
- * plugin into throwaway test sessions). Mirrors OpenCode's own test-preload pattern.
- *
- * The XDG_* vars are belt-and-suspenders: OPENCODE_TEST_HOME alone redirects OpenCode's
- * own path resolution, but xdg-app-paths-style libraries used by transitive deps may have
- * already pinned `~/.config` from the original HOME at module load. Setting both HOME and
- * the XDG_* vars guarantees any path resolution under the subprocess tree sees the test
- * home, no matter when it runs.
+ * Keys whose values are owned by `buildIsolationEnv` and must never be overridden by
+ * caller-supplied `opts.env`. A caller that accidentally forwards one of these keys
+ * (for example by passing `process.env` through verbatim) would silently defeat the
+ * isolation that `homeDir` / `managedConfigDir` are meant to provide. We strip them
+ * defensively in `startServer` before merging caller env into the spawn env.
  */
+const ISOLATION_RESERVED_KEYS: ReadonlySet<string> = new Set([
+  'HOME',
+  'XDG_CONFIG_HOME',
+  'XDG_DATA_HOME',
+  'XDG_CACHE_HOME',
+  'XDG_STATE_HOME',
+  'OPENCODE_TEST_HOME',
+  'OPENCODE_TEST_MANAGED_CONFIG_DIR',
+  'OPENCODE_DISABLE_DEFAULT_PLUGINS',
+  'OPENCODE_DISABLE_AUTOUPDATE',
+  'OPENCODE_DISABLE_LSP_DOWNLOAD',
+  'OPENCODE_DISABLE_MODELS_FETCH',
+  'OPENCODE_DISABLE_PRUNE',
+  'OPENCODE_DISABLE_CLAUDE_CODE',
+  'OPENCODE_DISABLE_EXTERNAL_SKILLS',
+])
+
 /**
  * Build the env-var block that isolates the spawned `opencode` subprocess from the
  * developer's real `~/` and `~/.config/opencode/`. Without this, every throwaway test
@@ -109,15 +122,19 @@ export interface StartOptions {
  *
  * What gets redirected:
  *   - `HOME`, `XDG_*`: redirect every config / data / cache / state path to the test home.
+ *     The XDG vars are belt-and-suspenders: `OPENCODE_TEST_HOME` redirects OpenCode's own
+ *     path resolution, but xdg-app-paths-style libraries used by transitive deps may pin
+ *     `~/.config` from the original `HOME` at module load. Setting both guarantees any
+ *     path resolution under the subprocess tree sees the test home, no matter when it runs.
  *   - `OPENCODE_TEST_HOME` / `OPENCODE_TEST_MANAGED_CONFIG_DIR`: matches OpenCode's own
  *     test-preload pattern from `packages/opencode/test/preload.ts`.
- *   - `OPENCODE_DISABLE_*`: cut out the slow first-boot work paths (LSP server download,
+ *   - `OPENCODE_DISABLE_*`: cut out slow first-boot work paths (LSP server download,
  *     model registry fetch, prune, autoupdate, .claude scan).
  *
- * Why we redirect `HOME` rather than relying on `OPENCODE_PURE`: `OPENCODE_PURE=true`
- * also skips OpenCode's project-directory plugin scan, which is what discovers our
+ * Why we redirect `HOME` rather than relying on `OPENCODE_PURE`: `OPENCODE_PURE=true` also
+ * skips OpenCode's project-directory plugin scan, which is what discovers our
  * `.opencode/plugins/copilot-delegate.js`. Redirecting `HOME` is the only way to skip
- * the developer's globally configured plugins while keeping our own discovered.
+ * the developer's globally configured plugins while keeping our own discoverable.
  *
  * Pre-condition for the caller: spawn the native opencode binary (not the JS wrapper),
  * because the wrapper's `#!/usr/bin/env node` shebang resolves to a mise shim on
@@ -358,10 +375,29 @@ export async function startServer(
 
   const redact = buildRedactor(process.env)
 
+  // Both-or-neither: requiring `homeDir` without `managedConfigDir` (or vice-versa) would
+  // silently fall back to no isolation, defeating the caller's intent. Fail loudly.
+  if (Boolean(opts.homeDir) !== Boolean(opts.managedConfigDir)) {
+    throw new Error(
+      'startServer: homeDir and managedConfigDir must be provided together (or neither)',
+    )
+  }
+
   const isolationEnv =
     opts.homeDir && opts.managedConfigDir
       ? buildIsolationEnv(opts.homeDir, opts.managedConfigDir)
       : {}
+
+  // Strip isolation-owned keys from caller env so a forwarded `HOME` / `XDG_*` cannot
+  // silently override the isolation block. Credentials (`GH_TOKEN`, etc.) are not in the
+  // reserved set and pass through normally.
+  const safeCallerEnv: Record<string, string> = {}
+  if (opts.env) {
+    for (const [k, v] of Object.entries(opts.env)) {
+      if (ISOLATION_RESERVED_KEYS.has(k)) continue
+      safeCallerEnv[k] = v
+    }
+  }
 
   const child: ChildProcessWithoutNullStreams = spawn(command, args, {
     cwd: opts.cwd,
@@ -371,9 +407,9 @@ export async function startServer(
       ...process.env,
       OPENCODE_SERVER_PASSWORD: '',
       ...isolationEnv,
-      // Caller-supplied env wins over isolation defaults so tests can still
-      // forward credentials (e.g. GH_TOKEN) into the isolated subprocess.
-      ...opts.env,
+      // Caller-supplied env (excluding isolation-reserved keys) is layered last so
+      // tests can forward credentials (e.g. GH_TOKEN) into the isolated subprocess.
+      ...safeCallerEnv,
     },
   })
   const pid = child.pid ?? -1
