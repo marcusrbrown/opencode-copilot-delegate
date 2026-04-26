@@ -50,6 +50,7 @@
     "build": "bun run clean && bun build src/index.ts --outdir dist --target bun --external @opencode-ai/plugin --external @opencode-ai/sdk && tsc --emitDeclarationOnly --noEmit false",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
+    "test:unit": "bun test tests/*.test.ts",
     "test:integration": "bun test tests/integration/",
     "lint": "biome check .",
     "fix": "biome check . --write",

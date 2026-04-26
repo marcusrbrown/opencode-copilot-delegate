@@ -12,9 +12,11 @@ branches:
     protection:
       required_status_checks:
         strict: true
-        # Expand this list once CI workflows exist (Build, Typecheck, Lint, Test, etc.)
+        # Note: Integration tests run on push and on same-repo PRs only — not required
+        # because they're skipped on PRs from forks where COPILOT_PAT is unavailable.
         contexts:
           - Fro Bot
+          - Lint, typecheck, build, unit tests
       enforce_admins: true
       required_pull_request_reviews: null
       restrictions: null
