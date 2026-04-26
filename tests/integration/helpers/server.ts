@@ -15,12 +15,44 @@ export interface StartOptions {
   timeoutMs?: number
   /** Extra args appended after `serve --port 0 --print-logs`. */
   extraArgs?: string[]
+  /** Override the binary to spawn. Test seam; defaults to `opencode`. */
+  command?: string
 }
 
 const STDERR_BUFFER_CAP = 200
 const LISTENING_RE = /listening on (https?:\/\/[^\s]+)/i
 const HEALTH_POLL_INTERVAL_MS = 100
 const HEALTH_FETCH_TIMEOUT_MS = 500
+const PS_READ_TIMEOUT_MS = 1_000
+
+// Env vars whose values, if present at spawn time, should be redacted from
+// child stderr before being interpolated into thrown error messages. Defense
+// in depth: the trust model already isolates env passthrough to the trusted
+// local subprocess chain, but failure-path stderr surfaces in CI logs.
+const KNOWN_TOKEN_ENV_VARS = [
+  'GH_TOKEN',
+  'GITHUB_TOKEN',
+  'COPILOT_GITHUB_TOKEN',
+  'NPM_TOKEN',
+  'ANTHROPIC_API_KEY',
+  'OPENAI_API_KEY',
+] as const
+
+const TOKEN_PREFIX_RE =
+  /\b(?:ghp_|ghs_|ghu_|ghr_|gho_|github_pat_)[A-Za-z0-9_]{16,}/g
+
+function buildRedactor(env: NodeJS.ProcessEnv): (text: string) => string {
+  const exactValues: string[] = []
+  for (const name of KNOWN_TOKEN_ENV_VARS) {
+    const v = env[name]
+    if (typeof v === 'string' && v.length >= 16) exactValues.push(v)
+  }
+  return (text: string): string => {
+    let out = text
+    for (const v of exactValues) out = out.split(v).join('<redacted>')
+    return out.replace(TOKEN_PREFIX_RE, '<redacted>')
+  }
+}
 
 interface DrainState {
   stderrLines: string[]
@@ -34,24 +66,42 @@ function attachStreamDrain(
 ): void {
   let buffer = ''
   stream.setEncoding('utf8')
+
+  const processLine = (line: string): void => {
+    if (sink === 'stderr') {
+      state.stderrLines.push(line)
+      if (state.stderrLines.length > STDERR_BUFFER_CAP)
+        state.stderrLines.shift()
+    } else {
+      // The listening URL is logged to stdout; only match there to avoid a
+      // stderr warning latching the wrong baseUrl.
+      const m = line.match(LISTENING_RE)
+      if (m?.[1]) state.setBaseUrl(m[1])
+    }
+  }
+
   stream.on('data', (chunk: string) => {
     buffer += chunk
     let idx = buffer.indexOf('\n')
     while (idx !== -1) {
-      const line = buffer.slice(0, idx)
+      processLine(buffer.slice(0, idx))
       buffer = buffer.slice(idx + 1)
-      if (sink === 'stderr') {
-        state.stderrLines.push(line)
-        if (state.stderrLines.length > STDERR_BUFFER_CAP)
-          state.stderrLines.shift()
-      }
-      const m = line.match(LISTENING_RE)
-      if (m?.[1]) state.setBaseUrl(m[1])
       idx = buffer.indexOf('\n')
     }
   })
-  // Capture stream errors into the stderr ring buffer so they surface in diagnostics
-  // rather than being silently swallowed.
+
+  // Flush any remaining partial line on stream end/close. Without this, the
+  // most useful diagnostic line (or the listening URL) can be lost if opencode
+  // exits without a trailing newline.
+  const flush = (): void => {
+    if (buffer.length > 0) {
+      processLine(buffer)
+      buffer = ''
+    }
+  }
+  stream.on('end', flush)
+  stream.on('close', flush)
+
   stream.on('error', (err: Error) => {
     state.stderrLines.push(`[${sink} stream error] ${err.message}`)
     if (state.stderrLines.length > STDERR_BUFFER_CAP) state.stderrLines.shift()
@@ -78,13 +128,27 @@ async function readPsTable(): Promise<string> {
     stdout: 'pipe',
     stderr: 'ignore',
   })
-  const text = await new Response(proc.stdout).text()
+  // Bound the read so a wedged `ps` cannot hang teardown. On timeout we kill
+  // the subprocess and skip descendant enumeration; the fkill(-pid, ...) group
+  // signal in the caller still terminates the tree.
+  const textPromise = new Response(proc.stdout).text()
+  let timer: NodeJS.Timeout | undefined
+  const timeoutPromise = new Promise<null>((resolve) => {
+    timer = setTimeout(() => resolve(null), PS_READ_TIMEOUT_MS)
+  })
+  const result = await Promise.race([textPromise, timeoutPromise])
+  if (timer) clearTimeout(timer)
+  if (result === null) {
+    proc.kill('SIGKILL')
+    return ''
+  }
   await proc.exited
-  return text
+  return result
 }
 
 async function collectDescendants(rootPid: number): Promise<number[]> {
   const text = await readPsTable()
+  if (text.length === 0) return []
   const childrenByParent = new Map<number, number[]>()
   for (const line of text.split('\n').slice(1)) {
     const parts = line.trim().split(/\s+/)
@@ -150,12 +214,14 @@ async function killTreeAggressive(pid: number): Promise<void> {
 /**
  * Spawn `opencode serve --port 0 --print-logs` and resolve once the server is listening
  * and `/global/health` reports `healthy: true`. Rejects if the subprocess exits before
- * the health check succeeds, including the last 20 lines of stderr in the error message.
+ * the health check succeeds, including the last 20 lines of stderr (with token values
+ * redacted) in the error message.
  */
 export async function startServer(
   opts: StartOptions = {},
 ): Promise<ServerHandle> {
   const timeoutMs = opts.timeoutMs ?? 10_000
+  const command = opts.command ?? 'opencode'
   const args = [
     'serve',
     '--port',
@@ -164,7 +230,9 @@ export async function startServer(
     ...(opts.extraArgs ?? []),
   ]
 
-  const child: ChildProcessWithoutNullStreams = spawn('opencode', args, {
+  const redact = buildRedactor(process.env)
+
+  const child: ChildProcessWithoutNullStreams = spawn(command, args, {
     cwd: opts.cwd,
     detached: true,
     stdio: ['ignore', 'pipe', 'pipe'],
@@ -180,13 +248,15 @@ export async function startServer(
   let baseUrl: string | undefined
   let exitCode: number | null = null
   let exited = false
+  let spawnError: NodeJS.ErrnoException | undefined
 
   child.once('exit', (code: number | null) => {
     exited = true
     exitCode = code
   })
-  child.once('error', () => {
+  child.once('error', (err: NodeJS.ErrnoException) => {
     exited = true
+    spawnError = err
   })
 
   const drainState: DrainState = {
@@ -207,10 +277,18 @@ export async function startServer(
     await killTreeAggressive(pid)
   }
 
+  const formatTail = (): string => redact(stderrLines.slice(-20).join('\n'))
+
   const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
+    if (spawnError) {
+      const code = spawnError.code ?? 'unknown'
+      throw new Error(
+        `failed to spawn '${command}' (${code}): ${spawnError.message}`,
+      )
+    }
     if (exited) {
-      const tail = stderrLines.slice(-20).join('\n')
+      const tail = formatTail()
       throw new Error(
         `opencode exited with code ${exitCode} before health check\n` +
           `stderr tail (${Math.min(stderrLines.length, 20)} lines):\n${tail}`,
@@ -228,7 +306,7 @@ export async function startServer(
   }
 
   await stop()
-  const tail = stderrLines.slice(-20).join('\n')
+  const tail = formatTail()
   throw new Error(
     `opencode health check timed out after ${timeoutMs}ms\n` +
       `baseUrl=${baseUrl ?? '(not parsed)'}\n` +

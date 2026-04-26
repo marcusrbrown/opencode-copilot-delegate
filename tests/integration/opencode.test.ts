@@ -120,19 +120,33 @@ describe('opencode-copilot-delegate plugin (integration)', () => {
 })
 
 interface JsonObjectSchema {
+  type?: unknown
   properties?: Record<string, unknown>
   required?: string[]
 }
 
 // Narrows an unknown JSON Schema parameters value to the subset we assert on.
 // One cast at the JSON boundary keeps the rest of the test type-safe.
+// We assert `type === 'object'` so a future SDK revision that returned an
+// array schema (or any non-object discriminant) would fail loudly here
+// instead of silently passing with empty properties.
 function asObjectSchema(parameters: unknown): JsonObjectSchema {
-  if (typeof parameters !== 'object' || parameters === null) {
+  if (
+    typeof parameters !== 'object' ||
+    parameters === null ||
+    Array.isArray(parameters)
+  ) {
     throw new Error(
-      `expected parameters to be an object, got ${typeof parameters}`,
+      `expected parameters to be a non-array object, got ${typeof parameters}`,
     )
   }
-  return parameters as JsonObjectSchema
+  const schema = parameters as JsonObjectSchema
+  if (schema.type !== 'object') {
+    throw new Error(
+      `expected parameters.type === 'object', got ${String(schema.type)}`,
+    )
+  }
+  return schema
 }
 
 describe('helpers/server resilience', () => {
@@ -196,6 +210,27 @@ describe('helpers/server resilience', () => {
       rmSync(projectDir, { force: true, recursive: true })
     }
   }, 15_000)
+
+  it('throws an actionable error when the binary is missing (ENOENT)', async () => {
+    // Given a non-existent binary path is passed to startServer
+    const missing = '/nonexistent/path/to/opencode-test-binary-9d8f3c'
+    let caught: unknown
+    try {
+      // When we try to start
+      await startServer({ command: missing, timeoutMs: 4_000 })
+    } catch (err) {
+      caught = err
+    }
+
+    // Then the rejection is an Error whose message identifies the spawn failure
+    // (with the ENOENT code) and includes the binary path. This protects the
+    // diagnostic path against silent timeouts when opencode is not installed.
+    expect(caught).toBeInstanceOf(Error)
+    const message = (caught as Error).message
+    expect(message).toMatch(/failed to spawn/i)
+    expect(message).toMatch(/ENOENT/)
+    expect(message).toContain(missing)
+  }, 8_000)
 })
 
 describe.skip('Deferred to T7 (manual E2E) — full LLM-driven flows', () => {
