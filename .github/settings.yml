@@ -16,7 +16,9 @@ branches:
         # because they're skipped on PRs from forks where COPILOT_PAT is unavailable.
         contexts:
           - Fro Bot
+          - Integration tests
           - Lint, typecheck, build, unit tests
+          - Renovate / Renovate
       enforce_admins: true
       required_pull_request_reviews: null
       restrictions: null
