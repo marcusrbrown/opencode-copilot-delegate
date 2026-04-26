@@ -10,7 +10,7 @@ This plugin registers three tools in OpenCode:
 - **`copilot_output`** — Retrieve the structured result envelope for a completed or running delegation.
 - **`copilot_cancel`** — Cancel a running delegation with SIGTERM → SIGKILL escalation.
 
-When the subprocess completes, a `<system-reminder>` notification is injected into the parent session via `client.session.promptAsync`, mirroring the async pattern used by OMO.
+When the subprocess completes, a `<system-reminder>` notification is injected into the parent session via `client.session.prompt` with `noReply: false` for the first notification per session and `noReply: true` for subsequent ones, so the agent sees the result without an unbounded reply chain.
 
 ## Installation
 
@@ -84,6 +84,20 @@ Task state is in-memory inside a single OpenCode process. Calling `copilot_outpu
 ## Known Limitations (v0.1.x)
 
 - **Orphaned subprocesses:** If OpenCode crashes mid-delegation, the `copilot` subprocess becomes orphaned. A PID-file reaper is planned for v1.x.
+- **Prompt visibility in `ps`:** The `copilot` CLI accepts the prompt as a command-line argument, which means the full prompt text appears in `ps` output for any user on the host. This is an upstream Copilot CLI behavior. Avoid delegating prompts that contain secrets or PII; pass sensitive material via files, env vars, or `--secret-env-vars` instead.
+- **No subprocess lifetime cap:** A hung `copilot` subprocess stays in the registry as `running` indefinitely. Cancel manually via `copilot_cancel`. A configurable timeout is planned for v1.x.
+
+## Versioning
+
+Releases under `0.x` are unstable and may include breaking changes between minor versions. Pin to an exact version in production:
+
+```json
+"dependencies": {
+  "opencode-copilot-delegate": "0.1.0"
+}
+```
+
+`1.0.0` will be cut once the public surface stabilizes.
 
 ## Privacy
 

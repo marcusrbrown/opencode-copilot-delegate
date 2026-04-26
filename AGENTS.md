@@ -42,8 +42,8 @@ tests/fixtures/
 - **Peer dependencies**: `@opencode-ai/plugin` and `@opencode-ai/sdk` are peers — the host OpenCode install provides them
 - **Single-line JSONL parser**: `parseJsonlLine` handles one line at a time and returns `{ type: 'unknown' }` for malformed input. Stream-level multiline accumulation belongs in the subprocess wrapper
 - **Task IDs**: prefixed with `cpl_` to distinguish from OpenCode-native task IDs
-- **Process cleanup**: uses `fkill` with `{ force: false, forceTimeout: 2000, waitForExit: 5000 }` and `.catch()` guards on all `killProcessTree` calls in abort handlers
-- **Notification safety**: in-flight counter is decremented synchronously (before any `await`) in close handlers; `isShuttingDown` checks gate `prompt` calls; counter map entries are deleted at zero to prevent memory leaks
+- **Process cleanup**: uses `fkill` with `{ force: false, forceAfterTimeout: 2000, waitForExit: 5000 }` and `.catch()` guards on all `killProcessTree` calls in abort handlers. On macOS, `tree: true` is Windows-only, so the kill targets the entire process group via `fkill(-pid, ...)` and the subprocess is spawned with `detached: true`.
+- **Notification safety**: in-flight counter is decremented synchronously (before any `await`) in close handlers; counter map entries are deleted at zero to prevent memory leaks over long-lived sessions.
 - **Agent discovery**: builtin agents (bundled with Copilot CLI) cannot be overridden by user or repo agents
 - **Structured errors**: tools return `{ error: string }` objects, never throw exceptions
 
