@@ -9,6 +9,7 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import type { Part, ToolPart } from '@opencode-ai/sdk'
 import { makeClient } from './helpers/client'
 import { type ServerHandle, startServer } from './helpers/server'
 
@@ -233,22 +234,284 @@ describe('helpers/server resilience', () => {
   }, 8_000)
 })
 
-describe.skip('Deferred to T7 (manual E2E) — full LLM-driven flows', () => {
-  // The following plan scenarios are deferred to T7 (manual E2E in VERIFICATION.md) because
-  // they require an LLM to invoke the plugin tools through a real session prompt:
-  //
-  // - Given a prompt that invokes copilot_delegate, the assistant message contains
-  //   a task_id matching /^cpl_[0-9a-f-]+$/.
-  // - Given a task_id, copilot_output with block: true returns within timeout_ms.
-  // - Given a running task, copilot_cancel returns { cancelled: true, was_running: true }.
-  // - Given a nonexistent task_id, copilot_output returns { status: 'unknown' }.
-  // - <system-reminder> appears as a subsequent assistant turn after delegation completes.
-  //
-  // The underlying tool-execute logic is already covered at the unit level:
-  //   - tests/tools.test.ts — task_id format, blocking timeout, cancel-running,
-  //                            unknown task_id, structured error envelopes
-  //   - tests/notify.test.ts — system-reminder injection and noReply semantics
-  // What's deferred is end-to-end orchestration through the OpenCode session prompt path,
-  // which the SDK only exposes via LLM invocation.
-  it('requires LLM — see VERIFICATION.md', () => {})
-})
+// LLM-driven integration tests exercise the full session-prompt path: an LLM (big-pickle)
+// invokes the plugin tools through a real OpenCode session, and we assert on the tool-state
+// outputs. These tests require GH_TOKEN to be set (the Copilot CLI auth chain); otherwise
+// the entire describe block is skipped so `bun test` stays green on dev machines without
+// the secret.
+//
+// big-pickle is OpenCode's bundled, no-auth, free model. It supports function calling.
+// The Copilot subprocess that copilot_delegate spawns does cost premium requests against
+// the user's Copilot subscription — we keep prompts trivial ("reply with ok") and cancel
+// running tasks early to bound the burn rate.
+//
+// Process-tree teardown in afterAll guarantees no Copilot subprocess outlives the suite,
+// even if a per-test cancel didn't fire.
+
+describe.skipIf(!process.env.GH_TOKEN)(
+  'LLM-driven integration (requires GH_TOKEN)',
+  () => {
+    let server: ServerHandle
+    let projectDir: string
+
+    beforeAll(async () => {
+      if (!existsSync(PLUGIN_DIST)) {
+        throw new Error(
+          `Plugin dist not found at ${PLUGIN_DIST}. Run: bun run build`,
+        )
+      }
+      projectDir = makeProjectDir('opencode-llm')
+      server = await startServer({ cwd: projectDir })
+    }, 30_000)
+
+    afterAll(async () => {
+      if (server) await server.stop()
+      if (projectDir) rmSync(projectDir, { force: true, recursive: true })
+    }, 15_000)
+
+    // Helper: send a prompt to big-pickle in a fresh session and return the assistant parts.
+    async function promptBigPickle(
+      sessionId: string,
+      text: string,
+    ): Promise<readonly Part[]> {
+      const client = makeClient(server.baseUrl)
+      const response = await client.session.prompt({
+        path: { id: sessionId },
+        body: {
+          model: { providerID: 'opencode', modelID: 'big-pickle' },
+          parts: [{ type: 'text', text }],
+        },
+      })
+      const parts = response.data?.parts
+      if (!parts) {
+        throw new Error('session.prompt returned no parts')
+      }
+      return parts
+    }
+
+    async function newSession(): Promise<string> {
+      const client = makeClient(server.baseUrl)
+      const created = await client.session.create({ body: {} })
+      const id = created.data?.id
+      if (!id) {
+        throw new Error('session.create returned no id')
+      }
+      return id
+    }
+
+    function findToolCall(parts: readonly Part[], toolName: string): ToolPart {
+      const part = parts.find(
+        (p): p is ToolPart => p.type === 'tool' && p.tool === toolName,
+      )
+      if (!part) {
+        const seen = parts.map((p) => p.type).join(', ')
+        throw new Error(
+          `expected a ${toolName} tool part in assistant response; saw: ${seen}`,
+        )
+      }
+      return part
+    }
+
+    function parseToolOutput<T>(part: ToolPart): T {
+      if (part.state.status !== 'completed') {
+        throw new Error(
+          `expected tool ${part.tool} to complete, got status=${part.state.status}`,
+        )
+      }
+      try {
+        return JSON.parse(part.state.output) as T
+      } catch (err) {
+        throw new Error(
+          `failed to parse tool output as JSON: ${(err as Error).message}\nraw: ${part.state.output}`,
+        )
+      }
+    }
+
+    // Best-effort cancel via LLM. Failures here are non-fatal — the afterAll process-tree
+    // teardown is the safety net.
+    async function bestEffortCancel(
+      sessionId: string,
+      taskId: string,
+    ): Promise<void> {
+      try {
+        await promptBigPickle(
+          sessionId,
+          `Call the copilot_cancel tool with task_id "${taskId}". Respond with just "done".`,
+        )
+      } catch {
+        // Swallow — process-tree teardown handles leaks.
+      }
+    }
+
+    it('returns a task_id matching /^cpl_[0-9a-f-]+$/ when copilot_delegate is invoked', async () => {
+      // Given a fresh session
+      const sessionId = await newSession()
+      let taskId: string | undefined
+      try {
+        // When we ask the LLM to invoke copilot_delegate
+        const parts = await promptBigPickle(
+          sessionId,
+          'Use the copilot_delegate tool with prompt "reply with the word ok and exit". Just call the tool, do not explain.',
+        )
+        // Then a tool part exists with the expected output shape
+        const toolPart = findToolCall(parts, 'copilot_delegate')
+        const output = parseToolOutput<{ task_id: string; status: string }>(
+          toolPart,
+        )
+        expect(output.task_id).toMatch(/^cpl_[0-9a-f-]+$/)
+        expect(output.status).toBe('running')
+        taskId = output.task_id
+      } finally {
+        if (taskId) await bestEffortCancel(sessionId, taskId)
+      }
+    }, 60_000)
+
+    it('returns timed_out: true when copilot_output is called with block: true and a short timeout', async () => {
+      // Given a delegated task that takes longer than our timeout
+      const sessionId = await newSession()
+      let taskId: string | undefined
+      try {
+        const startParts = await promptBigPickle(
+          sessionId,
+          'Use the copilot_delegate tool with prompt "wait 10 seconds then reply with ok". Just call the tool, do not explain.',
+        )
+        const startTool = findToolCall(startParts, 'copilot_delegate')
+        const startOutput = parseToolOutput<{ task_id: string }>(startTool)
+        taskId = startOutput.task_id
+        expect(taskId).toMatch(/^cpl_[0-9a-f-]+$/)
+
+        // When we ask the LLM to call copilot_output with block: true and timeout_ms: 2000
+        const outParts = await promptBigPickle(
+          sessionId,
+          `Use the copilot_output tool with task_id "${taskId}", block: true, and timeout_ms: 2000. Just call the tool, do not explain.`,
+        )
+        const outTool = findToolCall(outParts, 'copilot_output')
+        const outOutput = parseToolOutput<{
+          status: string
+          timed_out?: boolean
+        }>(outTool)
+
+        // Then the response indicates a timeout (task is still running)
+        expect(outOutput.timed_out).toBe(true)
+        expect(outOutput.status).toBe('running')
+      } finally {
+        if (taskId) await bestEffortCancel(sessionId, taskId)
+      }
+    }, 60_000)
+
+    it('returns { cancelled: true, was_running: true } when copilot_cancel is called on a running task', async () => {
+      // Given a running task
+      const sessionId = await newSession()
+      const startParts = await promptBigPickle(
+        sessionId,
+        'Use the copilot_delegate tool with prompt "wait 30 seconds then reply with ok". Just call the tool, do not explain.',
+      )
+      const startTool = findToolCall(startParts, 'copilot_delegate')
+      const startOutput = parseToolOutput<{ task_id: string }>(startTool)
+      const taskId = startOutput.task_id
+
+      // When we ask the LLM to cancel it
+      const cancelParts = await promptBigPickle(
+        sessionId,
+        `Use the copilot_cancel tool with task_id "${taskId}". Just call the tool, do not explain.`,
+      )
+
+      // Then the response confirms the task was running and is now cancelled
+      const cancelTool = findToolCall(cancelParts, 'copilot_cancel')
+      const cancelOutput = parseToolOutput<{
+        cancelled: boolean
+        was_running: boolean
+      }>(cancelTool)
+      expect(cancelOutput.cancelled).toBe(true)
+      expect(cancelOutput.was_running).toBe(true)
+    }, 60_000)
+
+    it('returns { status: "unknown" } when copilot_output is called with a nonexistent task_id', async () => {
+      // Given a fresh session and a fabricated task_id
+      const sessionId = await newSession()
+      const fakeId = 'cpl_00000000-0000-0000-0000-000000000000'
+
+      // When we ask the LLM to call copilot_output for it
+      const parts = await promptBigPickle(
+        sessionId,
+        `Use the copilot_output tool with task_id "${fakeId}". Just call the tool, do not explain.`,
+      )
+
+      // Then the response status is unknown — no premium request burned (no delegation)
+      const toolPart = findToolCall(parts, 'copilot_output')
+      const output = parseToolOutput<{ status: string }>(toolPart)
+      expect(output.status).toBe('unknown')
+    }, 30_000)
+
+    interface SyntheticReminder {
+      synthetic?: boolean
+      text: string
+    }
+
+    function findReminderInMessages(
+      messages: ReadonlyArray<{ parts?: readonly Part[] }>,
+      taskId: string,
+    ): SyntheticReminder | undefined {
+      for (const message of messages) {
+        for (const part of message.parts ?? []) {
+          if (
+            part.type === 'text' &&
+            part.synthetic === true &&
+            part.text.includes('<system-reminder>') &&
+            part.text.includes(taskId)
+          ) {
+            return part
+          }
+        }
+      }
+      return undefined
+    }
+
+    async function pollForReminder(
+      sessionId: string,
+      taskId: string,
+      timeoutMs: number,
+    ): Promise<SyntheticReminder | undefined> {
+      const client = makeClient(server.baseUrl)
+      const deadline = Date.now() + timeoutMs
+      while (Date.now() < deadline) {
+        const messagesResp = await client.session.messages({
+          path: { id: sessionId },
+        })
+        const messages = messagesResp.data ?? []
+        const found = findReminderInMessages(messages, taskId)
+        if (found) return found
+        await new Promise((resolve) => setTimeout(resolve, 500))
+      }
+      return undefined
+    }
+
+    it('injects a <system-reminder> assistant turn after delegation completes', async () => {
+      // Given a delegated task that completes quickly (~5s)
+      const sessionId = await newSession()
+      const startParts = await promptBigPickle(
+        sessionId,
+        'Use the copilot_delegate tool with prompt "respond with just the word ok". Just call the tool, do not explain.',
+      )
+      const startTool = findToolCall(startParts, 'copilot_delegate')
+      const startOutput = parseToolOutput<{ task_id: string }>(startTool)
+      const taskId = startOutput.task_id
+
+      // When we wait for the plugin's notification.ts to inject a synthetic <system-reminder>
+      // referencing this task_id (the plugin uses noReply: true, so it appears as a synthetic
+      // text part on a subsequent message in the same session).
+      const found = await pollForReminder(sessionId, taskId, 60_000)
+
+      // Then the synthetic reminder text appears, marked as synthetic so it does not
+      // count as a user prompt.
+      if (!found) {
+        throw new Error(
+          `expected <system-reminder> for ${taskId} within 60s; none found in session messages`,
+        )
+      }
+      expect(found.synthetic).toBe(true)
+      expect(found.text).toContain('<system-reminder>')
+      expect(found.text).toContain(taskId)
+    }, 90_000)
+  },
+)
