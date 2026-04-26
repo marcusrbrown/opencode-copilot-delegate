@@ -38,6 +38,7 @@
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.13",
+    "@changesets/cli": "^2.31.0",
     "@opencode-ai/plugin": "^1.14.19",
     "@opencode-ai/sdk": "^1.14.19",
     "@types/bun": "^1.2.0",
@@ -54,7 +55,9 @@
     "test:integration": "bun test tests/integration/",
     "lint": "biome check .",
     "fix": "biome check . --write",
-    "prepublishOnly": "bun run build"
+    "prepublishOnly": "bun run build",
+    "version-changesets": "changeset version && bun install --lockfile-only",
+    "publish-changesets": "bun run build && changeset publish"
   },
   "dependencies": {
     "fkill": "10.0.3"
