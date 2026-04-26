@@ -66,10 +66,12 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 15
     needs: check
-    # Skip on PRs from forks (secrets unavailable)
+    # Skip on push to main (already verified by the PR build) and on PRs from
+    # forks (secrets unavailable).
     if: >-
-      github.event_name != 'pull_request' ||
-      github.event.pull_request.head.repo.fork == false
+      github.event_name != 'push' &&
+      (github.event_name != 'pull_request' ||
+        github.event.pull_request.head.repo.fork == false)
     steps:
       - name: Checkout repository
         uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2

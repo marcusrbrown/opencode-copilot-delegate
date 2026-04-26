@@ -1,38 +1,38 @@
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test'
 import {
-  copyFileSync,
-  cpSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
   rmSync,
-  symlinkSync,
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import type { Part, ToolPart } from '@opencode-ai/sdk'
 import { makeClient } from './helpers/client'
 import { type ServerHandle, startServer } from './helpers/server'
 
 const REPO_ROOT = resolve(import.meta.dir, '..', '..')
 const PLUGIN_DIST = join(REPO_ROOT, 'dist', 'index.js')
-const REPO_OPENCODE_PLUGIN_PKG = join(
-  REPO_ROOT,
-  'node_modules',
-  '@opencode-ai',
-  'plugin',
-)
 
 interface IntegrationFixture {
   /** Parent temp dir; pass to rmSync on cleanup to remove all subdirs at once. */
   rootDir: string
-  /** OpenCode subprocess `cwd`. Contains `.opencode/plugins/copilot-delegate.js`. */
+  /** OpenCode subprocess `cwd`. */
   projectDir: string
   /** Maps to `OPENCODE_TEST_HOME` and `HOME` for the subprocess. */
   homeDir: string
   /** Maps to `OPENCODE_TEST_MANAGED_CONFIG_DIR` for the subprocess. */
   managedConfigDir: string
+  /**
+   * JSON config string suitable for `OPENCODE_CONFIG_CONTENT`. Declares this repo's
+   * built `dist/index.js` as a `file://` plugin so OpenCode loads it without scanning
+   * `<projectDir>/.opencode/plugins/`. Avoids registering an additional `.opencode`
+   * directory whose presence would trigger OpenCode's per-config-dir
+   * `npm install @opencode-ai/plugin` (`packages/opencode/src/config/config.ts:528-565`).
+   */
+  configContent: string
 }
 
 /**
@@ -40,53 +40,44 @@ interface IntegrationFixture {
  * ```
  * <rootDir>/
  *   project/                     (cwd for `opencode serve`)
- *     .opencode/plugins/copilot-delegate.js
  *     package.json
  *   home/                        (HOME / OPENCODE_TEST_HOME for the subprocess)
  *   managed/                     (OPENCODE_TEST_MANAGED_CONFIG_DIR)
  * ```
  *
- * Splitting `home/` from `project/` keeps OpenCode's project-level config
- * discovery (`.opencode/plugins/`, `opencode.json`) and its user-level config
- * discovery (`~/.config/opencode/opencode.json`) on separate paths so the
- * subprocess never reads the developer's real `~/.config/opencode/` and never
- * writes session data into the developer's real `~/.local/share/opencode/`.
+ * Plugin loading: rather than copying the built `dist/index.js` into
+ * `<projectDir>/.opencode/plugins/`, we declare it as a `file://` plugin via
+ * `OPENCODE_CONFIG_CONTENT` (the same pattern used by `remorses/kimaki` and
+ * `alvinunreal/oh-my-opencode-slim` test harnesses). That keeps plugin resolution
+ * pointed at the repo's `node_modules/` (so the bundled `dist/index.js` and any
+ * peer-dep imports resolve normally) and avoids creating an extra `.opencode`
+ * directory in the fixture.
+ *
+ * Splitting `home/` from `project/` keeps OpenCode's user-level config discovery
+ * (`~/.config/opencode/opencode.json`) on a path the subprocess can never reach
+ * back into, so the developer's real `~/.config/opencode/` is never read and the
+ * developer's real `~/.local/share/opencode/` is never written.
  */
 function makeProjectDir(prefix: string): IntegrationFixture {
   const rootDir = mkdtempSync(join(tmpdir(), `${prefix}-`))
   const projectDir = join(rootDir, 'project')
   const homeDir = join(rootDir, 'home')
   const managedConfigDir = join(rootDir, 'managed')
-  const pluginDir = join(projectDir, '.opencode', 'plugins')
-  mkdirSync(pluginDir, { recursive: true })
+  mkdirSync(projectDir, { recursive: true })
   mkdirSync(homeDir, { recursive: true })
   mkdirSync(managedConfigDir, { recursive: true })
-  copyFileSync(PLUGIN_DIST, join(pluginDir, 'copilot-delegate.js'))
   writeFileSync(
     join(projectDir, 'package.json'),
     `${JSON.stringify({ name: 'integration-fixture', version: '0.0.0', type: 'module' }, null, 2)}\n`,
   )
 
-  // Pre-install `@opencode-ai/plugin` into the project's `.opencode/` directory.
-  // OpenCode's `Config.waitForDependencies` runs `npm install @opencode-ai/plugin`
-  // for every `.opencode` dir on first project access — that single install can
-  // take 30+ seconds against an empty npm cache (which is the case under
-  // isolation, where the test home has no `~/.npm`). Pre-staging the package
-  // makes the install a no-op. We prefer a symlink (cheap, no copy) and fall
-  // back to a recursive copy when `symlinkSync` is unavailable (e.g. Windows).
-  if (existsSync(REPO_OPENCODE_PLUGIN_PKG)) {
-    const pluginDepDir = join(projectDir, '.opencode', 'node_modules')
-    const pluginScopeDir = join(pluginDepDir, '@opencode-ai')
-    mkdirSync(pluginScopeDir, { recursive: true })
-    const target = join(pluginScopeDir, 'plugin')
-    try {
-      symlinkSync(REPO_OPENCODE_PLUGIN_PKG, target, 'dir')
-    } catch {
-      cpSync(REPO_OPENCODE_PLUGIN_PKG, target, { recursive: true })
-    }
-  }
+  const pluginUrl = pathToFileURL(PLUGIN_DIST).href
+  const configContent = JSON.stringify({
+    $schema: 'https://opencode.ai/config.json',
+    plugin: [pluginUrl],
+  })
 
-  return { rootDir, projectDir, homeDir, managedConfigDir }
+  return { rootDir, projectDir, homeDir, managedConfigDir, configContent }
 }
 
 describe('opencode-copilot-delegate plugin (integration)', () => {
@@ -104,6 +95,7 @@ describe('opencode-copilot-delegate plugin (integration)', () => {
       cwd: fixture.projectDir,
       homeDir: fixture.homeDir,
       managedConfigDir: fixture.managedConfigDir,
+      env: { OPENCODE_CONFIG_CONTENT: fixture.configContent },
     })
   }, 30_000)
 
@@ -135,10 +127,15 @@ describe('opencode-copilot-delegate plugin (integration)', () => {
     expect(ids).toContain('copilot_output')
     expect(ids).toContain('copilot_cancel')
     // Generous timeout: this is the first request after server bootstrap that
-    // triggers OpenCode's project-instance creation, including external plugin
-    // loading. Under isolation the import path is cold and that boot can take
-    // 10–20s in CI. Subsequent requests against the same server are fast because
-    // the project instance is cached.
+    // triggers OpenCode's project-instance creation. Plugin loading blocks on
+    // `Config.waitForDependencies()`, which joins one `npm install
+    // @opencode-ai/plugin` fiber per discovered config dir
+    // (`packages/opencode/src/config/config.ts:528-565,716-719`). Under isolation
+    // those temp config dirs are cold and the install runs Arborist `reify()`
+    // (`packages/core/src/npm.ts:233-255`), which can add 10–20s in CI.
+    // Subsequent requests against the same server are fast because the project
+    // instance is cached. Tracked upstream alongside requests for a first-class
+    // `OPENCODE_DISABLE_GLOBAL_CONFIG` flag (e.g. anomalyco/opencode#21264).
   }, 45_000)
 
   it('exposes correct schemas for each plugin tool via tool.list()', async () => {
