@@ -17,6 +17,12 @@ export interface StartOptions {
   extraArgs?: string[]
   /** Override the binary to spawn. Test seam; defaults to `opencode`. */
   command?: string
+  /**
+   * Additional env vars to pass to the spawned `opencode` subprocess. Merged on top of
+   * `process.env`. Use this to scope test-specific credentials (e.g. `GH_TOKEN`) to the
+   * subprocess rather than mutating the parent test process's environment.
+   */
+  env?: Record<string, string>
 }
 
 const STDERR_BUFFER_CAP = 200
@@ -239,6 +245,7 @@ export async function startServer(
     env: {
       ...process.env,
       OPENCODE_SERVER_PASSWORD: '',
+      ...opts.env,
     },
   })
   const pid = child.pid ?? -1
