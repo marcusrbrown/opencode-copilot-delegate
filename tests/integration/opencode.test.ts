@@ -31,6 +31,21 @@ interface OpencodeResult {
   exitCode: number
 }
 
+/**
+ * Throw a rich error if the subprocess did not exit cleanly, so a CI failure
+ * surfaces the subprocess's stderr tail instead of just `expected 0, got X`.
+ * Stderr is truncated to 2 KB so a flooded child does not overwhelm the log.
+ */
+function assertOk(result: OpencodeResult): void {
+  if (result.exitCode === 0) return
+  const stderr = result.stderr.slice(-2000) || '(empty)'
+  throw new Error(
+    `opencode exited with non-zero status\n` +
+      `exitCode=${result.exitCode}\n` +
+      `stderr (last 2000 chars):\n${stderr}`,
+  )
+}
+
 interface RunOptions {
   cwd: string
   configDir: string
@@ -72,6 +87,11 @@ function runOpencode(prompt: string, options: RunOptions): OpencodeResult {
   const copilotToken = process.env.COPILOT_PAT ?? process.env.GH_TOKEN
   if (copilotToken) env.GH_TOKEN = copilotToken
 
+  // spawnSync blocks the test runner for the duration of the call. Worst-case
+  // hang is bounded by `timeout`: when it elapses, Node sends SIGTERM and reaps
+  // the child, after which spawnSync returns with `signal: 'SIGTERM'` and a
+  // null status. Sequential test execution means the suite's worst-case wall
+  // clock is roughly `TEST_TIMEOUT_MS * scenario_count`.
   const result = spawnSync(
     'opencode',
     ['run', '--model', OPENCODE_TEST_MODEL, prompt],
@@ -141,7 +161,7 @@ describe.skipIf(!OPENCODE_AVAILABLE)('opencode integration', () => {
             'the exact task_id you receive verbatim in your reply.',
           { cwd: fixture.projectDir, configDir: fixture.configDir },
         )
-        expect(result.exitCode).toBe(0)
+        assertOk(result)
         expect(result.stdout).toMatch(/cpl_[0-9a-f-]+/)
       },
       TEST_TIMEOUT_MS,
@@ -155,7 +175,7 @@ describe.skipIf(!OPENCODE_AVAILABLE)('opencode integration', () => {
             'tell me the value of the status field in the response.',
           { cwd: fixture.projectDir, configDir: fixture.configDir },
         )
-        expect(result.exitCode).toBe(0)
+        assertOk(result)
         expect(result.stdout.toLowerCase()).toContain('unknown')
       },
       TEST_TIMEOUT_MS,
@@ -170,8 +190,13 @@ describe.skipIf(!OPENCODE_AVAILABLE)('opencode integration', () => {
             'Tell me the value of the cancelled field in the cancel response.',
           { cwd: fixture.projectDir, configDir: fixture.configDir },
         )
-        expect(result.exitCode).toBe(0)
-        expect(result.stdout.toLowerCase()).toMatch(/cancel(led|ed)|true/)
+        assertOk(result)
+        // Require both the keyword "cancel" and the literal "true" to appear so
+        // a chatty model that volunteers the word "true" without actually
+        // calling the cancel tool can't pass.
+        const out = result.stdout.toLowerCase()
+        expect(out).toMatch(/cancel(led|ed)/)
+        expect(out).toContain('true')
       },
       TEST_TIMEOUT_MS,
     )
