@@ -1,7 +1,7 @@
 ---
 title: Missing GitHub Release for already-published npm package
 date: 2026-04-26
-category: docs/solutions/workflow-issues/
+category: workflow-issues
 module: release_pipeline
 problem_type: workflow_issue
 component: development_workflow
@@ -47,14 +47,14 @@ git push origin v0.1.0
 # Create GitHub Release with the matching CHANGELOG.md section as body
 gh release create v0.1.0 \
   --title "v0.1.0" \
-  --notes "$(awk '/^## 0\.1\.0/,/^## 0\.0\./' CHANGELOG.md | sed '$d' | tail -n +2)" \
+  --notes "$(awk '/^## 0\.1\.0/{flag=1; next} /^## /{flag=0} flag' CHANGELOG.md)" \
   --verify-tag
 ```
 
 When `gh release create` hits a GraphQL rate limit, fall back to the REST endpoint (which uses a different quota):
 
 ```sh
-NOTES=$(awk '/^## 0\.1\.0/,/^## 0\.0\./' CHANGELOG.md | sed '$d' | tail -n +2)
+NOTES=$(awk '/^## 0\.1\.0/{flag=1; next} /^## /{flag=0} flag' CHANGELOG.md)
 gh api -X POST /repos/<org>/<repo>/releases \
   -f tag_name=v0.1.0 -f name=v0.1.0 \
   -f body="$NOTES" -F draft=false -F prerelease=false
@@ -93,7 +93,7 @@ git tag -a v0.1.0 <version-packages-merge-sha> -m "v0.1.0"
 git push origin v0.1.0
 gh release create v0.1.0 \
   --title "v0.1.0" \
-  --notes "$(awk '/^## 0\.1\.0/,/^## 0\.0\./' CHANGELOG.md | sed '$d' | tail -n +2)" \
+  --notes "$(awk '/^## 0\.1\.0/{flag=1; next} /^## /{flag=0} flag' CHANGELOG.md)" \
   --verify-tag
 ```
 
@@ -122,7 +122,7 @@ git tag -a v0.1.0 06dec48 -m "v0.1.0"
 git push origin v0.1.0
 gh api -X POST /repos/marcusrbrown/opencode-copilot-delegate/releases \
   -f tag_name=v0.1.0 -f name=v0.1.0 \
-  -f body="$(awk '/^## 0\.1\.0/,/^## 0\.0\./' CHANGELOG.md | sed '$d' | tail -n +2)" \
+  -f body="$(awk '/^## 0\.1\.0/{flag=1; next} /^## /{flag=0} flag' CHANGELOG.md)" \
   -F draft=false -F prerelease=false
 ```
 

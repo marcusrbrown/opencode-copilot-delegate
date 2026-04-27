@@ -72,6 +72,8 @@ export function runOpencode(args: RunArgs): SpawnSyncReturns<string> {
     OPENCODE_CONFIG_DIR: configDir,
     OPENCODE_CONFIG_CONTENT: JSON.stringify({plugin: [args.pluginUrl]}),
   }
+  // copilotPat is forwarded as GH_TOKEN — see auth precedence in README
+  // (COPILOT_GITHUB_TOKEN > GH_TOKEN > GITHUB_TOKEN > ~/.copilot/auth).
   if (args.copilotPat) env.GH_TOKEN = args.copilotPat
   return spawnSync('opencode', ['run', '--model', model, args.prompt], {
     env,
