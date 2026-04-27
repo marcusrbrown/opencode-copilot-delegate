@@ -7,6 +7,8 @@ task_id: cpl_2c867887-eed5-4048-98d2-69a4a8f2a731
 runtime_minutes: 5
 premium_requests: 7.5
 purpose: Seed ideation for opencode-copilot-delegate v0.2.x feature work.
+errata:
+  - "§9 'Prompts visible in ps': the suggested temp-file wrapper does not address argv leakage. Copilot CLI 1.0.36 has no documented stdin or @file prompt mode; treat that bullet as 'no known workaround in 1.0.36' until upstream exposes one."
 ---
 
 # Copilot CLI Capabilities — Programmatic Delegation Reference
