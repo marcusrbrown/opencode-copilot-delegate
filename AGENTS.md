@@ -35,6 +35,9 @@ tests/
 └── tools.test.ts         # Tool integration tests (full plugin lifecycle)
 tests/fixtures/
 └── jsonl/                # Real Copilot CLI JSONL captures (PII-scrubbed)
+docs/
+├── plans/                # Implementation plans for major work
+└── solutions/            # Documented solutions to past problems (bugs, best practices, workflow patterns), organized by category with YAML frontmatter (module, tags, problem_type)
 ```
 
 ## Design Decisions
