@@ -62,10 +62,10 @@ Both bugs predate the v0.2.0 TUI work. They were identified during planning for 
 - **PID file location**: `<XDG_STATE_HOME or ~/.local/state>/opencode-copilot-delegate/orphans.pids`. Plain text, line-delimited, format `<pid>\t<ps-lstart-output>` (tab-separated to avoid colon ambiguity in the lstart string). Parent directory created with `0o700`; file written with `0o600`.
 - **Start-time source for the recorded value**: at task spawn, immediately invoke `ps -p <pid> -o lstart=` (array-spawn, no shell) and store the returned string verbatim. This guarantees the recorded value matches the format `ps` will return at reap time. (Do **not** use `task.startedAt` epoch ms — `ps` and `Date.now()` produce incomparable strings.)
 - **`ps` invocation**: `child_process.spawn('ps', ['-p', String(pid), '-o', 'lstart='])` with no shell. Eliminates command-injection risk if the PID file is malformed.
-- **PID-file lock strategy**: `node:fs` `O_EXCL` temp-file + atomic `rename` for both append and remove. No new dep. Concurrency at the existing 10-concurrent cap is light enough that worst-case "one writer's update overwritten by a slightly-stale concurrent writer" is acceptable; the reaper handles a missed-removal as an extra reap-attempt of an already-dead PID, which is a tested scenario. The constant lives in `fs.constants.O_EXCL` (not `os.constants`).
+- **PID-file lock strategy**: `node:fs` `O_EXCL` temp-file + atomic `rename` for both append and remove. No new dep. **Atomic rename prevents partial reads and corrupt-line interleaving but does NOT serialize concurrent read-modify-write** — under high concurrency (10x simultaneous `appendPidEntry`), the worst case is last-write-wins where one writer's content is clobbered by a slightly-stale concurrent writer's rename. Acceptable here because: (a) the existing 10-concurrent cap bounds the contention, (b) a missed-append surfaces as the subprocess never being tracked at all, which means the reaper does nothing for it on next reload — same behavior as today, no regression, and (c) a missed-removal surfaces as an extra reap-attempt of an already-dead PID, which the reaper handles idempotently (Unit 2 scenario). The constant lives in `fs.constants.O_EXCL` (not `os.constants`).
 - **PID-validate-before-kill**: Before invoking `killProcessTree(pid)`, double-check that the process command line contains `copilot` via `ps -p <pid> -o args=` (array-spawn). If the command does not match, skip with a logged warning. Defense-in-depth against malicious PID file injection (file perms 0o600 are the primary defense).
 - **Reap sequencing**: Reap runs synchronously during plugin init, before the plugin returns. v0.2.0's RPC server starts after this completes. v0.1.1 has no RPC server, so the only consumer of the post-reap state is the registry itself.
-- **Parser guard placement**: In `spawnCopilot`, at the top of the existing inline `child.stdout?.on('data', (chunk: string) => { ... })` handler, immediately before the line-iteration loop's `events.push(event)` — `if (task.status !== 'running') break;` (use `break` rather than `return` so the partial-line buffer state at the bottom of the handler still updates). Single-threaded JS guarantees the guard is checked synchronously with every push, with no interleaving possible.
+- **Parser guard placement**: In `spawnCopilot`, at the top of the existing inline `child.stdout?.on('data', (chunk: string) => { ... })` handler. Inside the `for (const line of lines)` loop, the guard goes **before** `parseJsonlLine(line)` (not before `events.push(event)`) so a cancelled task does not pay the parse cost on already-buffered lines: `if (task.status !== 'running') break;`. The partial-line buffer update (`lines.pop()`) runs *before* the loop, so `break` and `return` would behave identically here — `break` is preferred for clarity. Single-threaded JS guarantees the guard is checked synchronously with every iteration, with no interleaving possible.
 
 ## Open Questions
 
@@ -128,7 +128,7 @@ tests/
 - *Edge case:* `appendPidEntry` to a non-existent parent dir → dir is created with 0o700; file written.
 - *Edge case:* `removePidEntry` for a PID not in the file → no-op, no error.
 - *Edge case:* `removePidEntry` on a missing file → no-op, no error.
-- *Concurrency:* `appendPidEntry` invoked 10x concurrently → file ends with 10 entries (no interleaving), via the atomic rename serialization.
+- *Concurrency:* `appendPidEntry` invoked 10x concurrently → file ends with **between 1 and 10 valid entries** (atomic rename prevents partial reads / corrupt lines but does NOT serialize concurrent read-modify-write — last-write-wins is acceptable; missed entries surface as an extra reap attempt of an already-dead PID, which is idempotent and tested in Unit 2). All entries that do appear are well-formed `<pid>\t<startTimeString>` lines.
 - *Mode:* After both append and remove, file mode remains `0o600`.
 
 **Verification:** All scenarios pass; `bun run typecheck` + `bun run lint` clean.
@@ -225,8 +225,9 @@ tests/
 - Modify: `tests/subprocess.test.ts`
 
 **Approach:**
-- Locate the existing `child.stdout?.on('data', (chunk: string) => { ... })` callback inside `spawnCopilot`. Inside the `for (const line of lines)` loop, immediately before `events.push(event)`, add: `if (task.status !== 'running') break;` (use `break` not `return` so the buffered partial-line state at the bottom of the handler still updates correctly — verify the actual handler's structure at implementation time).
-- Single-threaded JS guarantees: the guard is checked synchronously with every push; once `task.status` flips, no subsequent loop iteration in this or future `data` ticks will append.
+- Locate the existing `child.stdout?.on('data', (chunk: string) => { ... })` callback inside `spawnCopilot`. Inside the `for (const line of lines)` loop, place the guard **before** `parseJsonlLine(line)` (not before `events.push`) so a cancelled task does not pay the parse cost on buffered lines: `if (task.status !== 'running') break;`.
+- The partial-line buffer update (`lines.pop()`) runs *before* the loop body, so `break` and `return` are equivalent at this point — `break` is the natural choice for an in-loop early-exit.
+- Single-threaded JS guarantees: the guard is checked synchronously with every iteration; once `task.status` flips, no subsequent loop iteration in this or future `data` ticks will parse or append.
 - This is a 1-2 line change; the test scenario carries the weight.
 
 **Execution note:** Test-first per AGENTS.md mandate.
