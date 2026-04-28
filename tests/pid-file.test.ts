@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test'
 import { mkdtempSync, readFileSync, statSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   appendPidEntry,
@@ -15,19 +15,26 @@ function makeTempDir(): string {
 describe('pid-file', () => {
   describe('path resolution', () => {
     it('should resolve to <state-dir>/opencode-copilot-delegate/orphans/<process.pid>.pids', () => {
-      const stateDir =
-        process.env.XDG_STATE_HOME ?? join(tmpdir(), '.local', 'state')
+      const original = process.env.XDG_STATE_HOME
+      delete process.env.XDG_STATE_HOME
 
-      const result = resolveInstancePidFilePath()
+      try {
+        const stateDir = join(homedir(), '.local', 'state')
+        const result = resolveInstancePidFilePath()
 
-      expect(result).toBe(
-        join(
-          stateDir,
-          'opencode-copilot-delegate',
-          'orphans',
-          `${process.pid}.pids`,
-        ),
-      )
+        expect(result).toBe(
+          join(
+            stateDir,
+            'opencode-copilot-delegate',
+            'orphans',
+            `${process.pid}.pids`,
+          ),
+        )
+      } finally {
+        if (original !== undefined) {
+          process.env.XDG_STATE_HOME = original
+        }
+      }
     })
 
     it('should use XDG_STATE_HOME when present', () => {
