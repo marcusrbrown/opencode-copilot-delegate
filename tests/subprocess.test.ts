@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'bun:test'
+import type { ChildProcess } from 'node:child_process'
 import {
   chmodSync,
   existsSync,
@@ -19,7 +20,7 @@ type SpawnCopilotResult = {
   events: ParsedEvent[]
   completionPromise: Promise<void>
   abortController: AbortController
-  child: { pid: number }
+  child: ChildProcess
   status: TaskStatus
   exitCode?: number
   stdoutLineBuffer: string
@@ -41,7 +42,7 @@ type CreateTaskFn = (input: {
   cwd: string
   stdoutLineBuffer: string
   events: ParsedEvent[]
-  child: { pid: number }
+  child: ChildProcess
   completionPromise: Promise<void>
   abortController: AbortController
 }) => {
@@ -284,6 +285,88 @@ describe('subprocess runtime', () => {
       expect(task.status).toBe('cancelled')
       expect(Date.now() - startedAt).toBeLessThan(3000)
       expectProcessToBeGone(grandchildPid)
+    })
+
+    it('does not append events after cancellation (cancel-race guard)', async () => {
+      // Given a fake copilot binary that emits 2 JSONL lines and then waits
+      const { spawnCopilot } = await loadModules()
+      const cwd = mkdtempSync(join(tmpdir(), 'copilot-cwd-'))
+      const binDir = makeFakeCopilotBin()
+      tempPaths.push(cwd, binDir)
+
+      const task = spawnCopilot(
+        [
+          '-c',
+          [
+            'printf \'%s\\n\' \'{"type":"assistant.message","data":{"messageId":"msg-1","content":"line1","toolRequests":[]}}\'',
+            'printf \'%s\\n\' \'{"type":"assistant.message","data":{"messageId":"msg-2","content":"line2","toolRequests":[]}}\'',
+            'sleep 30',
+          ].join('; '),
+        ],
+        { cwd, env: makeSpawnEnv(binDir) },
+      )
+
+      // Wait for the first 2 lines to be parsed
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        if (task.events.length >= 2) break
+        await delay(20)
+      }
+      expect(task.events).toHaveLength(2)
+
+      // When the task is cancelled
+      task.abortController.abort()
+
+      // Then additional data arriving on stdout should not append new events
+      const extraLines = `${[
+        '{"type":"assistant.message","data":{"messageId":"msg-3","content":"line3","toolRequests":[]}}',
+        '{"type":"assistant.message","data":{"messageId":"msg-4","content":"line4","toolRequests":[]}}',
+        '{"type":"assistant.message","data":{"messageId":"msg-5","content":"line5","toolRequests":[]}}',
+      ].join('\n')}\n`
+
+      // Programmatically emit data on the child's stdout stream
+      task.child.stdout?.emit('data', extraLines)
+
+      // Assert no new events were appended
+      expect(task.events).toHaveLength(2)
+
+      // Clean up: wait for the killed subprocess to close
+      await task.completionPromise
+      expect(task.status).toBe('cancelled')
+    })
+
+    it('preserves cancelled status when close fires after abort (cancel-then-close ordering)', async () => {
+      // Given a fake copilot binary that emits 1 line and then sleeps
+      const { spawnCopilot } = await loadModules()
+      const cwd = mkdtempSync(join(tmpdir(), 'copilot-cwd-'))
+      const binDir = makeFakeCopilotBin()
+      tempPaths.push(cwd, binDir)
+
+      const task = spawnCopilot(
+        [
+          '-c',
+          [
+            'printf \'%s\\n\' \'{"type":"assistant.message","data":{"messageId":"msg-1","content":"line1","toolRequests":[]}}\'',
+            'sleep 30',
+          ].join('; '),
+        ],
+        { cwd, env: makeSpawnEnv(binDir) },
+      )
+
+      // Wait for the line to be parsed
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        if (task.events.length >= 1) break
+        await delay(20)
+      }
+      expect(task.events).toHaveLength(1)
+
+      // When cancellation is requested
+      task.abortController.abort()
+
+      // Wait for the subprocess to actually close after the kill
+      await task.completionPromise
+
+      // Then the status remains cancelled, not flipped to complete/failed by finalizeTask
+      expect(task.status).toBe('cancelled')
     })
   })
 

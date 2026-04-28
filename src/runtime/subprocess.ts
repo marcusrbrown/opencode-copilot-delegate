@@ -4,10 +4,12 @@ import { stripAnsi } from '../lib/ansi'
 import { killProcessTree } from '../lib/kill-tree'
 import type { TaskStatus } from './envelope'
 import { type ParsedEvent, parseJsonlLine } from './jsonl-parser'
+import { setStatus } from './task-status'
 
 type SpawnCopilotOptions = {
   cwd: string
   env?: Record<string, string>
+  pidFilePath?: string
 }
 
 export type SpawnCopilotResult = {
@@ -26,6 +28,14 @@ export type SpawnCopilotResult = {
 }
 
 function flushBufferedStdout(task: SpawnCopilotResult): void {
+  // Cancel-race guard: drop any post-cancel partial line. Without this,
+  // bytes that arrived after the abort listener fired could be parsed and
+  // pushed to task.events even though task.status is already 'cancelled'.
+  // Mirrors the per-line guard in the data handler below.
+  if (task.status !== 'running') {
+    task.stdoutLineBuffer = ''
+    return
+  }
   if (task.stdoutLineBuffer.trim().length === 0) {
     task.stdoutLineBuffer = ''
     return
@@ -50,14 +60,13 @@ function finalizeTask(
   task: SpawnCopilotResult,
   exitCode: number | null,
   stderrText: string,
+  pidFilePath?: string,
 ): void {
   flushBufferedStdout(task)
   task.endedAt = Date.now()
   task.exitCode = exitCode ?? undefined
 
-  if (task.status !== 'cancelled') {
-    task.status = exitCode === 0 ? 'complete' : 'failed'
-  }
+  setStatus(task, exitCode === 0 ? 'complete' : 'failed', { pidFilePath })
 
   if (stderrText.trim().length > 0) {
     task.errorText = stripAnsi(stderrText.trim())
@@ -119,6 +128,7 @@ export function spawnCopilot(
     task.stdoutLineBuffer = lines.pop() ?? ''
 
     for (const line of lines) {
+      if (task.status !== 'running') break
       if (line.length === 0) {
         continue
       }
@@ -140,7 +150,7 @@ export function spawnCopilot(
         return
       }
 
-      task.status = 'cancelled'
+      setStatus(task, 'cancelled', { pidFilePath: opts.pidFilePath })
       killProcessTree(task.pid).catch(() => {
         // Kill failure after abort is non-fatal — process may already be dead
       })
@@ -150,13 +160,13 @@ export function spawnCopilot(
 
   task.completionPromise = new Promise<void>((resolve) => {
     child.once('error', (error) => {
-      task.status = 'failed'
+      setStatus(task, 'failed', { pidFilePath: opts.pidFilePath })
       task.errorText = stripAnsi(error.message)
       resolve()
     })
 
     child.once('close', (code) => {
-      finalizeTask(task, code, stderrText)
+      finalizeTask(task, code, stderrText, opts.pidFilePath)
       resolve()
     })
   })

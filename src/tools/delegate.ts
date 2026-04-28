@@ -13,6 +13,7 @@ type DelegateToolOptions = {
   client: PluginInput['client']
   description: string
   directory: string
+  pidFilePath?: string
 }
 
 function appendRepeatedFlag(
@@ -101,7 +102,10 @@ export function createDelegateTool(options: DelegateToolOptions) {
       let task: TaskState
 
       try {
-        spawnResult = spawnCopilot(cliArgs, { cwd: options.directory })
+        spawnResult = spawnCopilot(cliArgs, {
+          cwd: options.directory,
+          pidFilePath: options.pidFilePath,
+        })
         const { taskId: spawnTaskId, ...spawnFields } = spawnResult
 
         task = createTask(
@@ -113,6 +117,7 @@ export function createDelegateTool(options: DelegateToolOptions) {
             cwd: options.directory,
             agentName: args.agent,
             modelName: args.model,
+            pidFilePath: options.pidFilePath,
           },
           spawnTaskId,
         )

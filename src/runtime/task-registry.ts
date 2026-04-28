@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { killProcessTree } from '../lib/kill-tree'
+import { getPidComm, getPidStartTime } from './orphan-reaper'
+import { appendPidEntry } from './pid-file'
 import type { SpawnCopilotResult } from './subprocess'
 
 export type TaskState = SpawnCopilotResult & {
@@ -18,6 +20,7 @@ export type CreateTaskInput = Omit<SpawnCopilotResult, 'taskId'> & {
   cwd: string
   agentName?: string
   modelName?: string
+  pidFilePath?: string
 }
 
 const tasks = new Map<string, TaskState>()
@@ -26,9 +29,30 @@ export function createTask(
   input: CreateTaskInput,
   taskId = `cpl_${randomUUID()}`,
 ): TaskState {
+  const { pidFilePath, ...rest } = input
   const task: TaskState = {
-    ...input,
+    ...rest,
     taskId,
+  }
+
+  if (task.pid > 0 && pidFilePath) {
+    Promise.all([getPidComm(task.pid), getPidStartTime(task.pid)])
+      .then(([comm, lstart]) => {
+        if (comm && lstart) {
+          appendPidEntry(pidFilePath, task.pid, comm, lstart).catch(() => {})
+        } else {
+          // ps lookup returned null for at least one field. Most likely the
+          // process has already exited (e.g., copilot CLI failed to launch),
+          // but it could also mean the kernel hasn't surfaced the entry yet.
+          // Either way, we cannot append without both fields, so the
+          // subprocess is invisible to the orphan reaper. Surface a warning
+          // so degraded coverage is observable.
+          console.warn(
+            `[task-registry] ps lookup returned null for pid ${task.pid}; subprocess will not be tracked for orphan reaping`,
+          )
+        }
+      })
+      .catch(() => {})
   }
 
   tasks.set(taskId, task)

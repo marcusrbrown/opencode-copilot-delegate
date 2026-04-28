@@ -83,7 +83,7 @@ Task state is in-memory inside a single OpenCode process. Calling `copilot_outpu
 
 ## Known Limitations (v0.1.x)
 
-- **Orphaned subprocesses:** If OpenCode crashes mid-delegation, the `copilot` subprocess becomes orphaned. A PID-file reaper is planned for v1.x.
+- **Orphaned subprocesses (mitigated since v0.2.0):** If OpenCode crashes mid-delegation, the `copilot` subprocess becomes orphaned. A PID-file reaper now scans `<XDG_STATE_HOME>/opencode-copilot-delegate/orphans/` at every plugin init, probes the owning plugin's liveness, and reaps subprocesses whose plugin has exited. A strict identity gate (kernel-tracked `comm` + start time) prevents PID-reuse misfires.
 - **Prompt visibility in `ps`:** The `copilot` CLI accepts the prompt as a command-line argument, which means the full prompt text appears in `ps` output for any user on the host. This is an upstream Copilot CLI behavior. Avoid delegating prompts that contain secrets or PII; pass sensitive material via files, env vars, or `--secret-env-vars` instead.
 - **No subprocess lifetime cap:** A hung `copilot` subprocess stays in the registry as `running` indefinitely. Cancel manually via `copilot_cancel`. A configurable timeout is planned for v1.x.
 

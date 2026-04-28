@@ -118,7 +118,7 @@ tests/
 
 ## Implementation Units
 
-- [ ] **Unit 1: PID-file helpers (`pid-file.ts`)**
+- [x] **Unit 1: PID-file helpers (`pid-file.ts`)**
 
 **Goal:** Atomic append + remove for the PID file.
 
@@ -155,7 +155,7 @@ tests/
 
 ---
 
-- [ ] **Unit 2: Orphan reaper (`orphan-reaper.ts`)**
+- [x] **Unit 2: Orphan reaper (`orphan-reaper.ts`)**
 
 **Goal:** Read the PID file at init time, reap survivors with PID-validate-before-kill.
 
@@ -215,7 +215,7 @@ tests/
 
 ---
 
-- [ ] **Unit 3: `setStatus` helper + wire pid-file hooks into spawn + plugin-init reap**
+- [x] **Unit 3: `setStatus` helper + wire pid-file hooks into spawn + plugin-init reap**
 
 **Goal:** Append on task spawn. Centralize the 3 inline status mutations through a new `setStatus` helper that also calls `removePidEntry`. Build the per-instance pid file path in `src/index.ts` and `await reapOrphans()` before returning Hooks.
 
@@ -279,7 +279,7 @@ tests/
 
 ---
 
-- [ ] **Unit 4: Parser cancel-race guard**
+- [x] **Unit 4: Parser cancel-race guard**
 
 **Goal:** Single-line guard at the top of the inline JSONL data handler in `spawnCopilot`.
 
