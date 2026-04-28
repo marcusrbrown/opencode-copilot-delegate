@@ -89,7 +89,7 @@ describe('task registry PID-file hooks', () => {
   })
 
   it('warns and skips append when ps lookup returns null', async () => {
-    // Use a never-existed PID so getPidComm/getPidStartTime return null.
+    // Use a never-existed PID so getPidIdentity returns null.
     // PIDs above 2^22 are guaranteed unused on Linux/macOS (kernel pid_max).
     const ghostPid = 4_194_305
 

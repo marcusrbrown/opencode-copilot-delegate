@@ -1,6 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { killProcessTree } from '../lib/kill-tree'
-import { getPidComm, getPidStartTime } from './orphan-reaper'
+import { getPidIdentity } from './orphan-reaper'
 import { appendPidEntry } from './pid-file'
 import type { SpawnCopilotResult } from './subprocess'
 
@@ -36,15 +36,19 @@ export function createTask(
   }
 
   if (task.pid > 0 && pidFilePath) {
-    Promise.all([getPidComm(task.pid), getPidStartTime(task.pid)])
-      .then(([comm, lstart]) => {
-        if (comm && lstart) {
-          appendPidEntry(pidFilePath, task.pid, comm, lstart).catch(() => {})
+    getPidIdentity(task.pid)
+      .then((identity) => {
+        if (identity) {
+          appendPidEntry(
+            pidFilePath,
+            task.pid,
+            identity.comm,
+            identity.lstart,
+          ).catch(() => {})
         } else {
-          // ps lookup returned null for at least one field. Most likely the
-          // process has already exited (e.g., copilot CLI failed to launch),
-          // but it could also mean the kernel hasn't surfaced the entry yet.
-          // Either way, we cannot append without both fields, so the
+          // ps lookup returned null. Most likely the process has already
+          // exited (e.g., copilot CLI failed to launch), but it could also
+          // mean the kernel hasn't surfaced the entry yet. Either way, the
           // subprocess is invisible to the orphan reaper. Surface a warning
           // so degraded coverage is observable.
           console.warn(
