@@ -5,8 +5,9 @@ import { isErrnoException } from '../lib/errno'
 
 export interface ReapDeps {
   killProcessTree: (pid: number) => Promise<void>
-  getPidComm: (pid: number) => Promise<string | null>
-  getPidStartTime: (pid: number) => Promise<string | null>
+  getPidIdentity: (
+    pid: number,
+  ) => Promise<{ comm: string; lstart: string } | null>
   isPluginAlive: (pid: number) => boolean
 }
 
@@ -26,9 +27,18 @@ export function defaultIsPluginAlive(pid: number): boolean {
   }
 }
 
-function psField(pid: number, field: string): Promise<string | null> {
+/**
+ * Spawn `ps` with the given args, return trimmed stdout, or null on any
+ * failure mode (timeout, spawn error, non-zero exit, empty output).
+ *
+ * Bounded 1-second SIGTERM timeout. Stderr is drained via resume() so the
+ * OS pipe buffer never fills under backpressure — an unread stderr pipe on
+ * a long-running or backlogged ps invocation can stall the subprocess and
+ * block plugin init.
+ */
+function runPs(args: string[]): Promise<string | null> {
   return new Promise((resolve) => {
-    const child = spawn('ps', ['-p', String(pid), '-o', `${field}=`])
+    const child = spawn('ps', args)
     let stdout = ''
     let timedOut = false
 
@@ -40,9 +50,6 @@ function psField(pid: number, field: string): Promise<string | null> {
     child.stdout?.on('data', (chunk: Buffer) => {
       stdout += chunk.toString('utf-8')
     })
-    // Drain stderr so the OS pipe buffer never fills under backpressure.
-    // An unread stderr pipe on a long-running or backlogged ps invocation
-    // can stall the subprocess, blocking plugin init.
     child.stderr?.resume()
 
     child.on('close', (code) => {
@@ -62,12 +69,38 @@ function psField(pid: number, field: string): Promise<string | null> {
   })
 }
 
-export async function getPidComm(pid: number): Promise<string | null> {
-  return psField(pid, 'comm')
-}
-
-export async function getPidStartTime(pid: number): Promise<string | null> {
-  return psField(pid, 'lstart')
+/**
+ * Read both comm (kernel-tracked executable name) and lstart (process
+ * start time) for a PID via a single ps invocation.
+ *
+ * Halves the fork/exec cost of identity verification compared with two
+ * separate `ps -o comm=` and `ps -o lstart=` calls. The combined output
+ * format is `<comm> <lstart>` where comm is a single token and lstart is
+ * a multi-word date string (e.g., `Tue Apr 28 23:45:30 2026`).
+ *
+ * Returns null on any failure mode (timeout, spawn error, non-zero exit,
+ * empty output, malformed output). Callers must treat null as "identity
+ * unverifiable; do not trust this PID."
+ */
+export async function getPidIdentity(
+  pid: number,
+): Promise<{ comm: string; lstart: string } | null> {
+  const raw = await runPs(['-p', String(pid), '-o', 'comm=,lstart='])
+  if (raw === null) return null
+  // Splitting on the first whitespace is safe because `comm` is the kernel-
+  // tracked process name field, which is a single non-whitespace token capped
+  // at 15 chars on Linux and 16 chars on macOS. `lstart` is the multi-word
+  // date string that follows. If a future refactor adds different `-o` fields
+  // or runs on a platform that pads `comm` differently, this parse silently
+  // truncates at the first whitespace — the identity gate would then fail
+  // safe (skip, not kill) because the truncated value won't match the
+  // recorded one.
+  const firstWs = raw.search(/\s/)
+  if (firstWs === -1) return null
+  const comm = raw.slice(0, firstWs)
+  const lstart = raw.slice(firstWs).trim()
+  if (!comm || !lstart) return null
+  return { comm, lstart }
 }
 
 interface PidEntry {
@@ -87,48 +120,75 @@ function parseLine(line: string): PidEntry | null {
   return { pid, comm: parts[1], lstart: parts[2] }
 }
 
+/**
+ * Maximum concurrent ps probes during reap. A streaming worker pool of
+ * this size drains the entry queue without head-of-line blocking: a slow
+ * probe in one worker doesn't stall the others.
+ */
+const MAX_CONCURRENT_PROBES = 5
+
+async function processEntry(
+  entry: PidEntry,
+  killProcessTree: ReapDeps['killProcessTree'],
+  getPidIdentity: ReapDeps['getPidIdentity'],
+): Promise<{ reaped: boolean; skipped: boolean }> {
+  try {
+    process.kill(entry.pid, 0)
+  } catch {
+    return { reaped: false, skipped: true }
+  }
+
+  const live = await getPidIdentity(entry.pid)
+
+  if (
+    live === null ||
+    live.comm !== entry.comm ||
+    live.lstart !== entry.lstart
+  ) {
+    return { reaped: false, skipped: true }
+  }
+
+  try {
+    await killProcessTree(entry.pid)
+    return { reaped: true, skipped: false }
+  } catch {
+    return { reaped: false, skipped: true }
+  }
+}
+
 async function processEntries(
   entries: PidEntry[],
   killProcessTree: ReapDeps['killProcessTree'],
-  getPidComm: ReapDeps['getPidComm'],
-  getPidStartTime: ReapDeps['getPidStartTime'],
+  getPidIdentity: ReapDeps['getPidIdentity'],
 ): Promise<{ reaped: number; skipped: number }> {
   let reaped = 0
   let skipped = 0
 
-  for (let i = 0; i < entries.length; i += 5) {
-    const chunk = entries.slice(i, i + 5)
-    const results = await Promise.all(
-      chunk.map(async (entry) => {
-        try {
-          process.kill(entry.pid, 0)
-        } catch {
-          return { reaped: false, skipped: true }
-        }
-
-        const [liveComm, liveLstart] = await Promise.all([
-          getPidComm(entry.pid),
-          getPidStartTime(entry.pid),
-        ])
-
-        if (liveComm !== entry.comm || liveLstart !== entry.lstart) {
-          return { reaped: false, skipped: true }
-        }
-
-        try {
-          await killProcessTree(entry.pid)
-          return { reaped: true, skipped: false }
-        } catch {
-          return { reaped: false, skipped: true }
-        }
-      }),
-    )
-
-    for (const r of results) {
-      if (r.reaped) reaped++
-      else if (r.skipped) skipped++
+  // Streaming worker pool: spawn up to MAX_CONCURRENT_PROBES workers that
+  // drain a shared queue independently. Each worker pulls the next entry,
+  // processes it, and loops until the queue is empty. A slow probe blocks
+  // only its own worker; the other workers keep making progress.
+  //
+  // Single-threaded JS guarantees `queue.shift()` is atomic: there is no
+  // window between the length check and the shift where another worker
+  // can interleave.
+  const queue = [...entries]
+  const workerCount = Math.min(MAX_CONCURRENT_PROBES, entries.length)
+  const workers = Array.from({ length: workerCount }, async () => {
+    while (true) {
+      const entry = queue.shift()
+      if (!entry) return
+      const result = await processEntry(entry, killProcessTree, getPidIdentity)
+      // Mutating shared `reaped`/`skipped` from concurrent workers is safe
+      // because JS executes each ++ as a single synchronous read-modify-write
+      // with no yield between the read and the store. Workers only interleave
+      // at await boundaries, never inside a ++.
+      if (result.reaped) reaped++
+      else if (result.skipped) skipped++
     }
-  }
+  })
+
+  await Promise.all(workers)
 
   return { reaped, skipped }
 }
@@ -183,8 +243,7 @@ async function reapOneFile(
   currentInstancePath: string,
   isPluginAlive: ReapDeps['isPluginAlive'],
   killProcessTree: ReapDeps['killProcessTree'],
-  getPidComm: ReapDeps['getPidComm'],
-  getPidStartTime: ReapDeps['getPidStartTime'],
+  getPidIdentity: ReapDeps['getPidIdentity'],
 ): Promise<ReapFileOutcome> {
   const empty: ReapFileOutcome = {
     reaped: 0,
@@ -205,8 +264,7 @@ async function reapOneFile(
   const { reaped, skipped } = await processEntries(
     entries,
     killProcessTree,
-    getPidComm,
-    getPidStartTime,
+    getPidIdentity,
   )
   const deleted = await cleanupAfterReap(
     filePath,
@@ -220,16 +278,14 @@ export async function reapOrphans(opts: {
   pidFileDir: string
   currentInstancePath: string
   killProcessTree: ReapDeps['killProcessTree']
-  getPidComm: ReapDeps['getPidComm']
-  getPidStartTime: ReapDeps['getPidStartTime']
+  getPidIdentity: ReapDeps['getPidIdentity']
   isPluginAlive?: ReapDeps['isPluginAlive']
 }): Promise<ReapResult> {
   const {
     pidFileDir,
     currentInstancePath,
     killProcessTree,
-    getPidComm,
-    getPidStartTime,
+    getPidIdentity,
     isPluginAlive = defaultIsPluginAlive,
   } = opts
 
@@ -265,8 +321,7 @@ export async function reapOrphans(opts: {
       currentInstancePath,
       isPluginAlive,
       killProcessTree,
-      getPidComm,
-      getPidStartTime,
+      getPidIdentity,
     )
 
     reaped += outcome.reaped

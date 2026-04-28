@@ -4,6 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   defaultIsPluginAlive,
+  getPidIdentity,
   type ReapResult,
   reapOrphans,
 } from '../src/runtime/orphan-reaper'
@@ -42,8 +43,7 @@ describe('orphan-reaper', () => {
         pidFileDir: dir,
         currentInstancePath: currentPath,
         killProcessTree: async () => {},
-        getPidComm: async () => null,
-        getPidStartTime: async () => null,
+        getPidIdentity: async () => null,
       })
 
       expect(res).toEqual(result())
@@ -64,8 +64,7 @@ describe('orphan-reaper', () => {
         killProcessTree: async (pid) => {
           killedPids.push(pid)
         },
-        getPidComm: async () => 'copilot',
-        getPidStartTime: async () => 't1',
+        getPidIdentity: async () => ({ comm: 'copilot', lstart: 't1' }),
       })
 
       expect(res).toEqual(
@@ -105,13 +104,9 @@ describe('orphan-reaper', () => {
         killProcessTree: async (pid) => {
           killedPids.push(pid)
         },
-        getPidComm: async (pid) => {
-          if (pid === process.pid || pid === process.ppid) return 'copilot'
-          return null
-        },
-        getPidStartTime: async (pid) => {
-          if (pid === process.pid) return 't1'
-          if (pid === process.ppid) return 't3'
+        getPidIdentity: async (pid) => {
+          if (pid === process.pid) return { comm: 'copilot', lstart: 't1' }
+          if (pid === process.ppid) return { comm: 'copilot', lstart: 't3' }
           return null
         },
         isPluginAlive: (pid) => {
@@ -150,8 +145,7 @@ describe('orphan-reaper', () => {
         killProcessTree: async (pid) => {
           killedPids.push(pid)
         },
-        getPidComm: async () => 'copilot',
-        getPidStartTime: async () => 't1',
+        getPidIdentity: async () => ({ comm: 'copilot', lstart: 't1' }),
         isPluginAlive: () => true,
       })
 
@@ -180,8 +174,7 @@ describe('orphan-reaper', () => {
           pidFileDir: dir,
           currentInstancePath: currentPath,
           killProcessTree: async () => {},
-          getPidComm: async () => null,
-          getPidStartTime: async () => null,
+          getPidIdentity: async () => null,
         })
 
         expect(res).toEqual(result())
@@ -207,8 +200,7 @@ describe('orphan-reaper', () => {
         pidFileDir: dir,
         currentInstancePath: currentPath,
         killProcessTree: async () => {},
-        getPidComm: async () => null,
-        getPidStartTime: async () => null,
+        getPidIdentity: async () => null,
         isPluginAlive: (pid) => pid !== 9999,
       })
 
@@ -231,8 +223,7 @@ describe('orphan-reaper', () => {
         pidFileDir: dir,
         currentInstancePath: currentPath,
         killProcessTree: async () => {},
-        getPidComm: async () => 'not-copilot',
-        getPidStartTime: async () => 't1',
+        getPidIdentity: async () => ({ comm: 'not-copilot', lstart: 't1' }),
         isPluginAlive: (pid) => pid !== 9999,
       })
 
@@ -254,8 +245,7 @@ describe('orphan-reaper', () => {
         pidFileDir: dir,
         currentInstancePath: currentPath,
         killProcessTree: async () => {},
-        getPidComm: async () => 'not-copilot',
-        getPidStartTime: async () => 't1',
+        getPidIdentity: async () => ({ comm: 'not-copilot', lstart: 't1' }),
       })
 
       expect(res).toEqual(
@@ -276,8 +266,10 @@ describe('orphan-reaper', () => {
         pidFileDir: dir,
         currentInstancePath: currentPath,
         killProcessTree: async () => {},
-        getPidComm: async () => 'copilot',
-        getPidStartTime: async () => 'different-time',
+        getPidIdentity: async () => ({
+          comm: 'copilot',
+          lstart: 'different-time',
+        }),
       })
 
       expect(res).toEqual(
@@ -296,8 +288,7 @@ describe('orphan-reaper', () => {
         pidFileDir: dir,
         currentInstancePath: currentPath,
         killProcessTree: async () => {},
-        getPidComm: async () => null,
-        getPidStartTime: async () => null,
+        getPidIdentity: async () => null,
       })
 
       expect(res).toEqual(
@@ -308,7 +299,51 @@ describe('orphan-reaper', () => {
   })
 
   describe('concurrency', () => {
-    it('should cap concurrent getPidComm invocations at 5 for 10 entries', async () => {
+    it('should not block subsequent entries on a single slow probe (streaming worker pool)', async () => {
+      const dir = makeTempDir()
+      const currentPath = join(dir, `${process.pid}.pids`)
+      let callCount = 0
+      let slowFinished = false
+      let finishedBeforeSlow = 0
+
+      const entries = Array.from({ length: 10 }, () => ({
+        pid: process.pid,
+        comm: 'copilot',
+        lstart: 't0',
+      }))
+      writePidFile(currentPath, entries)
+
+      const res = await reapOrphans({
+        pidFileDir: dir,
+        currentInstancePath: currentPath,
+        killProcessTree: async () => {},
+        getPidIdentity: async () => {
+          callCount++
+          const isSlow = callCount === 1
+          const delay = isSlow ? 200 : 10
+          await new Promise((r) => setTimeout(r, delay))
+          if (isSlow) {
+            slowFinished = true
+          } else if (!slowFinished) {
+            finishedBeforeSlow++
+          }
+          return { comm: 'copilot', lstart: 't0' }
+        },
+      })
+
+      expect(res.reaped).toBe(10)
+      // With a streaming worker pool: the slow probe occupies worker 0 for
+      // 200ms; workers 1–4 each handle ~2-3 of the remaining 9 fast probes
+      // (10ms each) and finish well before t=200ms. All 9 fast probes complete
+      // before the slow one, hence the >= 9 lower bound.
+      //
+      // With chunked-of-5: the first chunk of 5 (1 slow + 4 fast) waits for
+      // the slow probe at t=200ms; the next chunk of 5 fast probes only starts
+      // at t=200ms and all finish AFTER the slow one, yielding exactly 4.
+      expect(finishedBeforeSlow).toBeGreaterThanOrEqual(9)
+    })
+
+    it('should cap concurrent getPidIdentity invocations at 5 for 10 entries', async () => {
       const dir = makeTempDir()
       const currentPath = join(dir, `${process.pid}.pids`)
       let maxConcurrent = 0
@@ -325,16 +360,12 @@ describe('orphan-reaper', () => {
         pidFileDir: dir,
         currentInstancePath: currentPath,
         killProcessTree: async () => {},
-        getPidComm: async () => {
+        getPidIdentity: async () => {
           currentConcurrent++
           maxConcurrent = Math.max(maxConcurrent, currentConcurrent)
           await new Promise((r) => setTimeout(r, 30))
           currentConcurrent--
-          return 'copilot'
-        },
-        getPidStartTime: async () => {
-          await new Promise((r) => setTimeout(r, 30))
-          return 't0'
+          return { comm: 'copilot', lstart: 't0' }
         },
       })
 
@@ -360,8 +391,7 @@ describe('orphan-reaper', () => {
         pidFileDir: dir,
         currentInstancePath: currentPath,
         killProcessTree: async () => {},
-        getPidComm: async () => 'copilot',
-        getPidStartTime: async () => 't1',
+        getPidIdentity: async () => ({ comm: 'copilot', lstart: 't1' }),
       })
 
       expect(res).toEqual(
@@ -386,13 +416,9 @@ describe('orphan-reaper', () => {
           if (pid === process.pid) throw new Error('kill failed')
           killedPids.push(pid)
         },
-        getPidComm: async (pid) => {
-          if (pid === process.pid || pid === process.ppid) return 'copilot'
-          return null
-        },
-        getPidStartTime: async (pid) => {
-          if (pid === process.pid) return 't1'
-          if (pid === process.ppid) return 't2'
+        getPidIdentity: async (pid) => {
+          if (pid === process.pid) return { comm: 'copilot', lstart: 't1' }
+          if (pid === process.ppid) return { comm: 'copilot', lstart: 't2' }
           return null
         },
       })
@@ -403,7 +429,7 @@ describe('orphan-reaper', () => {
       expect(killedPids).toEqual([process.ppid])
     })
 
-    it('should skip when getPidStartTime returns null for alive PID', async () => {
+    it('should skip when getPidIdentity returns null for alive PID', async () => {
       const dir = makeTempDir()
       const currentPath = join(dir, `${process.pid}.pids`)
 
@@ -415,8 +441,7 @@ describe('orphan-reaper', () => {
         pidFileDir: dir,
         currentInstancePath: currentPath,
         killProcessTree: async () => {},
-        getPidComm: async () => 'copilot',
-        getPidStartTime: async () => null,
+        getPidIdentity: async () => null,
       })
 
       expect(res).toEqual(
@@ -429,8 +454,7 @@ describe('orphan-reaper', () => {
         pidFileDir: '/nonexistent/dir/for/sure',
         currentInstancePath: '/nonexistent/dir/for/sure/test.pids',
         killProcessTree: async () => {},
-        getPidComm: async () => null,
-        getPidStartTime: async () => null,
+        getPidIdentity: async () => null,
       })
 
       expect(res).toEqual(result())
@@ -444,6 +468,23 @@ describe('orphan-reaper', () => {
 
     it('should return false for non-existent PID', () => {
       expect(defaultIsPluginAlive(99999)).toBe(false)
+    })
+  })
+
+  describe('getPidIdentity', () => {
+    it('should return both comm and lstart for the current process from a single ps call', async () => {
+      const identity = await getPidIdentity(process.pid)
+      expect(identity).not.toBeNull()
+      expect(typeof identity?.comm).toBe('string')
+      expect(identity?.comm.length).toBeGreaterThan(0)
+      expect(typeof identity?.lstart).toBe('string')
+      expect(identity?.lstart.length).toBeGreaterThan(0)
+    })
+
+    it('should return null for a non-existent PID', async () => {
+      // 4_194_305 is above pid_max on Linux/macOS, guaranteed not assigned.
+      const identity = await getPidIdentity(4_194_305)
+      expect(identity).toBeNull()
     })
   })
 })

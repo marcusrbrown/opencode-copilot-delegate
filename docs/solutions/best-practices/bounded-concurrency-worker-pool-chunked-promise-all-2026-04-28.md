@@ -24,25 +24,24 @@ tags:
 
 ## Context
 
-Bounded concurrency is useful when you have a batch of independent async tasks, you want more throughput than a plain `for` loop, but a full worker-pool abstraction would be gratuitous. In this repo, `processEntries` in `src/runtime/orphan-reaper.ts` runs a small one-shot batch during plugin init, and each probe has an explicit 1-second ceiling via `psField` (`src/runtime/orphan-reaper.ts:29-38`). That bounded per-task latency is what makes a chunked `Promise.all` pattern viable here: the worst-case stall per chunk is known up front.
+Bounded concurrency is useful when you have a batch of independent async tasks, you want more throughput than a plain `for` loop, but a full worker-pool abstraction would be gratuitous. The orphan reaper in `src/runtime/orphan-reaper.ts` shipped this pattern in v0.1.1 (chunked-of-5 with `Promise.all`) and then moved to a streaming worker pool in the v0.1.1 → next-release work because the head-of-line blocking property became visible under loaded conditions. Both patterns are documented here: chunked is the simpler tradeoff when per-task latency is bounded and uniform; streaming is the right pick when one slow task should not delay the next ready task.
 
 ## Guidance
 
 Use a fixed chunk size, slice the input into waves, and `await Promise.all(chunk.map(...))` for each wave. That gives you "at most K entries in flight" with no dependency, semaphore, queue, or token bucket.
 
-In the shipped code, the cap is currently an inline literal `5` in `src/runtime/orphan-reaper.ts:99-100`, not a named `MAX_CONCURRENT_PROBES` constant. The learning still holds: make the cap explicit, keep it small, and treat it as a deliberate latency-vs-simplicity tradeoff, not a magic number.
+Make the cap explicit, keep it small, and treat it as a deliberate latency-vs-simplicity tradeoff, not a magic number. The orphan reaper now extracts `MAX_CONCURRENT_PROBES = 5` as a named top-level constant alongside the streaming pool implementation.
 
-`5` is a reasonable choice here because it cuts a 10-entry file from roughly 10 sequential waves to 2 waves, while keeping the implementation tiny. The cost is explicit head-of-line blocking: chunk `N+1` cannot start until the slowest task in chunk `N` finishes.
+`5` is a reasonable choice for orphan-reap workloads because it cuts a 10-entry file from roughly 10 sequential waves to 2 waves, while keeping the implementation tiny. The cost is explicit head-of-line blocking: chunk `N+1` cannot start until the slowest task in chunk `N` finishes.
 
-One nuance from the real code: the cap is on **entries**, not individual `ps` children. Each entry then fans out into `getPidComm` and `getPidStartTime` concurrently (`src/runtime/orphan-reaper.ts:109-112`), so a 5-entry chunk can mean up to **10 concurrent `ps` subprocesses**. The current concurrency test only tracks `getPidComm`, so it proves the entry-wave shape, not total subprocess concurrency (`tests/orphan-reaper.test.ts:311-343`).
+One nuance worth preserving from the v0.1.1 implementation: the cap was on **entries**, not individual `ps` children. Each entry fanned out into `getPidComm` and `getPidStartTime` concurrently, so a 5-entry chunk could mean up to **10 concurrent `ps` subprocesses**. The next-release work consolidates those two calls into a single `getPidIdentity(pid)` invocation that returns `{ comm, lstart }` from one `ps -p <pid> -o comm=,lstart=` call, halving the fork/exec cost and making the concurrency-cap math match reality (5 workers ⇒ at most 5 concurrent `ps` subprocesses).
 
-Actual timeout bound:
+Timeout bound (still applies in the streaming pool):
 
 ```ts
-// src/runtime/orphan-reaper.ts:29-38
-function psField(pid: number, field: string): Promise<string | null> {
+function runPs(args: string[]): Promise<string | null> {
   return new Promise((resolve) => {
-    const child = spawn('ps', ['-p', String(pid), '-o', `${field}=`])
+    const child = spawn('ps', args)
     let stdout = ''
     let timedOut = false
 
@@ -52,10 +51,9 @@ function psField(pid: number, field: string): Promise<string | null> {
     }, 1000)
 ```
 
-Actual chunked loop:
+The v0.1.1 chunked loop (since replaced):
 
 ```ts
-// src/runtime/orphan-reaper.ts:99-125
 for (let i = 0; i < entries.length; i += 5) {
   const chunk = entries.slice(i, i + 5)
   const results = await Promise.all(
@@ -76,26 +74,7 @@ for (let i = 0; i < entries.length; i += 5) {
       }
 ```
 
-Actual concurrency-cap test:
-
-```ts
-// tests/orphan-reaper.test.ts:311-343
-it('should cap concurrent getPidComm invocations at 5 for 10 entries', async () => {
-  let maxConcurrent = 0
-  let currentConcurrent = 0
-
-  const res = await reapOrphans({
-    // ...
-    getPidComm: async () => {
-      currentConcurrent++
-      maxConcurrent = Math.max(maxConcurrent, currentConcurrent)
-      await new Promise((r) => setTimeout(r, 30))
-      currentConcurrent--
-      return 'copilot'
-    },
-```
-
-If you present this pattern as guidance, be explicit about the head-of-line property:
+If you present the chunked pattern as guidance, be explicit about the head-of-line property:
 
 - wave 1 starts up to 5 entries
 - fast entries in wave 1 still wait for the slowest sibling
@@ -105,9 +84,11 @@ That is not a bug. It is the cost you are accepting in exchange for radical simp
 
 ## Why This Matters
 
-This pattern sits in the useful middle ground between "totally sequential" and "build a real worker pool." Here, that middle ground is justified because the work runs once at plugin init, each probe has a hard 1-second timeout (`src/runtime/orphan-reaper.ts:35-38`), and each file contains at most 10 entries, so even the chunked worst case is still within a soft startup budget. On a hot path, or anywhere tail latency matters, the same head-of-line blocking would be the wrong trade.
+Chunked `Promise.all` sits in the useful middle ground between "totally sequential" and "build a real worker pool." It was justified for v0.1.1 because the work runs once at plugin init, each probe has a hard 1-second timeout, and each file contains at most 10 entries, so even the chunked worst case is still within a soft startup budget.
 
-Documenting that tradeoff matters because the current implementation is intentionally the pragmatic minimum, not the universally best concurrency pattern. Future contributors should feel free to upgrade it to a streaming pool if the batch size grows, the timeout bound disappears, or init latency starts mattering more; that is exactly the kind of follow-up tracked by issue #49.
+The move to a streaming worker pool came from a real observation: under loaded conditions a single slow `ps` invocation (occasionally 100s of milliseconds) blocks four sibling probes idly until the slow one returns, which can blow that soft init budget by 5–10x. A streaming pool keeps the same `MAX_CONCURRENT_PROBES = 5` cap without that blocking.
+
+The chunked pattern is still the right choice when per-task latency is genuinely bounded and uniform, when the batch is tiny, or when reading the code without context is more important than tail-latency tuning. The decision is a tradeoff between simplicity and tail-latency behavior, not a one-way upgrade.
 
 ## When to Apply
 
@@ -159,9 +140,9 @@ for (const entry of entries) {
 
 Use this when the batch is tiny or clarity matters more than total wall time.
 
-### 2) Current repo pattern — chunked waves of 5
+### 2) Chunked waves of 5 — the v0.1.1 shipped pattern (since replaced)
 
-This is the actual shipped approach in `src/runtime/orphan-reaper.ts:99-125`. It processes 10 entries in two waves of 5, so with bounded 1-second probes the batch is roughly `2 * timeout` in the "one slow entry per wave" shape.
+This was the v0.1.1 approach. It processes 10 entries in two waves of 5, so with bounded 1-second probes the batch is roughly `2 * timeout` in the "one slow entry per wave" shape.
 
 ```ts
 // src/runtime/orphan-reaper.ts:99-125
@@ -200,59 +181,45 @@ for (let i = 0; i < entries.length; i += 5) {
 }
 ```
 
-Why this is fine here:
+Why chunked was fine for v0.1.1:
 
-- bounded per-task timeout: `psField(..., 1000ms)` in `src/runtime/orphan-reaper.ts:35-38`
+- bounded per-task timeout (1s SIGTERM ceiling)
 - cold path: orphan cleanup during plugin init
 - small batch: up to 10 entries per file
 - tiny implementation surface
 
-Why it is not ideal:
+Why chunked stopped being the right tradeoff:
 
-- chunk `2` waits for the slowest task in chunk `1`
-- the literal `5` is currently inline, so the cap is implicit rather than named
-- real subprocess fan-out is higher than the test suggests because each entry does two probe calls in parallel
+- chunk `N+1` waits for the slowest task in chunk `N`
+- one slow `ps` (300-500ms is realistic on loaded systems) idles four sibling workers
+- batch wall time becomes `chunk_count * slowest_in_each_chunk`, which dominates init under load
 
-### 3) Streaming worker pool sketch — better tail behavior, more machinery
+### 3) Streaming worker pool — the now-shipped pattern
 
-A streaming pool keeps `K` tasks in flight and starts the next task as soon as any slot frees up. For the same "two slow entries total, everything else fast" distribution that makes chunked-of-5 take about 2 seconds, a streaming pool of 5 can overlap both slow entries and finish in about 1 second.
+A streaming pool spawns up to `K` workers that drain a shared queue independently. A slow probe blocks only its own worker; the others keep making progress. For the same "one slow entry, rest fast" distribution that takes the chunked pattern about 2 seconds, a streaming pool of 5 finishes in about 1 second, because the 9 fast probes don't have to wait for chunk-boundary synchronization.
 
 ```ts
-// illustrative streaming pool sketch, not the shipped code
 const queue = [...entries]
-const workers = Array.from({ length: 5 }, async () => {
-  while (queue.length > 0) {
+const workerCount = Math.min(MAX_CONCURRENT_PROBES, entries.length)
+const workers = Array.from({ length: workerCount }, async () => {
+  while (true) {
     const entry = queue.shift()
     if (!entry) return
-
-    try {
-      process.kill(entry.pid, 0)
-    } catch {
-      skipped++
-      continue
-    }
-
-    const [liveComm, liveLstart] = await Promise.all([
-      getPidComm(entry.pid),
-      getPidStartTime(entry.pid),
-    ])
-
-    if (liveComm !== entry.comm || liveLstart !== entry.lstart) {
-      skipped++
-      continue
-    }
-
-    try {
-      await killProcessTree(entry.pid)
-      reaped++
-    } catch {
-      skipped++
-    }
+    const result = await processEntry(entry, killProcessTree, getPidIdentity)
+    if (result.reaped) reaped++
+    else if (result.skipped) skipped++
   }
 })
 
 await Promise.all(workers)
 ```
+
+Key properties:
+
+- `queue.shift()` is atomic in single-threaded JS — no race between the length check and the shift
+- `reaped`/`skipped` increments are also atomic from the perspective of concurrent async functions; no yield happens between the `++` read and write
+- a slow probe in worker `i` doesn't block workers `j ≠ i` from picking up new entries
+- the cap stays at `MAX_CONCURRENT_PROBES = 5`, so concurrency math is unchanged
 
 This is the better pattern when:
 
@@ -260,8 +227,6 @@ This is the better pattern when:
 - task runtimes vary a lot
 - the batch is larger
 - you want the queue to keep draining as soon as a fast task finishes
-
-But it is also more moving parts, more shared-state care, and more code than the repo currently needs.
 
 ### Timing summary
 

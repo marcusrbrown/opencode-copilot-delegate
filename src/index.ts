@@ -4,11 +4,7 @@ import type { Plugin } from '@opencode-ai/plugin'
 import { discoverAgents } from './discovery/agents'
 import { buildDescription } from './discovery/description'
 import { killProcessTree } from './lib/kill-tree'
-import {
-  getPidComm,
-  getPidStartTime,
-  reapOrphans,
-} from './runtime/orphan-reaper'
+import { getPidIdentity, reapOrphans } from './runtime/orphan-reaper'
 import { resolveInstancePidFilePath } from './runtime/pid-file'
 import { createCancelTool } from './tools/cancel'
 import { createDelegateTool } from './tools/delegate'
@@ -40,8 +36,7 @@ const CopilotDelegate: Plugin = async ({ client, directory }) => {
       pidFileDir,
       currentInstancePath,
       killProcessTree,
-      getPidComm,
-      getPidStartTime,
+      getPidIdentity,
     })
   } catch {
     // mkdir or reap failure must not block plugin init.
