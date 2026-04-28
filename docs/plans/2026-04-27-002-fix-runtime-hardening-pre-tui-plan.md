@@ -3,6 +3,7 @@ title: "fix: pre-TUI runtime hardening (orphan reaper + cancel-race parser guard
 type: fix
 status: active
 date: 2026-04-27
+deepened: 2026-04-27
 origin: docs/brainstorms/2026-04-27-copilot-status-tui-requirements.md
 target_release: v0.1.1
 follow_up_plan: docs/plans/2026-04-27-001-feat-copilot-status-tui-foundation-plan.md
@@ -59,22 +60,32 @@ Both bugs predate the v0.2.0 TUI work. They were identified during planning for 
 
 ## Key Technical Decisions
 
-- **PID file location**: `<XDG_STATE_HOME or ~/.local/state>/opencode-copilot-delegate/orphans.pids`. Plain text, line-delimited, format `<pid>\t<ps-lstart-output>` (tab-separated to avoid colon ambiguity in the lstart string). Parent directory created with `0o700`; file written with `0o600`.
-- **Start-time source for the recorded value**: at task spawn, immediately invoke `ps -p <pid> -o lstart=` (array-spawn, no shell) and store the returned string verbatim. This guarantees the recorded value matches the format `ps` will return at reap time. (Do **not** use `task.startedAt` epoch ms — `ps` and `Date.now()` produce incomparable strings.)
-- **`ps` invocation**: `child_process.spawn('ps', ['-p', String(pid), '-o', 'lstart='])` with no shell. Eliminates command-injection risk if the PID file is malformed.
-- **PID-file lock strategy**: `node:fs` `O_EXCL` temp-file + atomic `rename` for both append and remove. No new dep. **Atomic rename prevents partial reads and corrupt-line interleaving but does NOT serialize concurrent read-modify-write** — under high concurrency (10x simultaneous `appendPidEntry`), the worst case is last-write-wins where one writer's content is clobbered by a slightly-stale concurrent writer's rename. Acceptable here because: (a) the existing 10-concurrent cap bounds the contention, (b) a missed-append surfaces as the subprocess never being tracked at all, which means the reaper does nothing for it on next reload — same behavior as today, no regression, and (c) a missed-removal surfaces as an extra reap-attempt of an already-dead PID, which the reaper handles idempotently (Unit 2 scenario). The constant lives in `fs.constants.O_EXCL` (not `os.constants`).
-- **PID-validate-before-kill**: Before invoking `killProcessTree(pid)`, double-check that the process command line contains `copilot` via `ps -p <pid> -o args=` (array-spawn). If the command does not match, skip with a logged warning. Defense-in-depth against malicious PID file injection (file perms 0o600 are the primary defense).
-- **Reap sequencing**: Reap runs synchronously during plugin init, before the plugin returns. v0.2.0's RPC server starts after this completes. v0.1.1 has no RPC server, so the only consumer of the post-reap state is the registry itself.
+- **PID file location (per-instance)**: `<XDG_STATE_HOME or ~/.local/state>/opencode-copilot-delegate/orphans/<discriminator>.pids`, where `<discriminator>` is `OPENCODE_SESSION_ID ?? String(process.pid)` (mirrors v0.2.0's port-file pattern). Plain text, line-delimited, format `<pid>\t<comm>\t<lstart>` (tab-separated; the `comm` value is the kernel-tracked executable name from `ps -o comm=` and is later used as the kill-gate identity check). Parent directory `<state-dir>/orphans/` created with `0o700`; per-instance files created with `0o600`. **Per-instance keying eliminates the cross-instance file-clobbering risk** that a single shared `orphans.pids` file would create — concurrent OpenCode sessions each read/write/truncate only their own file, and the reaper scans the whole `<state-dir>/orphans/` directory at startup so survivors from previous instances (with different discriminators) are still recovered.
+- **Start-time source for the recorded value**: at task spawn, immediately invoke `ps -p <pid> -o lstart=` (array-spawn, no shell) and store the returned string verbatim alongside `comm`. This guarantees the recorded value matches the format `ps` will return at reap time. (Do **not** use `task.startedAt` epoch ms — `ps` and `Date.now()` produce incomparable strings.)
+- **`ps` invocation**: `child_process.spawn('ps', ['-p', String(pid), '-o', '<field>='])` with no shell, where `<field>` is `lstart`, `comm`, or (for diagnostic logging) `args`. Eliminates command-injection risk if the PID file is malformed.
+- **PID file write strategy**: `node:fs` `O_EXCL` temp-file + atomic `rename` for both append and remove. No new dep. **Per-instance keying means single-writer per file** — there is no cross-instance contention, and within an instance a process-local serialization queue (a `Promise` chain in `pid-file.ts`) orders concurrent appends/removes from the existing `MAX_CONCURRENT = 10` task lifecycle without needing a `proper-lockfile`-style cross-process lock. The combination guarantees no lost appends, no torn writes, and idempotent removal. The flag constant lives in `fs.constants.O_EXCL` (not `os.constants`).
+- **PID-validate-before-kill (executable identity, exact `comm` match)**: Before invoking `killProcessTree(pid)`, validate that the process's kernel-tracked executable name from `ps -p <pid> -o comm=` (array-spawn, exact-string compare) matches the `<comm>` value recorded at spawn time. `comm` returns the binary name only — no arguments, no full path — which closes the false-positive class where a process's `args` happens to contain the substring `copilot` (e.g., `cat /tmp/copilot-output.log`, a manually-invoked GitHub Copilot CLI command running on the same host, or a shell script with `copilot` in its path or argv). Combined with the start-time match, the kill gate requires (live PID = recorded PID) AND (live comm = recorded comm) AND (live lstart = recorded lstart) — collisions are statistically impossible without deliberate forging, and forging requires write access to a 0o600 PID file inside a 0o700 directory.
+- **Reap sequencing (awaited)**: Reap runs **awaited** inside the plugin factory, before the factory returns its `Hooks` object. The SDK's `Plugin = (input) => MaybePromise<Hooks>` contract guarantees the host won't dispatch tools until the factory resolves, so a same-instance "tool-call-before-reap-finishes" race cannot occur. v0.2.0's RPC server starts after this completes; v0.1.1 has no RPC server. **Implementation note**: wrap the reap call in try/catch — reap failure must never block plugin init.
+- **Reap latency budget (parallel probes)**: At `MAX_CONCURRENT = 10` historical entries across all `<state-dir>/orphans/*.pids` files, naive sequential per-PID `ps` shellouts could take 0.5-3s — unacceptable for plugin init. Reap probes run **in parallel with a small concurrency cap** (`Promise.all` over up to 5 simultaneous workers; each worker handles its assigned PIDs sequentially: liveness probe → `comm` check → `lstart` check → optional `killProcessTree`). Soft target: total reap time under 200ms at full cap on a typical macOS dev host. Verified by Unit 2's smoke test.
+- **Reap directory scan**: Reaper scans **all `*.pids` files** in `<state-dir>/orphans/` (not just its own discriminator's file) so survivors from previous OpenCode sessions — whose discriminator differs from the current process — are recovered. Each file is processed independently. After processing, only the current instance's own file is truncated/recreated for fresh tracking; other instances' files are left intact.
 - **Parser guard placement**: In `spawnCopilot`, at the top of the existing inline `child.stdout?.on('data', (chunk: string) => { ... })` handler. Inside the `for (const line of lines)` loop, the guard goes **before** `parseJsonlLine(line)` (not before `events.push(event)`) so a cancelled task does not pay the parse cost on already-buffered lines: `if (task.status !== 'running') break;`. The partial-line buffer update (`lines.pop()`) runs *before* the loop, so `break` and `return` would behave identically here — `break` is preferred for clarity. Single-threaded JS guarantees the guard is checked synchronously with every iteration, with no interleaving possible.
+- **Status-mutation refactor**: The current `src/runtime/subprocess.ts` mutates `task.status` inline at three sites — line 59 (`finalizeTask`, on subprocess `close` event), line 143 (abort listener), and line 153 (spawn `error` event). v0.1.1 introduces a `setStatus(task, newStatus)` helper that wraps the assignment and the `removePidEntry` cleanup as a single atomic-from-the-caller's-perspective operation. The three sites become `setStatus(task, 'complete' | 'failed' | 'cancelled')` calls. Centralizes lifecycle plumbing, prevents future contributors from forgetting the cleanup hook, and gives Unit 4's parser guard a stable invariant to read.
 
 ## Open Questions
 
 ### Resolved During Planning
 
-- **PID-file format**: tab-separated `<pid>\t<lstart-string>`. Captures the exact `ps` output verbatim.
+- **PID-file format**: tab-separated `<pid>\t<comm>\t<lstart>`. Captures both the kernel-tracked executable name and the start-time string from `ps`.
 - **Start-time source**: live `ps` at spawn time, not `Date.now()`. Eliminates format mismatch.
 - **`ps` shell vs array spawn**: array-spawn, no shell.
-- **PID-validate-before-kill via `ps -p <pid> -o args=`**: yes, as defense-in-depth.
+- **PID-validate-before-kill identity check**: exact `comm` match via `ps -p <pid> -o comm=`, not substring match on `args`. Closes the false-positive class where another process's argv happens to contain `copilot`.
+
+### Resolved During Deepening Pass (2026-04-27)
+
+- **Per-instance PID files vs single shared file**: shared `orphans.pids` was a real cross-instance integrity hole (one OpenCode session's end-of-reap truncate could wipe a live PID written by another session). Resolved to per-instance files at `<state-dir>/orphans/<discriminator>.pids`. The reaper scans the whole directory; only the current instance's own file is truncated post-reap.
+- **Reap blocking init**: keeping reap awaited inside the factory is correct (the SDK contract guarantees no tool dispatch until the factory resolves). The acceptability concern is latency, not sequencing. Resolved by parallelizing per-PID probes with a concurrency cap of 5; soft 200ms target at full cap.
+- **Status-mutation refactor**: three inline sites in `subprocess.ts` (lines 59, 143, 153) become a single `setStatus` helper. Centralizes the `removePidEntry` cleanup hook so future contributors can't forget it.
+- **Parallel reap probes**: `Promise.all` with concurrency cap of 5 (not unbounded) — bounded fan-out keeps the `ps` shellout cost predictable on hosts where individual `ps` calls are slow.
 
 ### Deferred to Implementation
 
@@ -85,17 +96,19 @@ Both bugs predate the v0.2.0 TUI work. They were identified during planning for 
 ```
 src/
 ├── runtime/
-│   ├── orphan-reaper.ts           # PID file reap logic + ps shell-out + validate-before-kill
-│   ├── pid-file.ts                # appendPidEntry, removePidEntry helpers
-│   ├── subprocess.ts              # (modified) parser guard at top of inline data handler
-│   └── task-registry.ts           # (modified) wire pid-file hooks on spawn + terminal transition
-└── index.ts                       # (modified) call reapOrphans during plugin init
+│   ├── orphan-reaper.ts           # Directory scan + parallel PID probes + comm/lstart identity gate
+│   ├── pid-file.ts                # appendPidEntry, removePidEntry, per-instance path resolver
+│   ├── subprocess.ts              # (modified) parser guard at top of inline data handler; 3 sites → setStatus calls
+│   ├── task-status.ts             # NEW: setStatus(task, newStatus) helper centralizing assignment + removePidEntry cleanup
+│   └── task-registry.ts           # (modified) wire appendPidEntry on spawn; pass setStatus to subprocess wiring
+└── index.ts                       # (modified) build per-instance pid file path; await reapOrphans before returning
 
 tests/
-├── orphan-reaper.test.ts          # Reap scenarios (alive matching, alive mismatched, dead, malformed, validate-before-kill)
-├── pid-file.test.ts               # Append, remove, concurrent writers, atomic rename
-├── subprocess.test.ts             # (modified) cancel-race scenario: post-cancel events not appended
-└── task-registry.test.ts          # (modified) PID-file hooks fire on spawn + terminal
+├── orphan-reaper.test.ts          # Directory scan, parallel probes with concurrency cap, comm-match identity gate, mixed-instance survivors
+├── pid-file.test.ts               # Append, remove, in-process serialization queue, atomic rename, per-instance path resolution
+├── task-status.test.ts            # NEW: setStatus calls removePidEntry on each terminal transition
+├── subprocess.test.ts             # (modified) cancel-race scenario: post-cancel events not appended; setStatus called from each of the 3 sites
+└── task-registry.test.ts          # (modified) PID-file hooks fire on spawn
 ```
 
 ## Implementation Units
@@ -113,22 +126,24 @@ tests/
 - Create: `tests/pid-file.test.ts`
 
 **Approach:**
-- Export `appendPidEntry(filePath, pid, startTimeString) → Promise<void>` and `removePidEntry(filePath, pid) → Promise<void>`.
-- Append: read existing content (or empty if missing), construct new content with the appended `<pid>\t<startTime>` line, write to `<path>.tmp.<random>` with `fs.constants.O_EXCL | O_CREAT | O_WRONLY` and `mode: 0o600`, `fs.rename` to final path, `fs.chmod(path, 0o600)` for belt-and-braces.
-- Remove: same flow, but compute new content by filtering out the matching `pid` prefix.
+- Export `appendPidEntry(filePath, pid, comm, startTimeString) → Promise<void>` and `removePidEntry(filePath, pid) → Promise<void>`. Also export `resolveInstancePidFilePath(): string` that builds `<state-dir>/orphans/<discriminator>.pids` from `OPENCODE_SESSION_ID ?? String(process.pid)`.
+- Append: read existing content (or empty if missing), construct new content with the appended `<pid>\t<comm>\t<startTime>` tab-separated line, write to `<path>.tmp.<random>` with `fs.constants.O_EXCL | O_CREAT | O_WRONLY` and `mode: 0o600`, `fs.rename` to final path, `fs.chmod(path, 0o600)` for belt-and-braces.
+- Remove: same flow, but compute new content by filtering out the matching `<pid>\t` prefix.
+- **In-process serialization**: a module-private `Promise` chain serializes all writes to the same path. `appendPidEntry` and `removePidEntry` both await the previous chain link before performing their atomic-rename cycle. This eliminates lost-update races within a single OpenCode session at the existing `MAX_CONCURRENT = 10` cap. Cross-instance contention is structurally impossible under the per-instance file design.
 - Ensure parent dir with `mkdir({ recursive: true, mode: 0o700 })`.
 - Both functions tolerate a missing file: append creates it; remove is a no-op.
 
 **Execution note:** Test-first per AGENTS.md mandate.
 
 **Test scenarios:**
-- *Happy path:* `appendPidEntry` to a fresh path → file exists with one line; mode is 0o600.
-- *Happy path:* `appendPidEntry` 3 times sequentially → file has 3 lines in order.
-- *Happy path:* `removePidEntry(pid)` on a file with 3 entries removes only the matching one.
-- *Edge case:* `appendPidEntry` to a non-existent parent dir → dir is created with 0o700; file written.
+- *Happy path:* `appendPidEntry` to a fresh path → file exists with one tab-separated `<pid>\t<comm>\t<lstart>` line; mode is `0o600`; parent dir mode is `0o700`.
+- *Happy path:* `appendPidEntry` 3 times sequentially → file has 3 lines in spawn order.
+- *Happy path:* `removePidEntry(pid)` on a file with 3 entries removes only the matching one; remaining order preserved.
+- *Edge case:* `appendPidEntry` to a non-existent parent dir → dir created with `0o700`; file written.
 - *Edge case:* `removePidEntry` for a PID not in the file → no-op, no error.
 - *Edge case:* `removePidEntry` on a missing file → no-op, no error.
-- *Concurrency:* `appendPidEntry` invoked 10x concurrently → file ends with **between 1 and 10 valid entries** (atomic rename prevents partial reads / corrupt lines but does NOT serialize concurrent read-modify-write — last-write-wins is acceptable; missed entries surface as an extra reap attempt of an already-dead PID, which is idempotent and tested in Unit 2). All entries that do appear are well-formed `<pid>\t<startTimeString>` lines.
+- *Concurrency:* `appendPidEntry` invoked 10x concurrently → file ends with **exactly 10 entries**, all well-formed (the in-process `Promise`-chain serialization queue orders the writes so no append is lost). This is a stronger guarantee than the v0.1 plan's 1..N expectation — verified test scenario.
+- *Path resolution:* `resolveInstancePidFilePath()` honors `OPENCODE_SESSION_ID` when set (returns `.../orphans/<session-id>.pids`); falls back to `String(process.pid)` when unset.
 - *Mode:* After both append and remove, file mode remains `0o600`.
 
 **Verification:** All scenarios pass; `bun run typecheck` + `bun run lint` clean.
@@ -148,67 +163,95 @@ tests/
 - Create: `tests/orphan-reaper.test.ts`
 
 **Approach:**
-- Export `reapOrphans({ pidFilePath, killProcessTree, getPidStartTime, getPidArgs }) → Promise<{ reaped: number, skipped: number }>`. Inject all process-shellouts for testability.
-- `getPidStartTime(pid)`: `spawn('ps', ['-p', String(pid), '-o', 'lstart='])` with no shell. Return trimmed stdout, or `null` on non-zero exit / process gone.
-- `getPidArgs(pid)`: `spawn('ps', ['-p', String(pid), '-o', 'args='])`. Return trimmed stdout, or `null`.
-- Read PID file; parse `<pid>\t<startTimeString>` per line; ignore malformed lines.
-- For each entry:
-  1. Probe liveness: `process.kill(pid, 0)` inside try/catch. Throws → process gone, skip + remove entry.
-  2. Check start-time match: live `getPidStartTime(pid)` === recorded value. Mismatch → PID reused, skip + remove entry (don't kill the unrelated process).
-  3. Validate command: `getPidArgs(pid)` contains `copilot`. No match → skip + log warning (defense-in-depth).
-  4. Kill: `killProcessTree(pid)` inside try/catch. Catch-all ensures one bad PID doesn't stop the loop.
-- After processing all entries, truncate the file (the reaped PIDs are now dead; new entries will be re-appended on subsequent task spawns).
-- Aggregate `reaped` / `skipped` counts; return.
+- Export `reapOrphans({ pidFileDir, currentInstancePath, killProcessTree, getPidComm, getPidStartTime }) → Promise<{ reaped: number, skipped: number, scannedFiles: number }>`. Inject all process-shellouts for testability.
+- `getPidComm(pid)`: `spawn('ps', ['-p', String(pid), '-o', 'comm='])` with no shell. Return trimmed stdout, or `null` on non-zero exit / process gone.
+- `getPidStartTime(pid)`: `spawn('ps', ['-p', String(pid), '-o', 'lstart='])` with no shell. Return trimmed stdout, or `null`.
+- **Directory scan**: `fs.readdir(pidFileDir)`; filter to `*.pids`. Iterate over every file (including foreign-discriminator survivors from previous sessions); read + parse each.
+- For each file: parse `<pid>\t<comm>\t<lstart>` per line; ignore malformed lines.
+- **Parallel per-PID probes** (`Promise.all` with concurrency cap of 5 via a small worker-pool helper): for each entry:
+  1. Probe liveness: `process.kill(pid, 0)` inside try/catch. Throws → process gone, skip; entry will be cleaned up when the file is rewritten.
+  2. Identity gate: `getPidComm(pid)` === recorded `comm` AND `getPidStartTime(pid)` === recorded `lstart`. Either mismatch → PID reused or unrelated process, skip + log warning.
+  3. Kill: `killProcessTree(pid)` inside try/catch. Catch-all ensures one bad PID doesn't stop the loop.
+- After processing each file:
+  - **Current instance's own file** (`currentInstancePath`): truncate (the reaped PIDs are now dead; new entries will be re-appended by `appendPidEntry` on subsequent task spawns within this session).
+  - **Other instances' files**: leave intact. They are owned by other plugin instances or by previous sessions whose plugin process exited without cleanup; the dead-PID entries inside them are harmless and will get cleaned the next time those discriminators reload.
+- Aggregate `reaped` / `skipped` / `scannedFiles` counts; return.
 
 **Execution note:** Test-first per AGENTS.md mandate.
 
 **Test scenarios:**
-- *Happy path:* Empty PID file → `{ reaped: 0, skipped: 0 }`; file truncated.
-- *Happy path:* One alive PID with matching start time + `copilot` in args → `killProcessTree` called once; `{ reaped: 1, skipped: 0 }`.
-- *Edge case (PID dead):* `process.kill(pid, 0)` throws → not killed; skipped; entry removed; `{ reaped: 0, skipped: 1 }`.
-- *Edge case (start-time mismatch):* Alive PID, recorded start time differs → not killed (PID reuse); skipped; entry removed.
-- *Edge case (args mismatch):* Alive PID, matching start time, but `args` does not contain `copilot` → not killed; skipped + warned.
-- *Edge case (mixed):* Three entries (alive-match, alive-args-mismatch, dead) → `{ reaped: 1, skipped: 2 }`; file empty after.
-- *Edge case (missing file):* `pidFilePath` does not exist → `{ reaped: 0, skipped: 0 }`; no error.
+- *Happy path:* Empty `pidFileDir` → `{ reaped: 0, skipped: 0, scannedFiles: 0 }`; no error.
+- *Happy path:* One file with one alive PID whose live `comm` and `lstart` match recorded → `killProcessTree` called once; `{ reaped: 1, skipped: 0, scannedFiles: 1 }`; current-instance file truncated.
+- *Happy path (multi-file mixed-instance):* `<dir>/A.pids` (current instance, 2 entries: 1 alive-match, 1 dead) + `<dir>/B.pids` (foreign-instance survivor, 1 entry: alive-match). Reap kills 2 live PIDs across both files; `scannedFiles: 2`; A is truncated; B is left intact (dead PIDs in foreign files are harmless).
+- *Edge case (PID dead):* `process.kill(pid, 0)` throws → not killed; counted as skipped; current file truncated post-reap.
+- *Edge case (`comm` mismatch):* Alive PID, but live `comm` differs from recorded → not killed (PID reuse or unrelated process); skipped + warned.
+- *Edge case (`lstart` mismatch):* Alive PID, matching `comm`, but live `lstart` differs from recorded → not killed (PID reuse); skipped + warned.
+- *Edge case (`args` substring red herring):* Alive PID whose `args` *contains* `copilot` (e.g., `cat /tmp/copilot-output.log`) but whose `comm` is `cat`, not `copilot` → not killed (defends the false-positive class). Verified by spawning a stub process with a tailored `argv[0]`/comm distinction.
+- *Concurrency:* 5 worker-pool cap respected: at 10 PIDs, no more than 5 concurrent `ps` shellouts in flight at any moment (assert via spy on the `ps` shellout counter).
+- *Latency:* Total reap with 10 alive-but-skipped entries completes in under 200ms on the dev host (soft target; not a hard assertion).
 - *Error path:* Malformed line → skipped silently; valid lines still processed.
-- *Error path:* `killProcessTree` throws (injected) → caught, counted as skipped; loop continues.
+- *Error path:* `killProcessTree` throws (injected) → caught, counted as skipped; loop continues across remaining entries.
 - *Error path:* `getPidStartTime` returns `null` for an alive PID (race) → skipped, no kill.
+- *Error path:* `fs.readdir(pidFileDir)` throws (dir missing) → returns `{ reaped: 0, skipped: 0, scannedFiles: 0 }`; no error propagation.
 
 **Verification:** All scenarios pass; manual smoke on macOS dev host: spawn `sleep 60`, write its PID + recorded start time, simulate plugin re-init, confirm sleep is killed. Smoke on Linux dev host: same.
 
 ---
 
-- [ ] **Unit 3: Wire pid-file hooks into task-registry**
+- [ ] **Unit 3: `setStatus` helper + wire pid-file hooks into spawn + plugin-init reap**
 
-**Goal:** Append on task spawn; remove on terminal transition.
+**Goal:** Append on task spawn. Centralize the 3 inline status mutations through a new `setStatus` helper that also calls `removePidEntry`. Build the per-instance pid file path in `src/index.ts` and `await reapOrphans()` before returning Hooks.
 
 **Requirements:** R1.
 
 **Dependencies:** Units 1, 2.
 
 **Files:**
-- Modify: `src/runtime/task-registry.ts`
-- Modify: `src/runtime/subprocess.ts` (terminal-transition callsites: `finalizeTask`, the abort listener, the `child.once('error', ...)` handler)
-- Modify: `src/index.ts` (build pidFilePath at init, pass through, call reapOrphans before plugin returns)
-- Modify: `tests/task-registry.test.ts`
+- Create: `src/runtime/task-status.ts` (the `setStatus` helper)
+- Create: `tests/task-status.test.ts`
+- Modify: `src/runtime/task-registry.ts` (call `appendPidEntry` after spawn)
+- Modify: `src/runtime/subprocess.ts` (replace the 3 inline `task.status = ...` mutations at lines 59 / 143 / 153 with `setStatus(task, ...)` calls)
+- Modify: `src/index.ts` (build per-instance pidFilePath via `resolveInstancePidFilePath()`; await `reapOrphans({ pidFileDir, currentInstancePath, ... })` before returning Hooks)
+- Modify: `tests/task-registry.test.ts`, `tests/subprocess.test.ts`
 
 **Approach:**
-- In `task-registry.ts`'s `createTask` (or wherever the task is constructed and spawned): immediately after the subprocess is spawned and `taskState.pid` is known, fetch the start-time string via `getPidStartTime(taskState.pid)` and call `appendPidEntry(pidFilePath, taskState.pid, startTimeString).catch(() => {})`. Fire-and-forget (do not block task creation).
-- In `subprocess.ts`'s three terminal-transition sites (`finalizeTask`, abort listener, `child.once('error', ...)`): immediately after setting `task.status` to `complete | failed | cancelled`, call `removePidEntry(pidFilePath, taskState.pid).catch(() => {})`. Fire-and-forget.
-- Path injection: the `pidFilePath` is constructed once in `src/index.ts` at plugin init and passed through to the registry / subprocess wiring. Default: `<XDG_STATE_HOME or ~/.local/state>/opencode-copilot-delegate/orphans.pids`.
-- In `src/index.ts`, before the plugin factory returns: `await reapOrphans({ pidFilePath, killProcessTree, getPidStartTime, getPidArgs })`. Wrap in try/catch — reap failure should never block plugin init.
+- `src/runtime/task-status.ts`: export `setStatus(task, newStatus, options?: { pidFilePath?: string })`. Sets `task.status = newStatus` and, if `pidFilePath` is provided and `newStatus` is terminal (`complete | failed | cancelled`), calls `removePidEntry(pidFilePath, task.pid).catch(() => {})`. Fire-and-forget. The helper wraps both operations so future contributors can't add a fourth terminal-transition site without picking up the cleanup hook.
+- In `src/runtime/task-registry.ts`'s `createTask` (or wherever the task is constructed and spawned): immediately after the subprocess is spawned and `taskState.pid` is known, fetch `comm` and `lstart` via `getPidComm(taskState.pid)` + `getPidStartTime(taskState.pid)` and call `appendPidEntry(pidFilePath, taskState.pid, comm, lstart).catch(() => {})`. Fire-and-forget (do not block task creation).
+- In `src/runtime/subprocess.ts`, replace the 3 inline status mutations with `setStatus(task, ...)` calls:
+  - Line 59 (`finalizeTask`): the existing `task.status = exitCode === 0 ? 'complete' : 'failed'` becomes `setStatus(task, exitCode === 0 ? 'complete' : 'failed', { pidFilePath })`.
+  - Line 143 (abort listener): `task.status = 'cancelled'` becomes `setStatus(task, 'cancelled', { pidFilePath })`.
+  - Line 153 (`child.once('error', ...)`): `task.status = 'failed'` becomes `setStatus(task, 'failed', { pidFilePath })`.
+- Path injection: `pidFilePath` is constructed once in `src/index.ts` via `resolveInstancePidFilePath()` (Unit 1) and passed through to the registry / subprocess wiring.
+- In `src/index.ts`, before the plugin factory returns its `Hooks` object:
+  ```
+  const pidFileDir = path.dirname(resolveInstancePidFilePath())
+  const currentInstancePath = resolveInstancePidFilePath()
+  await mkdir(pidFileDir, { recursive: true, mode: 0o700 })
+  try {
+    await reapOrphans({ pidFileDir, currentInstancePath, killProcessTree, getPidComm, getPidStartTime })
+  } catch (err) {
+    // Reap failure must not block plugin init.
+  }
+  return { ...hooks }
+  ```
+  (Pseudo-code only; actual import/path style follows existing code conventions.)
 
 **Execution note:** Test-first per AGENTS.md mandate.
 
 **Test scenarios:**
-- *Integration:* Spawn a task via `createTask` → PID file contains one entry with the spawned PID and a non-empty start-time string.
-- *Integration:* Task transitions to `complete` (via `finalizeTask`) → PID file no longer contains the entry.
-- *Integration:* Task transitions to `cancelled` (via abort listener) → PID file no longer contains the entry.
-- *Integration:* Task fails (`child.once('error', ...)`) → PID file no longer contains the entry.
-- *Edge case:* PID-file write throws (injected mock) → task creation still succeeds; transition still happens.
-- *Lifecycle:* Plugin init invokes `reapOrphans` exactly once before returning.
+- *Unit (`setStatus`):* `setStatus(task, 'complete', { pidFilePath })` → `task.status === 'complete'`; `removePidEntry` invoked with `task.pid`.
+- *Unit (`setStatus`):* `setStatus(task, 'running')` (non-terminal) → `task.status === 'running'`; `removePidEntry` NOT invoked.
+- *Unit (`setStatus`):* `setStatus(task, 'failed')` without `options` → status set; `removePidEntry` NOT invoked (path optional).
+- *Unit (`setStatus`):* `removePidEntry` rejection is swallowed; no propagation.
+- *Integration:* Spawn a task via `createTask` → PID file contains one entry with `<pid>\t<comm>\t<lstart>`; `comm` matches the spawned binary's name.
+- *Integration:* Task `close` (exit 0) → `setStatus(task, 'complete')` called from line 59; PID file no longer contains the entry.
+- *Integration:* Abort signal → `setStatus(task, 'cancelled')` called from line 143; PID file no longer contains the entry.
+- *Integration:* Spawn `error` → `setStatus(task, 'failed')` called from line 153; PID file no longer contains the entry.
+- *Edge case:* PID-file write throws (injected mock) → task creation still succeeds; status transition still happens; no exception propagates.
+- *Lifecycle:* Plugin init invokes `reapOrphans` exactly once before returning Hooks; reap throw is caught.
+- *Lifecycle:* `pidFileDir` is created with `mode: 0o700` if it doesn't exist.
 
-**Verification:** All scenarios pass; existing task-registry tests still pass.
+**Verification:** All scenarios pass; existing task-registry and subprocess tests still pass.
 
 ---
 
@@ -249,22 +292,24 @@ tests/
 
 ## System-Wide Impact
 
-- **Interaction graph:** Plugin init now does PID-file I/O before returning. Task spawn and terminal transitions write to the PID file (fire-and-forget).
-- **Error propagation:** All PID-file I/O errors are swallowed (`.catch(() => {})`). Reaper failures are caught per-PID; no failure mode blocks plugin init or task creation.
-- **State lifecycle risks:** PID file is the new shared state. Concurrency at the 10-concurrent cap is acceptable; worst-case is an extra reap attempt of a dead PID. File perms are 0o600 to defend against arbitrary-process-injection.
+- **Interaction graph:** Plugin init builds the per-instance pid file path, ensures the orphans directory exists at `0o700`, and `await`s `reapOrphans()` before returning Hooks (the SDK contract guarantees no tool dispatch until that resolves). Task spawn calls `appendPidEntry` (fire-and-forget). All three terminal-transition sites in `subprocess.ts` now flow through the `setStatus` helper, which calls `removePidEntry` for terminal states.
+- **Error propagation:** All PID-file I/O errors are swallowed at the call site (`.catch(() => {})`). Reaper failures are caught per-PID and at the top level; no failure mode blocks plugin init or task creation.
+- **State lifecycle risks:** Per-instance PID files (`<state-dir>/orphans/<discriminator>.pids`) eliminate the cross-instance file-clobbering risk that a single shared file would create. Within an instance, the in-process serialization queue in `pid-file.ts` orders concurrent appends/removes from the existing 10-task cap with no lost updates. File perms `0o600` and parent dir `0o700` defend against arbitrary-process-injection. The reap-vs-spawn race during init is closed by the awaited factory contract.
 - **API surface parity:** No changes to existing tool inputs/outputs.
-- **Integration coverage:** Unit 3's "Integration" scenarios exercise the cross-layer flow (task spawn → file append; terminal transition → file remove). Manual smoke on macOS and Linux at implementation time covers the `ps` portability concern.
-- **Unchanged invariants:** `MAX_CONCURRENT`, `cpl_` task ID prefix, all existing tool surfaces, `bun build` artifact shape.
+- **Integration coverage:** Unit 3's "Integration" scenarios exercise the cross-layer flow (task spawn → file append; each of the 3 terminal-transition sites → `setStatus` → file remove). Manual smoke on macOS and Linux at implementation time covers the `ps` portability concern; the `ps -o comm=` field is widely supported.
+- **Unchanged invariants:** `MAX_CONCURRENT`, `cpl_` task ID prefix, all existing tool surfaces, `bun build` artifact shape, the existing `task.status` runtime semantics (the `setStatus` refactor preserves the same observable transitions — same status values, same ordering, same callers; only the cleanup hook is added).
 
 ## Risks & Dependencies
 
 | Risk | Mitigation |
 |------|------------|
-| `ps -p <pid> -o lstart=` portability across BSD vs GNU `ps`, including minimal images (Alpine busybox) | Implementation-time smoke test on dev hosts. Document POSIX `ps` dependency in README. If `lstart` is unavailable, the reaper logs and skips — does not crash. |
-| PID file write fails on disk-full or signal mid-rename | Atomic rename ensures no partial reads. Worst case: missed remove → extra reap attempt of a dead PID, which is tested. |
-| Malicious PID file injection on shared machines | File perms 0o600 + 0o700 parent dir as primary defense. PID-validate-before-kill (`args` contains `copilot`) as defense-in-depth. |
-| Parser guard's `break` placement subtle (must not skip the partial-line buffer update) | Implementation reads the actual handler structure first; test scenario asserts post-cancel events are not appended. |
-| Reap blocks plugin init for slow `ps` calls | Each `ps` call is a single-PID query; bounded by `MAX_CONCURRENT = 10` historical entries. Total reap time should be well under 1s in practice. |
+| `ps -p <pid> -o {comm,lstart}=` portability across BSD vs GNU `ps`, including minimal images (Alpine busybox) | Implementation-time smoke test on dev hosts. `comm` and `lstart` are both widely supported on mainstream macOS / Linux. If unavailable, the reaper logs and skips — does not crash. Document POSIX `ps` dependency in README. |
+| PID file write fails on disk-full or signal mid-rename | Atomic rename ensures no partial reads. Worst case: missed-remove → extra reap attempt of an already-dead PID, which is tested and idempotent. |
+| Malicious PID file injection on shared machines | File perms `0o600` + `0o700` parent dir as primary defense. Identity gate combines exact `comm` match AND exact `lstart` match AND PID liveness — forging requires write access to the protected file. |
+| Parser guard's `break` placement subtle (must not skip the partial-line buffer update) | Implementation reads the actual handler structure first; the `lines.pop()` partial-line buffer update happens *before* the loop body, so `break` and `return` are equivalent. Test scenario asserts post-cancel events are not appended and the buffer is preserved. |
+| Reap blocks plugin init at `MAX_CONCURRENT = 10` historical entries | Parallel per-PID probes with a worker-pool concurrency cap of 5. Each PID's check is two `ps` shellouts (`comm` + `lstart`) plus a liveness probe. Soft target: total reap time under 200ms on a typical dev host. Verified by Unit 2's latency test scenario. |
+| Cross-instance file clobbering (shared single PID file would silently drop live PIDs across concurrent OpenCode sessions) | **Resolved by per-instance file design**: each instance writes to `<state-dir>/orphans/<discriminator>.pids` and only truncates its own file. Reap reads the entire directory so foreign-instance survivors are still recovered. |
+| `setStatus` refactor introduces regression in existing 3 status-mutation sites | Three sites are explicit and enumerated by line number (subprocess.ts:59, :143, :153). Test scenarios per site verify both the status transition and the cleanup hook fire. Existing subprocess tests continue passing as a regression gate. |
 
 ## Documentation / Operational Notes
 
