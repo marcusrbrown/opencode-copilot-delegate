@@ -28,6 +28,14 @@ export type SpawnCopilotResult = {
 }
 
 function flushBufferedStdout(task: SpawnCopilotResult): void {
+  // Cancel-race guard: drop any post-cancel partial line. Without this,
+  // bytes that arrived after the abort listener fired could be parsed and
+  // pushed to task.events even though task.status is already 'cancelled'.
+  // Mirrors the per-line guard in the data handler below.
+  if (task.status !== 'running') {
+    task.stdoutLineBuffer = ''
+    return
+  }
   if (task.stdoutLineBuffer.trim().length === 0) {
     task.stdoutLineBuffer = ''
     return

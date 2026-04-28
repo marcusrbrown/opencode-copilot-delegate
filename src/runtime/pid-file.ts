@@ -10,6 +10,7 @@ import {
 } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
+import { isErrnoException } from '../lib/errno'
 
 const writeChains = new Map<string, Promise<void>>()
 
@@ -53,7 +54,7 @@ export async function appendPidEntry(
     try {
       existing = await readFile(filePath, 'utf-8')
     } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e
+      if (!isErrnoException(e) || e.code !== 'ENOENT') throw e
     }
 
     const line = `${pid}\t${comm}\t${lstart}\n`
@@ -85,7 +86,7 @@ export async function removePidEntry(
     try {
       existing = await readFile(filePath, 'utf-8')
     } catch (e) {
-      if ((e as NodeJS.ErrnoException).code !== 'ENOENT') throw e
+      if (!isErrnoException(e) || e.code !== 'ENOENT') throw e
       return
     }
 

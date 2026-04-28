@@ -30,8 +30,12 @@ const CopilotDelegate: Plugin = async ({ client, directory }) => {
 
   const currentInstancePath = resolveInstancePidFilePath()
   const pidFileDir = dirname(currentInstancePath)
-  await mkdir(pidFileDir, { recursive: true, mode: 0o700 })
   try {
+    // mkdir is inside the try/catch so plugin init survives read-only
+    // filesystems (EROFS) or permission-denied state dirs (EACCES). Both
+    // failure modes degrade gracefully: reapOrphans's own readdir guard
+    // returns an empty result when the directory cannot be enumerated.
+    await mkdir(pidFileDir, { recursive: true, mode: 0o700 })
     await reapOrphans({
       pidFileDir,
       currentInstancePath,
@@ -40,7 +44,7 @@ const CopilotDelegate: Plugin = async ({ client, directory }) => {
       getPidStartTime,
     })
   } catch {
-    // Reap failure must not block plugin init.
+    // mkdir or reap failure must not block plugin init.
   }
 
   return {

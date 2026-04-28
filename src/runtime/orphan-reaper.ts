@@ -1,6 +1,7 @@
 import { spawn } from 'node:child_process'
 import { readdir, readFile, unlink, writeFile } from 'node:fs/promises'
 import { basename, extname, join } from 'node:path'
+import { isErrnoException } from '../lib/errno'
 
 export interface ReapDeps {
   killProcessTree: (pid: number) => Promise<void>
@@ -21,8 +22,7 @@ export function defaultIsPluginAlive(pid: number): boolean {
     process.kill(pid, 0)
     return true
   } catch (e) {
-    const code = (e as NodeJS.ErrnoException).code
-    return code === 'EPERM'
+    return isErrnoException(e) && e.code === 'EPERM'
   }
 }
 
@@ -75,8 +75,11 @@ interface PidEntry {
 function parseLine(line: string): PidEntry | null {
   const parts = line.split('\t')
   if (parts.length !== 3) return null
-  const pid = parseInt(parts[0], 10)
-  if (Number.isNaN(pid)) return null
+  const pidStr = parts[0]
+  // Strict integer parse: rejects negative, zero, decimal, and partial parses
+  // like '1234abc' that parseInt would silently accept.
+  if (!/^[1-9]\d*$/.test(pidStr)) return null
+  const pid = Number(pidStr)
   return { pid, comm: parts[1], lstart: parts[2] }
 }
 
@@ -242,12 +245,14 @@ export async function reapOrphans(opts: {
     if (!file.endsWith('.pids')) continue
 
     const filePath = join(pidFileDir, file)
-    const filePid = parseInt(basename(file, extname(file)), 10)
-
-    if (Number.isNaN(filePid)) {
+    const stem = basename(file, extname(file))
+    // Strict integer parse: filename stem must be a positive integer; reject
+    // negative, zero, decimal, and partial-parse oddities like '1234abc'.
+    if (!/^[1-9]\d*$/.test(stem)) {
       console.warn(`[orphan-reaper] Skipping non-numeric PID file: ${file}`)
       continue
     }
+    const filePid = Number(stem)
 
     const outcome = await reapOneFile(
       filePath,

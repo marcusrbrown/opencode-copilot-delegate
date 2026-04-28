@@ -20,7 +20,7 @@ type SpawnCopilotResult = {
   events: ParsedEvent[]
   completionPromise: Promise<void>
   abortController: AbortController
-  child: { pid: number }
+  child: ChildProcess
   status: TaskStatus
   exitCode?: number
   stdoutLineBuffer: string
@@ -42,7 +42,7 @@ type CreateTaskFn = (input: {
   cwd: string
   stdoutLineBuffer: string
   events: ParsedEvent[]
-  child: { pid: number }
+  child: ChildProcess
   completionPromise: Promise<void>
   abortController: AbortController
 }) => {
@@ -324,7 +324,7 @@ describe('subprocess runtime', () => {
       ].join('\n')}\n`
 
       // Programmatically emit data on the child's stdout stream
-      ;(task.child as unknown as ChildProcess).stdout?.emit('data', extraLines)
+      task.child.stdout?.emit('data', extraLines)
 
       // Assert no new events were appended
       expect(task.events).toHaveLength(2)
