@@ -119,6 +119,7 @@ export function spawnCopilot(
     task.stdoutLineBuffer = lines.pop() ?? ''
 
     for (const line of lines) {
+      if (task.status !== 'running') break
       if (line.length === 0) {
         continue
       }

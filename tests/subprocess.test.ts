@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'bun:test'
+import type { ChildProcess } from 'node:child_process'
 import {
   chmodSync,
   existsSync,
@@ -284,6 +285,54 @@ describe('subprocess runtime', () => {
       expect(task.status).toBe('cancelled')
       expect(Date.now() - startedAt).toBeLessThan(3000)
       expectProcessToBeGone(grandchildPid)
+    })
+
+    it('does not append events after cancellation (cancel-race guard)', async () => {
+      // Given a fake copilot binary that emits 2 JSONL lines and then waits
+      const { spawnCopilot } = await loadModules()
+      const cwd = mkdtempSync(join(tmpdir(), 'copilot-cwd-'))
+      const binDir = makeFakeCopilotBin()
+      tempPaths.push(cwd, binDir)
+
+      const task = spawnCopilot(
+        [
+          '-c',
+          [
+            'printf \'%s\\n\' \'{"type":"assistant.message","data":{"messageId":"msg-1","content":"line1","toolRequests":[]}}\'',
+            'printf \'%s\\n\' \'{"type":"assistant.message","data":{"messageId":"msg-2","content":"line2","toolRequests":[]}}\'',
+            'sleep 30',
+          ].join('; '),
+        ],
+        { cwd, env: makeSpawnEnv(binDir) },
+      )
+
+      // Wait for the first 2 lines to be parsed
+      for (let attempt = 0; attempt < 100; attempt += 1) {
+        if (task.events.length >= 2) break
+        await delay(20)
+      }
+      expect(task.events).toHaveLength(2)
+
+      // When the task is cancelled
+      task.abortController.abort()
+
+      // Then additional data arriving on stdout should not append new events
+      const extraLines =
+        [
+          '{"type":"assistant.message","data":{"messageId":"msg-3","content":"line3","toolRequests":[]}}',
+          '{"type":"assistant.message","data":{"messageId":"msg-4","content":"line4","toolRequests":[]}}',
+          '{"type":"assistant.message","data":{"messageId":"msg-5","content":"line5","toolRequests":[]}}',
+        ].join('\n') + '\n'
+
+      // Programmatically emit data on the child's stdout stream
+      ;(task.child as unknown as ChildProcess).stdout?.emit('data', extraLines)
+
+      // Assert no new events were appended
+      expect(task.events).toHaveLength(2)
+
+      // Clean up: wait for the killed subprocess to close
+      await task.completionPromise
+      expect(task.status).toBe('cancelled')
     })
   })
 
