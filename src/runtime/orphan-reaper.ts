@@ -112,6 +112,42 @@ function parseLine(line: string): PidEntry | null {
   return { pid, comm: parts[1], lstart: parts[2] }
 }
 
+/**
+ * Maximum concurrent ps probes during reap. A streaming worker pool of
+ * this size drains the entry queue without head-of-line blocking: a slow
+ * probe in one worker doesn't stall the others.
+ */
+const MAX_CONCURRENT_PROBES = 5
+
+async function processEntry(
+  entry: PidEntry,
+  killProcessTree: ReapDeps['killProcessTree'],
+  getPidIdentity: ReapDeps['getPidIdentity'],
+): Promise<{ reaped: boolean; skipped: boolean }> {
+  try {
+    process.kill(entry.pid, 0)
+  } catch {
+    return { reaped: false, skipped: true }
+  }
+
+  const live = await getPidIdentity(entry.pid)
+
+  if (
+    live === null ||
+    live.comm !== entry.comm ||
+    live.lstart !== entry.lstart
+  ) {
+    return { reaped: false, skipped: true }
+  }
+
+  try {
+    await killProcessTree(entry.pid)
+    return { reaped: true, skipped: false }
+  } catch {
+    return { reaped: false, skipped: true }
+  }
+}
+
 async function processEntries(
   entries: PidEntry[],
   killProcessTree: ReapDeps['killProcessTree'],
@@ -120,40 +156,27 @@ async function processEntries(
   let reaped = 0
   let skipped = 0
 
-  for (let i = 0; i < entries.length; i += 5) {
-    const chunk = entries.slice(i, i + 5)
-    const results = await Promise.all(
-      chunk.map(async (entry) => {
-        try {
-          process.kill(entry.pid, 0)
-        } catch {
-          return { reaped: false, skipped: true }
-        }
-
-        const live = await getPidIdentity(entry.pid)
-
-        if (
-          live === null ||
-          live.comm !== entry.comm ||
-          live.lstart !== entry.lstart
-        ) {
-          return { reaped: false, skipped: true }
-        }
-
-        try {
-          await killProcessTree(entry.pid)
-          return { reaped: true, skipped: false }
-        } catch {
-          return { reaped: false, skipped: true }
-        }
-      }),
-    )
-
-    for (const r of results) {
-      if (r.reaped) reaped++
-      else if (r.skipped) skipped++
+  // Streaming worker pool: spawn up to MAX_CONCURRENT_PROBES workers that
+  // drain a shared queue independently. Each worker pulls the next entry,
+  // processes it, and loops until the queue is empty. A slow probe blocks
+  // only its own worker; the other workers keep making progress.
+  //
+  // Single-threaded JS guarantees `queue.shift()` is atomic: there is no
+  // window between the length check and the shift where another worker
+  // can interleave.
+  const queue = [...entries]
+  const workerCount = Math.min(MAX_CONCURRENT_PROBES, entries.length)
+  const workers = Array.from({ length: workerCount }, async () => {
+    while (true) {
+      const entry = queue.shift()
+      if (!entry) return
+      const result = await processEntry(entry, killProcessTree, getPidIdentity)
+      if (result.reaped) reaped++
+      else if (result.skipped) skipped++
     }
-  }
+  })
+
+  await Promise.all(workers)
 
   return { reaped, skipped }
 }

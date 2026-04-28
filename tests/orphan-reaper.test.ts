@@ -299,6 +299,46 @@ describe('orphan-reaper', () => {
   })
 
   describe('concurrency', () => {
+    it('should not block subsequent entries on a single slow probe (streaming worker pool)', async () => {
+      const dir = makeTempDir()
+      const currentPath = join(dir, `${process.pid}.pids`)
+      let callCount = 0
+      let slowFinished = false
+      let finishedBeforeSlow = 0
+
+      const entries = Array.from({ length: 10 }, () => ({
+        pid: process.pid,
+        comm: 'copilot',
+        lstart: 't0',
+      }))
+      writePidFile(currentPath, entries)
+
+      const res = await reapOrphans({
+        pidFileDir: dir,
+        currentInstancePath: currentPath,
+        killProcessTree: async () => {},
+        getPidIdentity: async () => {
+          callCount++
+          const isSlow = callCount === 1
+          const delay = isSlow ? 200 : 10
+          await new Promise((r) => setTimeout(r, delay))
+          if (isSlow) {
+            slowFinished = true
+          } else if (!slowFinished) {
+            finishedBeforeSlow++
+          }
+          return { comm: 'copilot', lstart: 't0' }
+        },
+      })
+
+      expect(res.reaped).toBe(10)
+      // With a streaming worker pool, the 9 fast probes proceed past the
+      // slow first probe instead of being trapped behind a Promise.all
+      // wave. With chunked-of-5, only 4 fast probes can finish before the
+      // slow one (the rest wait for the next chunk).
+      expect(finishedBeforeSlow).toBeGreaterThanOrEqual(9)
+    })
+
     it('should cap concurrent getPidIdentity invocations at 5 for 10 entries', async () => {
       const dir = makeTempDir()
       const currentPath = join(dir, `${process.pid}.pids`)
