@@ -1,43 +1,42 @@
 ---
-title: "feat: /copilot-status TUI foundation (v0.2.0)"
+title: "feat: /copilot-status TUI foundation"
 type: feat
 status: active
 date: 2026-04-27
 origin: docs/brainstorms/2026-04-27-copilot-status-tui-requirements.md
-target_release: v0.2.0
-prerequisite_plan: docs/plans/2026-04-27-002-fix-runtime-hardening-pre-tui-plan.md
+prerequisite_plan: docs/plans/2026-04-27-002-fix-runtime-hardening-plan.md
 ---
 
-# feat: /copilot-status TUI foundation (v0.2.0)
+# feat: /copilot-status TUI foundation
 
 ## Overview
 
-Lay the v0.2.x visibility-platform foundation by turning `opencode-copilot-delegate` into a two-entrypoint package. The existing server-side plugin keeps its current responsibilities. A new TUI half ships alongside it: an opt-in `@opencode-ai/plugin/tui` that registers a `/copilot-status` command, opens a modal listing running delegations, exposes a cancel keybind, and emits a spawn-toast lifecycle signal. The two halves communicate over an HTTP-over-localhost RPC channel published via a per-session port file with a per-process auth token; the port file lives at `0o600` permissions.
+Lay the visibility-platform foundation by turning `opencode-copilot-delegate` into a two-entrypoint package. The existing server-side plugin keeps its current responsibilities. A new TUI half ships alongside it: an opt-in `@opencode-ai/plugin/tui` that registers a `/copilot-status` command, opens a modal listing running delegations, exposes a cancel keybind, and emits a spawn-toast lifecycle signal. The two halves communicate over an HTTP-over-localhost RPC channel published via a per-session port file with a per-process auth token; the port file lives at `0o600` permissions.
 
-The PID-file orphan reaper that was originally bundled here ships first as a v0.1.1 patch — see `docs/plans/2026-04-27-002-fix-runtime-hardening-pre-tui-plan.md`. v0.2.0 builds on top of that hardening.
+The PID-file orphan reaper that was originally bundled here shipped first as a runtime hardening release — see `docs/plans/2026-04-27-002-fix-runtime-hardening-plan.md`. This plan builds on top of that hardening.
 
-v0.2.1 (drilled fullscreen view) and v0.2.2 (recent-history + concurrent navigation) are out of scope and will get their own brainstorms once this lands.
+The drilled fullscreen view and the recent-history + concurrent-navigation surface are out of scope and will get their own brainstorms once this lands.
 
 ## Problem Frame
 
-`opencode-copilot-delegate` v0.1 makes long-running Copilot delegations possible but inconvenient to monitor — a 5-minute delegation looks identical to a hung subprocess until the completion toast fires. `copilot_output` exists but requires a tool call away from the chat. The brainstorm (`docs/brainstorms/2026-04-27-copilot-status-tui-requirements.md`) commits the plugin to a chat-native visibility surface mirroring OpenCode's native subagent rendering — modal listing in v0.2.0, drilled view + history later.
+`opencode-copilot-delegate` v0.1 makes long-running Copilot delegations possible but inconvenient to monitor — a 5-minute delegation looks identical to a hung subprocess until the completion toast fires. `copilot_output` exists but requires a tool call away from the chat. The brainstorm (`docs/brainstorms/2026-04-27-copilot-status-tui-requirements.md`) commits the plugin to a chat-native visibility surface mirroring OpenCode's native subagent rendering — modal listing in this foundation phase, drilled view + history later.
 
-The architectural commit is one-way: shipping a `tui` entrypoint means users add the plugin to their `tui.jsonc`. Removing it is a breaking change. v0.2.0's job is to ship that commit cleanly so v0.2.1 / v0.2.2 can build on top.
+The architectural commit is one-way: shipping a `tui` entrypoint means users add the plugin to their `tui.jsonc`. Removing it is a breaking change. This foundation plan's job is to ship that commit cleanly so the drilled-view and history phases can build on top.
 
 ## Requirements Trace
 
-From the origin brainstorm — v0.2.0 functional requirements (R8 moved to the pre-TUI hardening plan):
+From the origin brainstorm — foundation-phase functional requirements (R8 moved to the runtime hardening plan):
 
 - **R1** — `/copilot-status` slash command opens the modal at the list view. (origin: `docs/brainstorms/2026-04-27-copilot-status-tui-requirements.md` §"v0.2.0 — functional requirements" → "Slash command". The brainstorm's wording suggests server-side registration; the plan registers from the TUI half because the slash command is meaningless without the TUI to render the dialog — see Key Decisions.)
-- **R2** — Modal list view: header shows `<n> running · 0 recent`; rows show status badge / abbreviated task ID / agent / model / elapsed (live) / tool-call count; running-only in v0.2.0. (origin: same → "Modal — list view")
+- **R2** — Modal list view: header shows `<n> running · 0 recent`; rows show status badge / abbreviated task ID / agent / model / elapsed (live) / tool-call count; running-only in the foundation phase. (origin: same → "Modal — list view")
 - **R3** — Cancel via `c` keybind on focused row → confirm dialog → existing `copilot_cancel` machinery via authenticated RPC → row transitions to `cancelling` then `cancelled`, then is removed per running-only rule. (origin: same → "Cancel flow" + UX micro-spec)
 - **R4** — Spawn lifecycle toast: `client.tui.showToast({ body: { message: 'Copilot delegation cpl_xxxxxxxx started', variant: 'info' } })` from `copilot_delegate` immediately after task creation. Existing completion toast unchanged. (origin: same → "Lifecycle notifications". Note: the existing `notify.ts` API uses a `body:` wrapper around `{ message, variant }`; new spawn-toast helper follows the same shape.)
-- **R5** — v0.2.0 keybinds in the list view: `↑`/`k`, `↓`/`j`, `c`, `Esc`. No `Enter` / drill-in / scroll keys (those belong to v0.2.1). The confirm-card dialog adds `←`/`→`/`Enter`/`Space`/`Esc` within its own surface. (origin: same → "Interaction model")
+- **R5** — foundation-phase keybinds in the list view: `↑`/`k`, `↓`/`j`, `c`, `Esc`. No `Enter` / drill-in / scroll keys (those belong to the drilled-view phase). The confirm-card dialog adds `←`/`→`/`Enter`/`Space`/`Esc` within its own surface. (origin: same → "Interaction model")
 - **R6** — UX micro-specs: focus indicator (inverse video + `●` prefix on running badge), empty state, loading state, RPC error state, cancel-confirm dialog flow, list scroll behavior — including footer hints (`Esc close`) on empty/error states and explicit focus behavior after a cancelled row is removed. (origin: same → "v0.2.0 UX micro-specs")
 - **R7** — TUI plugin is opt-in via user's `tui.jsonc`; server-side keeps working without it; `/copilot-status` shows a graceful RPC-error state when the TUI half fails to load or the RPC server is unreachable. (origin: §"Architectural commit" + success criteria)
-- **R9** — Pull-from-registry event delivery: server-side exposes a list query method; v0.2.0 only needs the *list* endpoint (plus health and cancel) — per-task event endpoint lands with v0.2.1. (origin: §"Prerequisites for ce:plan" #4)
+- **R9** — Pull-from-registry event delivery: server-side exposes a list query method; this foundation phase only needs the *list* endpoint (plus health and cancel) — per-task event endpoint lands with the drilled-view phase. (origin: §"Prerequisites for ce:plan" #4)
 
-**R8 is in the pre-TUI hardening plan** (see `prerequisite_plan` frontmatter). v0.2.0 assumes the orphan reaper has already shipped and the runtime parser is guarded; both are independent runtime correctness fixes that don't depend on the TUI architecture.
+**R8 is in the runtime hardening plan** (see `prerequisite_plan` frontmatter). This plan assumes the orphan reaper has already shipped and the runtime parser is guarded; both are independent runtime correctness fixes that don't depend on the TUI architecture.
 
 Performance / compatibility success criteria from the origin doc:
 - List populates within one localhost-HTTP round-trip (≤250ms target).
@@ -46,11 +45,11 @@ Performance / compatibility success criteria from the origin doc:
 
 ## Scope Boundaries
 
-- **No drilled fullscreen view** — that's v0.2.1's brainstorm.
-- **No recent-history surface** — that's v0.2.2.
-- **No expandable output cards / concurrent ←/→ navigation in the list view** — v0.2.2.
+- **No drilled fullscreen view** — that's the next phase's brainstorm.
+- **No recent-history surface** — that's the third phase.
+- **No expandable output cards / concurrent ←/→ navigation in the list view** — third phase.
 - **No persistent task storage** — in-memory only.
-- **No sidebar / always-visible panel** — modal-only across v0.2.x.
+- **No sidebar / always-visible panel** — modal-only across the visibility-platform phases.
 - **No new slash commands beyond `/copilot-status`** — cancel is keybind-only.
 - **No production code in this PR for resume/connect (S2), watchdog (S5), transcript export (S6), or `copilot_doctor` (S7)** — separate ideation lines.
 - **No upstream behavior change to existing `copilot_delegate` / `copilot_output` / `copilot_cancel` tools beyond the additions enumerated in Unit 4.** (Specifically: `copilot_delegate` adds the spawn-toast call; the cancel-helper extraction touches `copilot_cancel`'s callsite to share machinery with the RPC handler. No changes to return shapes or error contracts.)
@@ -59,8 +58,8 @@ Performance / compatibility success criteria from the origin doc:
 
 ### Deferred to Separate Tasks
 
-- **PID-file orphan reaper + parser cancel-race guard** — `docs/plans/2026-04-27-002-fix-runtime-hardening-pre-tui-plan.md`, ships as v0.1.1 before v0.2.0.
-- **Upstream lifecycle-hook feature request to `anomalyco/opencode`** — file from the v0.2.0 implementation PR with a code TODO pointing at the issue. Brainstorm open question #2.
+- **PID-file orphan reaper + parser cancel-race guard** — `docs/plans/2026-04-27-002-fix-runtime-hardening-plan.md`, shipped first as a runtime hardening release before this plan.
+- **Upstream lifecycle-hook feature request to `anomalyco/opencode`** — file from this plan's implementation PR with a code TODO pointing at the issue. Brainstorm open question #2.
 - **`bunx opencode-copilot-delegate doctor` setup helper** — defer to v0.3+ once the user-install pattern stabilizes.
 - **`@opencode-ai/plugin` peer-dep version verification against the host's bundled SDK** — verify at implementation time; bump may be required to `>= 0.1.99` to match Magic Context's working baseline.
 
@@ -74,22 +73,22 @@ Performance / compatibility success criteria from the origin doc:
 - `src/tools/cancel.ts` — `createCancelTool`. Currently 23 lines, only calls `task.abortController.abort()`. The actual kill chain lives in `subprocess.ts`'s abort listener. Unit 4 extracts the cancel call into a shared helper that both this tool and the RPC server's cancel handler can invoke.
 - `src/runtime/task-registry.ts` — `taskRegistry`. List-RPC handler reads from this. `taskRegistry.getAllTasks()` exists; add a `listRunning()` projection that returns the schema-shaped list (no event buffers).
 - `src/runtime/notify.ts` — existing `notifyCompletion`, manually-typed `NotifyClient`. The `client.tui.showToast` API takes `{ body: { message, variant } }`; spawn-toast helper follows that shape.
-- `src/runtime/subprocess.ts` — current home of the JSONL data handler (an anonymous callback inside `spawnCopilot`, not a named function). v0.2.0 does not modify this file; the cancel-race guard belongs to the pre-TUI hardening plan.
+- `src/runtime/subprocess.ts` — current home of the JSONL data handler (an anonymous callback inside `spawnCopilot`, not a named function). This plan does not modify this file; the cancel-race guard belongs to the runtime hardening plan.
 - `src/runtime/envelope.ts` — `tool_calls` array via `summary.tool_calls.length` for the list-view tool-call count column.
-- `src/lib/kill-tree.ts` — `killProcessTree`. Used indirectly via the existing abort-listener path; not directly referenced by v0.2.0 code.
+- `src/lib/kill-tree.ts` — `killProcessTree`. Used indirectly via the existing abort-listener path; not directly referenced by foundation code.
 - `package.json` — root manifest. New `exports["."]` (preserve current default), `exports["./tui"]`, `oc-plugin` field, opentui + solid-js + zod deps, peer-dep bump to `@opencode-ai/plugin >= 0.1.99`.
 - `tsconfig.json` — current `module: NodeNext`, no JSX. Unit 1 adds JSX support; see Key Decisions for the precise config given the `jsx: "preserve"` + `jsxImportSource` interaction.
 - `tests/` — bun-test files at top level (`*.test.ts`). New work follows the same shape; TUI-component tests live alongside source under `src/tui/__tests__/`.
 
 **Magic Context precedent (read-only reference, not a dependency):**
 - `node_modules/@cortexkit/opencode-magic-context-tui/src/index.tsx` — TUI plugin shell; `api.command.register`, `api.ui.dialog.replace`, `api.ui.toast`, `api.lifecycle.onDispose` patterns; SolidJS render via `<Render onDismiss={...} />`.
-- `node_modules/@cortexkit/opencode-magic-context-tui/src/api.ts` — TUI-side HTTP RPC client over `fetch`. (Their notification poller is not needed in v0.2.0.)
+- `node_modules/@cortexkit/opencode-magic-context-tui/src/api.ts` — TUI-side HTTP RPC client over `fetch`. (Their notification poller is not needed in the foundation phase.)
 - `node_modules/@cortexkit/opencode-magic-context-tui/package.json` — `oc-plugin: ["tui"]`, `exports["./tui"]: ./src/index.tsx`, opentui + solid-js as direct deps, `@opencode-ai/plugin` as peer.
 - `node_modules/@cortexkit/opencode-magic-context/src/server.js` — `node:http` server on `127.0.0.1`, port written to `~/.cache/opencode/<scope>/server-port.json`, JSON request/response routing.
 
 ### Institutional Learnings
 
-- `docs/solutions/best-practices/reliable-cli-integration-testing-2026-04-26.md` — `OPENCODE_CONFIG_DIR` + `OPENCODE_CONFIG_CONTENT` isolation pattern. Relevant if v0.2.0 adds an integration test that drives `opencode run` against the new plugin.
+- `docs/solutions/best-practices/reliable-cli-integration-testing-2026-04-26.md` — `OPENCODE_CONFIG_DIR` + `OPENCODE_CONFIG_CONTENT` isolation pattern. Relevant if this plan adds an integration test that drives `opencode run` against the new plugin.
 - `docs/solutions/developer-experience/opencode-debug-diagnostics-2026-04-26.md` — `--print-logs --log-level DEBUG` workflow.
 
 ### External References
@@ -108,7 +107,7 @@ Performance / compatibility success criteria from the origin doc:
 - **Constant-time auth comparison with length normalization.** `crypto.timingSafeEqual` throws when the two `Buffer`s have different lengths, so it cannot be invoked directly on the raw header value. Auth middleware: (1) parse the `Authorization` header; if absent OR not `Bearer`-scheme OR token-half is empty, return 401 immediately without any comparison call; (2) Buffer-encode both the presented token and the server-side token; if lengths differ, return 401 immediately (the length check itself is not constant-time, but neither length nor the absence/presence path leaks anything that wasn't already implicit in 401-vs-200); (3) only when lengths match, call `crypto.timingSafeEqual` for the constant-time compare. This avoids the unhandled exception path entirely while still defending the equal-length case against timing attacks.
 - **`0o600` permissions on the port file.** Written via `fs.writeFile(path, data, { mode: 0o600 })` and `fs.chmod(path, 0o600)` after atomic rename. Parent directory created with `0o700`. Other users on shared machines cannot read the token.
 - **JSON body parsing.** `node:http` does not parse request bodies. The Unit 3 server collects `data`/`end` chunks per request with a **streaming size guard**: each `data` event increments a running byte total; if the total exceeds 64KB, the server immediately responds 413 and aborts the request (`req.destroy()`) without buffering the rest. Only when `end` fires under the cap does the handler `JSON.parse` the joined buffer inside try/catch and validate against the Zod schema. Bad bodies → 400. Streaming the cap (vs checking after collection) prevents holding a 64KB+ buffer for any request that would be rejected anyway.
-- **Pull-only RPC for v0.2.0.** Brainstorm prerequisite #4. Server exposes `GET /health`, `POST /tasks/list`, `POST /tasks/cancel`. No notification poller in v0.2.0. Per-task event endpoint + push poller land in v0.2.1.
+- **Pull-only RPC in the foundation.** Brainstorm prerequisite #4. Server exposes `GET /health`, `POST /tasks/list`, `POST /tasks/cancel`. No notification poller in the foundation phase. Per-task event endpoint + push poller land with the drilled-view phase.
 - **Slash command registered from the TUI half.** Per Magic Context's working code; the brainstorm's note about server-side registration was based on a stale comment. TUI-side registration via `api.command.register` is correct because invoking `/copilot-status` without a TUI to render the dialog is meaningless. **Verify at implementation time** that the actual field name is `trigger` (per Magic Context's TS) vs `value` (per other docs) — the slash-command shape is the one TUI-API detail not directly verifiable from this repo's `node_modules`.
 - **Cancel-confirm via `api.ui.dialog.replace(<ConfirmCard />)`.** opentui has no `DialogConfirm` symbol. Implemented as a SolidJS card with two action buttons (`Cancel Task` destructive, `Keep Running` secondary). On `rpc.tasksCancel` failure, the card stays open and replaces its button row with an inline error message + a single `Dismiss` button. **Locked**: no toast fallback, no card-close-then-toast — inline-only.
 - **Cancel-helper extraction.** Unit 4 (not Unit 3) creates `src/runtime/cancel-helper.ts` exposing `cancelTaskById(taskId): { cancelled, error? }`. Both `createCancelTool` (existing) and the RPC `/tasks/cancel` handler (new) call into this single helper. The helper invokes `task.abortController.abort()`; the existing abort listener in `subprocess.ts` handles the actual kill via `killProcessTree`.
@@ -126,8 +125,8 @@ Performance / compatibility success criteria from the origin doc:
 - **`@opentui/*` dep posture** — direct deps (Magic Context precedent).
 - **Slash command registration side** — TUI-side, see Key Decisions.
 - **`DialogConfirm` symbol** — doesn't exist; use `dialog.replace(<ConfirmCard />)`.
-- **RPC routes for v0.2.0** — `GET /health`, `POST /tasks/list`, `POST /tasks/cancel`. No event endpoint until v0.2.1.
-- **PID-file lock strategy** — moot for v0.2.0 (PID file lives in the pre-TUI hardening plan).
+- **RPC routes in the foundation phase** — `GET /health`, `POST /tasks/list`, `POST /tasks/cancel`. No event endpoint until the drilled-view phase.
+- **PID-file lock strategy** — moot here (PID file lives in the runtime hardening plan).
 - **Server-side `Hooks` dispose presence** — confirmed absent in the installed SDK; cleanup wires to process exit signals.
 - **Confirm-card error UX branch** — locked to inline-error; see Key Decisions.
 - **Port file path discrimination** — per-session, see Key Decisions.
@@ -253,11 +252,11 @@ tests/
 - Add `exports["."]: { types: "./dist/index.d.ts", import: "./dist/index.js" }` (preserve current default-import semantics — required because once `exports` is present, Node ESM ignores `"main"`).
 - Add `exports["./plugin"]: { types: "./dist/index.d.ts", import: "./dist/index.js" }` (explicit alias for callers that want it).
 - Add `exports["./tui"]: { types: "./src/tui/index.tsx", import: "./src/tui/index.tsx" }`.
-- Add direct deps: `@opentui/core`, `@opentui/solid`, `solid-js`, `zod` (Zod is currently only a transitive dep via `@opencode-ai/plugin`; v0.2.0 uses it directly in `rpc-contract.ts` and must declare it).
+- Add direct deps: `@opentui/core`, `@opentui/solid`, `solid-js`, `zod` (Zod is currently only a transitive dep via `@opencode-ai/plugin`; this plan uses it directly in `rpc-contract.ts` and must declare it).
 - Pin to versions matching Magic Context's working baseline (`^0.1.40` for opentui, `^1.9.9` for solid-js); resolve actual versions at install time via `bun add`.
 - Bump `@opencode-ai/plugin` peer dep to match the host's bundled version.
 - Add per-file pragma support to `tsconfig.json` (`jsx: "preserve"` + `jsxImportSource: "@opentui/solid"`). **Implementation gate**: run `bun run typecheck` after Unit 5 adds the first `.tsx` file. If `tsc` fails to resolve JSX element types under `jsx: "preserve"` + per-file pragma, fall back to `jsx: "react-jsx"` and verify the runtime still loads. Document the chosen mode in `AGENTS.md`.
-- Single minor changeset for the whole v0.2.0 PR ("v0.2.0 foundation: TUI plugin half + RPC + spawn toast"), not per-unit.
+- Single minor changeset for the whole foundation PR ("TUI foundation: plugin half + RPC + spawn toast"), not per-unit.
 
 **Patterns to follow:**
 - Magic Context's TUI package.json `oc-plugin` + `exports` shape.
@@ -287,7 +286,7 @@ tests/
 
 **Approach:**
 - Export Zod schemas: `HealthResponseSchema`, `TasksListResponseSchema`, `TasksCancelRequestSchema`, `TasksCancelResponseSchema`, plus a `PortFileSchema` describing the on-disk shape (`{ port, pid, token }`).
-- `TasksListResponseSchema` carries: `{ tasks: Array<{ taskId, status, agent, model, elapsedMs, toolCallCount, startedAt }> }`. Status enum is `"running"` only in v0.2.0 (the running-only rule); add other variants now to make v0.2.1 a no-schema-change addition.
+- `TasksListResponseSchema` carries: `{ tasks: Array<{ taskId, status, agent, model, elapsedMs, toolCallCount, startedAt }> }`. Status enum is `"running"` only in the foundation phase (the running-only rule); add other variants now to make the drilled-view phase a no-schema-change addition.
 - `TasksCancelRequestSchema`: `{ taskId: string }` with `cpl_*` prefix regex.
 - `TasksCancelResponseSchema`: `{ cancelled: boolean, error?: string }`.
 - Export inferred TS types via `z.infer`.
@@ -472,7 +471,7 @@ tests/
 
 **Approach:**
 - Stateful SolidJS component. On mount, calls `rpc.tasksList()` (Unit 5). State machine: `loading` → (`populated` | `empty` | `error`).
-- **Header**: `<n> running · 0 recent` (recent count is always 0 in v0.2.0; field reserved for v0.2.2). During loading, header reads `Loading delegations…` instead. During error, header reads `Status unavailable.`. The header component is owned by the modal-list root, not by the per-state child components — this keeps header behavior consistent across states.
+- **Header**: `<n> running · 0 recent` (recent count is always 0 in the foundation phase; field reserved for the third phase). During loading, header reads `Loading delegations…` instead. During error, header reads `Status unavailable.`. The header component is owned by the modal-list root, not by the per-state child components — this keeps header behavior consistent across states.
 - Row: 6 columns from the brainstorm spec; status badge `●` prefix when `running`; focused row uses inverse video.
 - **Footer**: persistent across all states. Empty/error states show `Esc close`. Populated state shows `↑↓ navigate · c cancel · Esc close`. (Brainstorm specifies `Esc close` for empty/error; populated state's footer is a small affordance addition.)
 - Keybind handler via opentui's input subscription:
@@ -561,9 +560,10 @@ tests/
 
 ## Definition of Done (PR housekeeping; not a planning unit)
 
-These updates ride with the v0.2.0 implementation PR but are not numbered units (per scope-guardian's recommendation that pure docs not be elevated to planning-unit status):
+These updates ride with the foundation implementation PR but are not numbered units (per scope-guardian's recommendation that pure docs not be elevated to planning-unit status):
 
-- **README.md**: under Known Limitations, add the v0.2.0 entries for the architectural commit (TUI half opt-in via `tui.jsonc`, RPC server posture). Note the upstream-issue link for the dispose-hook workaround once filed.
+- **README.md**: under Known Limitations, add the foundation-release entries for the architectural commit (TUI half opt-in via `tui.jsonc`, RPC server posture). Note the upstream-issue link for the dispose-hook workaround once filed.
+
 - **README.md**: new section "Optional: install the TUI half" with one-paragraph instructions for adding `opencode-copilot-delegate` to the user's `tui.jsonc`.
 - **AGENTS.md**: extend the architecture tree to include `src/tui/`, `src/runtime/rpc-server.ts`, `src/runtime/cancel-helper.ts`. Add a one-paragraph "Two-entrypoint architecture" subsection explaining the server/TUI split.
 - **AGENTS.md**: document the resolved `tsconfig.json` JSX mode (`jsx: "preserve"` + per-file pragma if it works, else `jsx: "react-jsx"`) and the resolved `api.command.register` field (`trigger` vs `value`).
@@ -574,7 +574,7 @@ These updates ride with the v0.2.0 implementation PR but are not numbered units 
 - **Error propagation:** RPC errors are typed (`RpcUnreachableError`, `RpcServerError`, `RpcAuthError`, `RpcValidationError`) and surfaced as the modal's error state or the confirm-card's inline-error branch.
 - **State lifecycle risks:** Per-session port file is the new shared state. Per-session path eliminates the cross-session collision class. Cleanup runs best-effort on `beforeExit`/`SIGTERM`; the pre-TUI hardening plan's reaper covers misses.
 - **API surface parity:** No change to existing tools' return shapes or error contracts. `copilot_delegate` adds one fire-and-forget toast call. `copilot_cancel` is functionally unchanged but factored through `cancel-helper` so the RPC handler can share the path.
-- **Integration coverage:** Unit 3's "Integration" scenario exercises the cross-layer flow `RPC → cancel-helper → abortController → killProcessTree`. Unit 4's "Integration (cancel parity)" verifies tool and RPC paths produce identical observable behavior. End-to-end TUI testing (modal → keybind → RPC → kill) requires a running OpenCode TUI runtime; manual verification at implementation time, no automated end-to-end test in v0.2.0.
+- **Integration coverage:** Unit 3's "Integration" scenario exercises the cross-layer flow `RPC → cancel-helper → abortController → killProcessTree`. Unit 4's "Integration (cancel parity)" verifies tool and RPC paths produce identical observable behavior. End-to-end TUI testing (modal → keybind → RPC → kill) requires a running OpenCode TUI runtime; manual verification at implementation time, no automated end-to-end test in the foundation phase.
 - **Unchanged invariants:** `task-registry.ts`'s `MAX_CONCURRENT` cap, the `cpl_` task ID prefix, the `notifyCompletion` shape, the `client.session.prompt({ noReply, ... })` system-reminder API, the existing `bun build` artifact shape (`dist/index.js` only), the `dist/` build does not include TUI source.
 
 ## Risks & Dependencies
@@ -591,7 +591,7 @@ These updates ride with the v0.2.0 implementation PR but are not numbered units 
 | Cross-session token theft if port-file 0o600 perms regress | Test asserts `mode === 0o600` after write (Unit 3). Auth token defense-in-depth: even if perms regress, an attacker still needs the token to make calls. |
 | Spawn-toast queue saturation at 10 concurrent delegations | Unverified; OpenCode's toast implementation may rate-limit. Implementation-time observation: if toasts drop, batch via a debounce. |
 | Transitive dep conflicts from `@opentui/*` + `solid-js` | Verify at `bun add` time (Unit 1). If conflicts, escalate before downstream units begin. |
-| Cancel-from-UI race with stdout buffer (post-kill JSONL events appended to registry) | Closed by the parser-status guard in the pre-TUI hardening plan; v0.2.0 assumes that's already shipped. |
+| Cancel-from-UI race with stdout buffer (post-kill JSONL events appended to registry) | Closed by the parser-status guard in the runtime hardening plan; this plan assumes that's already shipped. |
 | Modal interferes with active OpenCode work | Modal does not block input to the underlying session; Esc returns instantly. |
 | OpenCode `Hooks` interface lacks dispose; cleanup is best-effort | `process.on('beforeExit'/'SIGTERM')` covers normal exits. Reaper covers SIGKILL leftovers. Upstream-issue follow-up to retire the workaround when a dispose hook lands. |
 
@@ -602,7 +602,7 @@ See "Definition of Done" above. CHANGELOG is generated automatically by changese
 ## Sources & References
 
 - **Origin document:** [docs/brainstorms/2026-04-27-copilot-status-tui-requirements.md](../brainstorms/2026-04-27-copilot-status-tui-requirements.md)
-- **Prerequisite plan:** [docs/plans/2026-04-27-002-fix-runtime-hardening-pre-tui-plan.md](2026-04-27-002-fix-runtime-hardening-pre-tui-plan.md)
+- **Prerequisite plan:** [docs/plans/2026-04-27-002-fix-runtime-hardening-plan.md](2026-04-27-002-fix-runtime-hardening-plan.md)
 - Related brainstorm research: [docs/research/copilot-cli-capabilities-2026-04-27.md](../research/copilot-cli-capabilities-2026-04-27.md)
 - Related ideation: [docs/ideation/2026-04-27-copilot-delegate-v0.2.md](../ideation/2026-04-27-copilot-delegate-v0.2.md) (S1)
 - Closed plan it builds on: [docs/plans/2026-04-21-copilot-delegate-plugin.md](2026-04-21-copilot-delegate-plugin.md)

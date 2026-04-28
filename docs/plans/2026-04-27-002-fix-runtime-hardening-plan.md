@@ -1,24 +1,24 @@
 ---
-title: "fix: pre-TUI runtime hardening (orphan reaper + cancel-race parser guard)"
+title: "fix: runtime hardening (orphan reaper + cancel-race parser guard)"
 type: fix
-status: active
+status: completed
 date: 2026-04-27
 deepened: 2026-04-27
+completed: 2026-04-28
 origin: docs/brainstorms/2026-04-27-copilot-status-tui-requirements.md
-target_release: v0.1.1
 follow_up_plan: docs/plans/2026-04-27-001-feat-copilot-status-tui-foundation-plan.md
 ---
 
-# fix: pre-TUI runtime hardening (orphan reaper + cancel-race parser guard)
+# fix: runtime hardening (orphan reaper + cancel-race parser guard)
 
 ## Overview
 
-Two existing-runtime correctness fixes that ship as a v0.1.1 patch ahead of the v0.2.0 TUI foundation:
+Two existing-runtime correctness fixes that ship as a runtime hardening patch ahead of the TUI foundation:
 
 1. **PID-file orphan reaper** — closes the case where Copilot subprocesses survive plugin reload because the OpenCode `Hooks` interface has no dispose hook. Server reads a PID file at init time and reaps any survivors before resuming normal operation.
 2. **Parser cancel-race guard** — closes a real bug in the existing JSONL stdout handler that allows post-cancel events to mutate the task registry. The fix is a single-line guard at the top of the inline data handler.
 
-Both are correctness fixes, not features. They surfaced during planning for the v0.2.0 TUI work but are independent of the TUI architecture and worth shipping on their own. Splitting them out keeps the v0.2.0 PR focused on TUI scope and gives each fix a clean review/merge cycle.
+Both are correctness fixes, not features. They surfaced during planning for the TUI foundation work but are independent of the TUI architecture and worth shipping on their own. Splitting them out keeps the TUI PR focused on its scope and gives each fix a clean review/merge cycle.
 
 ## Problem Frame
 
@@ -26,24 +26,24 @@ Both are correctness fixes, not features. They surfaced during planning for the 
 
 **Cancel-race parser guard**: When `copilot_cancel` is invoked, `task.abortController.abort()` synchronously sets `task.status = 'cancelled'` and asynchronously kills the subprocess. Between the kill signal and the actual stream close, the child process's stdout buffer may still contain unread JSONL lines. The current inline data handler in `src/runtime/subprocess.ts` (an anonymous `child.stdout?.on('data', ...)` callback inside `spawnCopilot`) does not check `task.status` before pushing parsed events onto `task.events`. Result: events from a cancelled task continue to accumulate in the registry until the stream actually closes — observable as `copilot_output cpl_xxx` returning events recorded after the cancel timestamp.
 
-Both bugs predate the v0.2.0 TUI work. They were identified during planning for that plan but neither requires the TUI architecture to fix.
+Both bugs predate the TUI work. They were identified during planning for that plan but neither requires the TUI architecture to fix.
 
 ## Requirements Trace
 
 - **R1** (orphan reaper) — On plugin init, read the PID file at `<XDG_STATE_HOME or ~/.local/state>/opencode-copilot-delegate/orphans.pids`. For each entry: probe liveness (`process.kill(pid, 0)`), compare recorded start time against live `ps -p <pid> -o lstart=` output, and `killProcessTree(pid)` only when the live process is the same one originally tracked. Persist append on task spawn; persist remove on terminal transition. (origin: `docs/brainstorms/2026-04-27-copilot-status-tui-requirements.md` §"Prerequisites for ce:plan" #3)
-- **R2** (parser guard) — In the `child.stdout?.on('data', ...)` callback inside `spawnCopilot`, skip event-push and registry mutation when `task.status !== 'running'`. The single-threaded JS execution model means the guard at the top of the line-loop closes the race for all subsequent events in this and future `data` ticks. (origin: planning pass on the v0.2.0 plan; see commentary in the v0.2.0 follow-up plan's deferred-tasks section)
+- **R2** (parser guard) — In the `child.stdout?.on('data', ...)` callback inside `spawnCopilot`, skip event-push and registry mutation when `task.status !== 'running'`. The single-threaded JS execution model means the guard at the top of the line-loop closes the race for all subsequent events in this and future `data` ticks. (origin: planning pass on the TUI foundation plan; see commentary in the follow-up plan's deferred-tasks section)
 
 ## Scope Boundaries
 
 - **No new public API surface.** PID file path is internal. Parser guard is invisible to consumers.
 - **No changes to existing tool inputs or outputs.** `copilot_delegate`, `copilot_output`, `copilot_cancel` keep their current shapes.
-- **No RPC server, no TUI, no slash commands.** Those are v0.2.0.
+- **No RPC server, no TUI, no slash commands.** Those are scope of the follow-up TUI plan.
 - **No new dependencies.** `node:fs`, `node:child_process`, `node:os` only.
 - **No Windows support beyond what's already there.** The reaper uses POSIX `process.kill(pid, 0)` and the `ps` shell-out, both Unix-only — same constraint as the existing `kill-tree.ts`.
 
 ### Deferred to Separate Tasks
 
-- **Upstream lifecycle-hook feature request to `anomalyco/opencode`** — file alongside this v0.1.1 PR with a code TODO pointing at the issue. The reaper retires when upstream lands a dispose hook.
+- **Upstream lifecycle-hook feature request to `anomalyco/opencode`** — file alongside this hardening PR with a code TODO pointing at the issue. The reaper retires when upstream lands a dispose hook.
 
 ## Context & Research
 
@@ -60,19 +60,19 @@ Both bugs predate the v0.2.0 TUI work. They were identified during planning for 
 
 ## Key Technical Decisions
 
-- **PID file location (per-instance, keyed on plugin process PID)**: `<XDG_STATE_HOME or ~/.local/state>/opencode-copilot-delegate/orphans/<plugin-pid>.pids`, where `<plugin-pid>` is `String(process.pid)` (the plugin host process PID at startup). v0.1.1 deliberately keys on PID rather than `OPENCODE_SESSION_ID` because the reaper needs a directly **probeable spawner-liveness signal** at scan time — see the spawner-liveness gate below. Two concurrent OpenCode sessions each load the plugin in their own host process and naturally get different PIDs, so per-instance isolation is preserved without requiring session env vars. (v0.2.0's port file uses `OPENCODE_SESSION_ID` because its consumer needs session-aware lookup, not liveness probing — different requirement, different key.) Plain text, line-delimited, format `<pid>\t<comm>\t<lstart>` (tab-separated; the `comm` value is the kernel-tracked executable name from `ps -o comm=` and is the kill-gate identity check). Parent directory `<state-dir>/orphans/` created with `0o700`; per-instance files created with `0o600`. **Per-instance keying eliminates the cross-instance file-clobbering risk** that a single shared `orphans.pids` file would create — concurrent OpenCode sessions each read/write/truncate only their own file.
+- **PID file location (per-instance, keyed on plugin process PID)**: `<XDG_STATE_HOME or ~/.local/state>/opencode-copilot-delegate/orphans/<plugin-pid>.pids`, where `<plugin-pid>` is `String(process.pid)` (the plugin host process PID at startup). this plan deliberately keys on PID rather than `OPENCODE_SESSION_ID` because the reaper needs a directly **probeable spawner-liveness signal** at scan time — see the spawner-liveness gate below. Two concurrent OpenCode sessions each load the plugin in their own host process and naturally get different PIDs, so per-instance isolation is preserved without requiring session env vars. (the TUI foundation plan's port file uses `OPENCODE_SESSION_ID` because its consumer needs session-aware lookup, not liveness probing — different requirement, different key.) Plain text, line-delimited, format `<pid>\t<comm>\t<lstart>` (tab-separated; the `comm` value is the kernel-tracked executable name from `ps -o comm=` and is the kill-gate identity check). Parent directory `<state-dir>/orphans/` created with `0o700`; per-instance files created with `0o600`. **Per-instance keying eliminates the cross-instance file-clobbering risk** that a single shared `orphans.pids` file would create — concurrent OpenCode sessions each read/write/truncate only their own file.
 - **Start-time source for the recorded value**: at task spawn, immediately invoke `ps -p <pid> -o lstart=` (array-spawn, no shell) and store the returned string verbatim alongside `comm`. This guarantees the recorded value matches the format `ps` will return at reap time. (Do **not** use `task.startedAt` epoch ms — `ps` and `Date.now()` produce incomparable strings.)
 - **`ps` invocation**: `child_process.spawn('ps', ['-p', String(pid), '-o', '<field>='])` with no shell, where `<field>` is `lstart`, `comm`, or (for diagnostic logging) `args`. Eliminates command-injection risk if the PID file is malformed.
 - **PID file write strategy**: `node:fs` `O_EXCL` temp-file + atomic `rename` for both append and remove. No new dep. **Per-instance keying means single-writer per file** — there is no cross-instance contention, and within an instance a process-local serialization queue (a `Promise` chain in `pid-file.ts`) orders concurrent appends/removes from the existing `MAX_CONCURRENT = 10` task lifecycle without needing a `proper-lockfile`-style cross-process lock. The combination guarantees no lost appends, no torn writes, and idempotent removal. The flag constant lives in `fs.constants.O_EXCL` (not `os.constants`).
 - **PID-validate-before-kill (executable identity, exact `comm` match)**: Before invoking `killProcessTree(pid)`, validate that the process's kernel-tracked executable name from `ps -p <pid> -o comm=` (array-spawn, exact-string compare) matches the `<comm>` value recorded at spawn time. `comm` returns the binary name only — no arguments, no full path — which closes the false-positive class where a process's `args` happens to contain the substring `copilot` (e.g., `cat /tmp/copilot-output.log`, a manually-invoked GitHub Copilot CLI command running on the same host, or a shell script with `copilot` in its path or argv). Combined with the start-time match, the kill gate requires (live PID = recorded PID) AND (live comm = recorded comm) AND (live lstart = recorded lstart) — collisions are statistically impossible without deliberate forging, and forging requires write access to a 0o600 PID file inside a 0o700 directory.
-- **Reap sequencing (awaited)**: Reap runs **awaited** inside the plugin factory, before the factory returns its `Hooks` object. The SDK's `Plugin = (input) => MaybePromise<Hooks>` contract guarantees the host won't dispatch tools until the factory resolves, so a same-instance "tool-call-before-reap-finishes" race cannot occur. v0.2.0's RPC server starts after this completes; v0.1.1 has no RPC server. **Implementation note**: wrap the reap call in try/catch — reap failure must never block plugin init.
+- **Reap sequencing (awaited)**: Reap runs **awaited** inside the plugin factory, before the factory returns its `Hooks` object. The SDK's `Plugin = (input) => MaybePromise<Hooks>` contract guarantees the host won't dispatch tools until the factory resolves, so a same-instance "tool-call-before-reap-finishes" race cannot occur. The TUI foundation plan's RPC server starts after this completes; this plan has no RPC server. **Implementation note**: wrap the reap call in try/catch — reap failure must never block plugin init.
 - **Reap latency budget (parallel probes)**: At `MAX_CONCURRENT = 10` historical entries across all `<state-dir>/orphans/*.pids` files, naive sequential per-PID `ps` shellouts could take 0.5-3s — unacceptable for plugin init. Reap probes run **in parallel with a small concurrency cap** (`Promise.all` over up to 5 simultaneous workers; each worker handles its assigned PIDs sequentially: liveness probe → `comm` check → `lstart` check → optional `killProcessTree`). Soft target: total reap time under 200ms at full cap on a typical macOS dev host. Verified by Unit 2's smoke test.
 - **Reap directory scan + spawner-liveness gate**: Reaper scans **all `*.pids` files** in `<state-dir>/orphans/` so survivors from previous plugin instances are recovered. For each foreign file (filename PID ≠ our `process.pid`), the reaper extracts the owning plugin's PID from the filename and probes `process.kill(<plugin-pid>, 0)`:
   - **Alive** (call succeeds) or **`EPERM`** (process exists but we lack signal permission — still counts as alive): skip the entire file. The owning plugin is still tracking those subprocesses; killing them would break a running session. The identity gate alone is insufficient for foreign files: a live foreign instance's subprocesses would pass the `comm`+`lstart` gate (they ARE legitimate copilot subprocesses) and be wrongly killed.
   - **Dead** (`ESRCH`): proceed with per-entry reap. After processing, **delete the file** — the owning plugin is gone, and bounded directory growth is the desirable hygiene property here.
   - **Current instance's own file** (filename matches `String(process.pid)`): processed unconditionally; truncated/recreated post-reap. We know our own plugin is alive; we want to clean entries from subprocesses that died while the plugin was loaded but before reap fired.
 - **Parser guard placement**: In `spawnCopilot`, at the top of the existing inline `child.stdout?.on('data', (chunk: string) => { ... })` handler. Inside the `for (const line of lines)` loop, the guard goes **before** `parseJsonlLine(line)` (not before `events.push(event)`) so a cancelled task does not pay the parse cost on already-buffered lines: `if (task.status !== 'running') break;`. The partial-line buffer update (`lines.pop()`) runs *before* the loop, so `break` and `return` would behave identically here — `break` is preferred for clarity. Single-threaded JS guarantees the guard is checked synchronously with every iteration, with no interleaving possible.
-- **Status-mutation refactor (terminal-state-preserving)**: The current `src/runtime/subprocess.ts` mutates `task.status` inline at three sites — line 59 (`finalizeTask`, on subprocess `close` event), line 143 (abort listener), and line 153 (spawn `error` event). v0.1.1 introduces a `setStatus(task, newStatus, options?)` helper that wraps the assignment and the `removePidEntry` cleanup as a single atomic-from-the-caller's-perspective operation. **The helper is idempotent on terminal state**: if `task.status` is already terminal (`complete | failed | cancelled`) and `newStatus` is also terminal, `setStatus` no-ops and returns. This preserves the existing `finalizeTask` invariant `if (task.status !== 'cancelled') task.status = ...` automatically: when the subprocess `close` event fires after the abort listener has already set `cancelled`, `setStatus(task, 'complete' | 'failed', ...)` is a no-op. Future contributors don't need to remember the guard. The three sites become `setStatus(task, 'complete' | 'failed' | 'cancelled', { pidFilePath })` calls. Centralizes lifecycle plumbing, prevents the cleanup hook from being forgotten, and gives Unit 4's parser guard a stable invariant to read.
+- **Status-mutation refactor (terminal-state-preserving)**: The current `src/runtime/subprocess.ts` mutates `task.status` inline at three sites — line 59 (`finalizeTask`, on subprocess `close` event), line 143 (abort listener), and line 153 (spawn `error` event). This plan introduces a `setStatus(task, newStatus, options?)` helper that wraps the assignment and the `removePidEntry` cleanup as a single atomic-from-the-caller's-perspective operation. **The helper is idempotent on terminal state**: if `task.status` is already terminal (`complete | failed | cancelled`) and `newStatus` is also terminal, `setStatus` no-ops and returns. This preserves the existing `finalizeTask` invariant `if (task.status !== 'cancelled') task.status = ...` automatically: when the subprocess `close` event fires after the abort listener has already set `cancelled`, `setStatus(task, 'complete' | 'failed', ...)` is a no-op. Future contributors don't need to remember the guard. The three sites become `setStatus(task, 'complete' | 'failed' | 'cancelled', { pidFilePath })` calls. Centralizes lifecycle plumbing, prevents the cleanup hook from being forgotten, and gives Unit 4's parser guard a stable invariant to read.
 
 ## Open Questions
 
@@ -86,7 +86,7 @@ Both bugs predate the v0.2.0 TUI work. They were identified during planning for 
 ### Resolved During Deepening Pass (2026-04-27)
 
 - **Per-instance PID files vs single shared file**: shared `orphans.pids` was a real cross-instance integrity hole (one OpenCode session's end-of-reap truncate could wipe a live PID written by another session). Resolved to per-instance files at `<state-dir>/orphans/<plugin-pid>.pids`. The reaper scans the whole directory.
-- **Discriminator choice (PID, not session ID)**: keying the v0.1.1 PID file on `process.pid` rather than `OPENCODE_SESSION_ID` is intentional — the reaper needs spawner-liveness probing, and PID is directly probeable via `process.kill(pid, 0)` whereas session IDs are not. v0.2.0's port file keys on session ID for a different reason (consumer-side session lookup).
+- **Discriminator choice (PID, not session ID)**: keying this plan's PID file on `process.pid` rather than `OPENCODE_SESSION_ID` is intentional — the reaper needs spawner-liveness probing, and PID is directly probeable via `process.kill(pid, 0)` whereas session IDs are not. the TUI foundation plan's port file keys on session ID for a different reason (consumer-side session lookup).
 - **Spawner-liveness gate (foreign files)**: the identity gate alone (exact `comm` + `lstart` match) cannot distinguish "OUR live child" from "a live foreign instance's child whose recorded identity happens to match" — a foreign live instance's subprocesses would pass the gate and be wrongly killed. Resolved by adding a per-file spawner-liveness probe: alive foreign spawner → skip file entirely; dead foreign spawner → reap entries and delete the file. Side benefit: bounds directory growth without a separate cleanup policy.
 - **Reap blocking init**: keeping reap awaited inside the factory is correct (the SDK contract guarantees no tool dispatch until the factory resolves). The acceptability concern is latency, not sequencing. Resolved by parallelizing per-PID probes with a concurrency cap of 5; soft 200ms target at full cap.
 - **Status-mutation refactor (terminal-preserving)**: three inline sites in `subprocess.ts` (lines 59, 143, 153) become a single `setStatus` helper that no-ops when transitioning between terminal states. Preserves the existing `finalizeTask` `if (task.status !== 'cancelled')` invariant automatically; future contributors can't drop it accidentally.
@@ -310,9 +310,9 @@ tests/
 
 ## Definition of Done (PR housekeeping; not a planning unit)
 
-- **README.md**: under Known Limitations, update the "PID-file reaper: planned for v1.x" entry to reflect v0.1.1 shipping. Add a one-line note about POSIX `ps` dependency.
+- **README.md**: under Known Limitations, update the "PID-file reaper: planned for v1.x" entry to reflect that the reaper has shipped. Add a one-line note about POSIX `ps` dependency.
 - **AGENTS.md**: extend the architecture tree to include `src/runtime/orphan-reaper.ts` and `src/runtime/pid-file.ts`. One sentence on the reaper's init-time sequencing.
-- **Single patch changeset for the v0.1.1 PR.** (Patch bump in the unstable `0.x` series for a behavior-preserving correctness fix; `minor` is reserved for new features under the repo policy.)
+- **Single minor changeset for this PR.** (Per repo policy: `minor` bump for the unstable `0.x` series.)
 
 ## System-Wide Impact
 
