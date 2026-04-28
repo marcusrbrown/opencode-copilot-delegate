@@ -1,6 +1,6 @@
 {
   "name": "opencode-copilot-delegate",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "OpenCode plugin that delegates tasks to GitHub Copilot CLI as background subprocesses",
   "type": "module",
   "main": "dist/index.js",
