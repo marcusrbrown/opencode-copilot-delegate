@@ -40,6 +40,10 @@ function psField(pid: number, field: string): Promise<string | null> {
     child.stdout?.on('data', (chunk: Buffer) => {
       stdout += chunk.toString('utf-8')
     })
+    // Drain stderr so the OS pipe buffer never fills under backpressure.
+    // An unread stderr pipe on a long-running or backlogged ps invocation
+    // can stall the subprocess, blocking plugin init.
+    child.stderr?.resume()
 
     child.on('close', (code) => {
       clearTimeout(timeout)

@@ -40,6 +40,16 @@ export function createTask(
       .then(([comm, lstart]) => {
         if (comm && lstart) {
           appendPidEntry(pidFilePath, task.pid, comm, lstart).catch(() => {})
+        } else {
+          // ps lookup returned null for at least one field. Most likely the
+          // process has already exited (e.g., copilot CLI failed to launch),
+          // but it could also mean the kernel hasn't surfaced the entry yet.
+          // Either way, we cannot append without both fields, so the
+          // subprocess is invisible to the orphan reaper. Surface a warning
+          // so degraded coverage is observable.
+          console.warn(
+            `[task-registry] ps lookup returned null for pid ${task.pid}; subprocess will not be tracked for orphan reaping`,
+          )
         }
       })
       .catch(() => {})
