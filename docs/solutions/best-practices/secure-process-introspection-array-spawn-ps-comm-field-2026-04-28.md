@@ -27,7 +27,7 @@ tags:
 
 In a long-lived plugin, watchdog, or reaper, "I still have PID 1234, so it's safe to kill" is a bad assumption. PIDs get reused, so a stale pidfile can point at a completely unrelated process by the time cleanup runs. Matching `argv` is not enough either, because `args` is just process command-line presentation state and is much easier to spoof or mislead than a kernel-reported identity signal.
 
-In `src/runtime/orphan-reaper.ts`, the shipped fix closes both gaps: it re-reads the live process identity immediately before `killProcessTree`, and only proceeds when both `comm` and `lstart` still match the values captured at spawn time (`src/runtime/orphan-reaper.ts:109-115`). That combination defends against both stale PID reuse and "same PID, believable-looking argv" mistakes.
+In `src/runtime/orphan-reaper.ts`, the shipped fix closes both gaps: it re-reads the live process identity immediately before `killProcessTree`, and only proceeds when both `comm` and `lstart` still match the values captured at spawn time. That combination defends against both stale PID reuse and "same PID, believable-looking argv" mistakes.
 
 ## Guidance
 
@@ -43,9 +43,9 @@ Use a two-part identity gate before signaling any PID you are recovering from pe
 The core wrapper is small and boring, which is exactly what you want in a safety check:
 
 ```ts
-function psField(pid: number, field: string): Promise<string | null> {
+function runPs(args: string[]): Promise<string | null> {
   return new Promise((resolve) => {
-    const child = spawn('ps', ['-p', String(pid), '-o', `${field}=`])
+    const child = spawn('ps', args)
     let stdout = ''
     let timedOut = false
 
@@ -55,9 +55,7 @@ function psField(pid: number, field: string): Promise<string | null> {
     }, 1000)
 ```
 
-— `src/runtime/orphan-reaper.ts:29-38`
-
-That first excerpt is the important spawn pattern: no shell, no string interpolation into a shell command, and a bounded timeout so introspection cannot wedge startup or cleanup forever.
+That is the important spawn pattern: no shell, no string interpolation into a shell command, and a bounded timeout so introspection cannot wedge startup or cleanup forever. The wrapper is generic over args (any ps invocation), which lets the caller decide what fields to read in a single shot.
 
 The second detail is easy to miss and worth preserving as part of the pattern, not a throwaway implementation note:
 
@@ -66,12 +64,8 @@ The second detail is easy to miss and worth preserving as part of the pattern, n
       stdout += chunk.toString('utf-8')
     })
     // Drain stderr so the OS pipe buffer never fills under backpressure.
-    // An unread stderr pipe on a long-running or backlogged ps invocation
-    // can stall the subprocess, blocking plugin init.
     child.stderr?.resume()
 ```
-
-— `src/runtime/orphan-reaper.ts:40-46`
 
 If a subprocess writes to `stderr` and the parent never drains it, the kernel pipe can fill. Once full, the child blocks on write, which means it may never exit, which means your seemingly harmless introspection helper can hang the system in exactly the path that is supposed to make cleanup safer.
 
@@ -94,26 +88,40 @@ The wrapper also normalizes failure to a safe default:
     })
 ```
 
-— `src/runtime/orphan-reaper.ts:48-60`
+Timeout, spawn error, non-zero exit, and empty output all become `null`. That is fine here because the caller only needs one answer: "can I still prove this is the same process?" If not, skip the kill.
 
-In the current implementation, timeout, spawn error, non-zero exit, and empty output all become `null`. That is fine here because the caller only needs one answer: "can I still prove this is the same process?" If not, skip the kill.
+For identity verification, prefer reading both `comm` and `lstart` in a single `ps` invocation. The combined query is atomic (one snapshot of the process table), halves fork/exec cost, and removes the small window where a PID could be reused between the `comm` query and the `lstart` query:
+
+```ts
+export async function getPidIdentity(
+  pid: number,
+): Promise<{ comm: string; lstart: string } | null> {
+  const raw = await runPs(['-p', String(pid), '-o', 'comm=,lstart='])
+  if (raw === null) return null
+  const firstWs = raw.search(/\s/)
+  if (firstWs === -1) return null
+  const comm = raw.slice(0, firstWs)
+  const lstart = raw.slice(firstWs).trim()
+  if (!comm || !lstart) return null
+  return { comm, lstart }
+}
+```
 
 The actual identity gate is the real win:
 
 ```ts
-const [liveComm, liveLstart] = await Promise.all([
-  getPidComm(entry.pid),
-  getPidStartTime(entry.pid),
-])
+const live = await getPidIdentity(entry.pid)
 
-if (liveComm !== entry.comm || liveLstart !== entry.lstart) {
+if (
+  live === null ||
+  live.comm !== entry.comm ||
+  live.lstart !== entry.lstart
+) {
   return { reaped: false, skipped: true }
 }
 ```
 
-— `src/runtime/orphan-reaper.ts:109-115`
-
-That `||` is the contract. If either leg of identity moved, the process is no longer trusted. No "close enough," no partial match, no best-effort kill.
+That triple `||` is the contract. If introspection failed at all, or if either leg of identity moved, the process is no longer trusted. No "close enough," no partial match, no best-effort kill.
 
 A clean way to describe the pattern is:
 
@@ -175,12 +183,9 @@ async function verifyIdentity(
   expectedComm: string,
   expectedLstart: string,
 ): Promise<boolean> {
-  const [liveComm, liveLstart] = await Promise.all([
-    getPidComm(pid),
-    getPidStartTime(pid),
-  ])
-
-  return liveComm === expectedComm && liveLstart === expectedLstart
+  const live = await getPidIdentity(pid)
+  if (!live) return false
+  return live.comm === expectedComm && live.lstart === expectedLstart
 }
 
 if (await verifyIdentity(recordedPid, recordedComm, recordedLstart)) {
@@ -194,7 +199,8 @@ Now the reused PID does not pass unless it is still the same process instance.
 
 ```ts
 // Still unsafe: a reused PID running the same binary can match this.
-if ((await getPidComm(recordedPid)) === recordedComm) {
+const live = await getPidIdentity(recordedPid)
+if (live && live.comm === recordedComm) {
   await killProcessTree(recordedPid)
 }
 ```
@@ -207,7 +213,7 @@ Failure mode:
 4. `comm` still matches.
 5. You kill the wrong `copilot` instance.
 
-Adding `lstart` distinguishes the old instance from the new one.
+Matching both `comm` and `lstart` distinguishes the old instance from the new one.
 
 **Shell-string `ps`: avoid this**
 
@@ -243,12 +249,17 @@ Benefits:
 **Practical wrapper shape**
 
 ```ts
-async function getPidField(pid: number, field: 'comm' | 'lstart') {
-  const child = spawn('ps', ['-p', String(pid), '-o', `${field}=`])
+async function getPidIdentity(
+  pid: number,
+): Promise<{ comm: string; lstart: string } | null> {
+  const child = spawn('ps', ['-p', String(pid), '-o', 'comm=,lstart='])
   child.stderr?.resume()
-  // collect stdout, enforce timeout, return trimmed value or null
+  // collect stdout, enforce timeout, parse `<comm> <lstart>`, return
+  // { comm, lstart } or null on any failure mode.
 }
 ```
+
+Reading both fields in one `ps` call is preferable to two separate calls: it is atomic from the kernel's perspective (no window between the queries), it halves fork/exec cost, and the parse is trivial because `comm` is a single token and `lstart` is everything after the first whitespace.
 
 That is the boring core. The safety comes from combining it with "skip kill unless both live values still match the recorded values."
 
