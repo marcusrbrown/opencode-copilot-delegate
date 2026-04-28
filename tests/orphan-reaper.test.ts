@@ -4,8 +4,8 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   defaultIsPluginAlive,
-  reapOrphans,
   type ReapResult,
+  reapOrphans,
 } from '../src/runtime/orphan-reaper'
 
 function makeTempDir(): string {
@@ -19,7 +19,7 @@ function writePidFile(
   const lines = entries
     .map((e) => `${e.pid}\t${e.comm}\t${e.lstart}`)
     .join('\n')
-  writeFileSync(filePath, lines ? lines + '\n' : '')
+  writeFileSync(filePath, lines ? `${lines}\n` : '')
 }
 
 function result(overrides: Partial<ReapResult> = {}): ReapResult {

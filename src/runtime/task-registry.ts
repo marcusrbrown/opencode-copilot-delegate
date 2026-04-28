@@ -1,5 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { killProcessTree } from '../lib/kill-tree'
+import { getPidComm, getPidStartTime } from './orphan-reaper'
+import { appendPidEntry } from './pid-file'
 import type { SpawnCopilotResult } from './subprocess'
 
 export type TaskState = SpawnCopilotResult & {
@@ -18,6 +20,7 @@ export type CreateTaskInput = Omit<SpawnCopilotResult, 'taskId'> & {
   cwd: string
   agentName?: string
   modelName?: string
+  pidFilePath?: string
 }
 
 const tasks = new Map<string, TaskState>()
@@ -26,9 +29,20 @@ export function createTask(
   input: CreateTaskInput,
   taskId = `cpl_${randomUUID()}`,
 ): TaskState {
+  const { pidFilePath, ...rest } = input
   const task: TaskState = {
-    ...input,
+    ...rest,
     taskId,
+  }
+
+  if (task.pid > 0 && pidFilePath) {
+    Promise.all([getPidComm(task.pid), getPidStartTime(task.pid)])
+      .then(([comm, lstart]) => {
+        if (comm && lstart) {
+          appendPidEntry(pidFilePath, task.pid, comm, lstart).catch(() => {})
+        }
+      })
+      .catch(() => {})
   }
 
   tasks.set(taskId, task)

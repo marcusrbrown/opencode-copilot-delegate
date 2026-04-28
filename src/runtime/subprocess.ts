@@ -4,10 +4,12 @@ import { stripAnsi } from '../lib/ansi'
 import { killProcessTree } from '../lib/kill-tree'
 import type { TaskStatus } from './envelope'
 import { type ParsedEvent, parseJsonlLine } from './jsonl-parser'
+import { setStatus } from './task-status'
 
 type SpawnCopilotOptions = {
   cwd: string
   env?: Record<string, string>
+  pidFilePath?: string
 }
 
 export type SpawnCopilotResult = {
@@ -50,14 +52,13 @@ function finalizeTask(
   task: SpawnCopilotResult,
   exitCode: number | null,
   stderrText: string,
+  pidFilePath?: string,
 ): void {
   flushBufferedStdout(task)
   task.endedAt = Date.now()
   task.exitCode = exitCode ?? undefined
 
-  if (task.status !== 'cancelled') {
-    task.status = exitCode === 0 ? 'complete' : 'failed'
-  }
+  setStatus(task, exitCode === 0 ? 'complete' : 'failed', { pidFilePath })
 
   if (stderrText.trim().length > 0) {
     task.errorText = stripAnsi(stderrText.trim())
@@ -141,7 +142,7 @@ export function spawnCopilot(
         return
       }
 
-      task.status = 'cancelled'
+      setStatus(task, 'cancelled', { pidFilePath: opts.pidFilePath })
       killProcessTree(task.pid).catch(() => {
         // Kill failure after abort is non-fatal — process may already be dead
       })
@@ -151,13 +152,13 @@ export function spawnCopilot(
 
   task.completionPromise = new Promise<void>((resolve) => {
     child.once('error', (error) => {
-      task.status = 'failed'
+      setStatus(task, 'failed', { pidFilePath: opts.pidFilePath })
       task.errorText = stripAnsi(error.message)
       resolve()
     })
 
     child.once('close', (code) => {
-      finalizeTask(task, code, stderrText)
+      finalizeTask(task, code, stderrText, opts.pidFilePath)
       resolve()
     })
   })

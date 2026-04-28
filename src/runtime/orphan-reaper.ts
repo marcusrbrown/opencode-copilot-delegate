@@ -126,6 +126,89 @@ async function processEntries(
   return { reaped, skipped }
 }
 
+async function readPidFileEntries(
+  filePath: string,
+): Promise<PidEntry[] | null> {
+  let content: string
+  try {
+    content = await readFile(filePath, 'utf-8')
+  } catch {
+    return null
+  }
+
+  const entries: PidEntry[] = []
+  for (const line of content.split('\n')) {
+    if (!line.trim()) continue
+    const entry = parseLine(line)
+    if (entry) entries.push(entry)
+  }
+  return entries
+}
+
+async function cleanupAfterReap(
+  filePath: string,
+  isCurrent: boolean,
+  currentInstancePath: string,
+): Promise<boolean> {
+  try {
+    if (isCurrent) {
+      await writeFile(currentInstancePath, '')
+      return false
+    }
+    await unlink(filePath)
+    return true
+  } catch {
+    return false
+  }
+}
+
+interface ReapFileOutcome {
+  reaped: number
+  skipped: number
+  scanned: boolean
+  deleted: boolean
+}
+
+async function reapOneFile(
+  filePath: string,
+  filePid: number,
+  isCurrent: boolean,
+  currentInstancePath: string,
+  isPluginAlive: ReapDeps['isPluginAlive'],
+  killProcessTree: ReapDeps['killProcessTree'],
+  getPidComm: ReapDeps['getPidComm'],
+  getPidStartTime: ReapDeps['getPidStartTime'],
+): Promise<ReapFileOutcome> {
+  const empty: ReapFileOutcome = {
+    reaped: 0,
+    skipped: 0,
+    scanned: false,
+    deleted: false,
+  }
+
+  if (!isCurrent && isPluginAlive(filePid)) {
+    return empty
+  }
+
+  const entries = await readPidFileEntries(filePath)
+  if (entries === null) {
+    return empty
+  }
+
+  const { reaped, skipped } = await processEntries(
+    entries,
+    killProcessTree,
+    getPidComm,
+    getPidStartTime,
+  )
+  const deleted = await cleanupAfterReap(
+    filePath,
+    isCurrent,
+    currentInstancePath,
+  )
+  return { reaped, skipped, scanned: true, deleted }
+}
+
 export async function reapOrphans(opts: {
   pidFileDir: string
   currentInstancePath: string
@@ -143,11 +226,6 @@ export async function reapOrphans(opts: {
     isPluginAlive = defaultIsPluginAlive,
   } = opts
 
-  let reaped = 0
-  let skipped = 0
-  let scannedFiles = 0
-  let deletedFiles = 0
-
   let files: string[]
   try {
     files = await readdir(pidFileDir)
@@ -155,66 +233,37 @@ export async function reapOrphans(opts: {
     return { reaped: 0, skipped: 0, scannedFiles: 0, deletedFiles: 0 }
   }
 
-  const pidFiles = files.filter((f) => f.endsWith('.pids'))
+  let reaped = 0
+  let skipped = 0
+  let scannedFiles = 0
+  let deletedFiles = 0
 
-  for (const file of pidFiles) {
+  for (const file of files) {
+    if (!file.endsWith('.pids')) continue
+
     const filePath = join(pidFileDir, file)
-    const stem = basename(file, extname(file))
-    const filePid = parseInt(stem, 10)
+    const filePid = parseInt(basename(file, extname(file)), 10)
 
     if (Number.isNaN(filePid)) {
       console.warn(`[orphan-reaper] Skipping non-numeric PID file: ${file}`)
       continue
     }
 
-    const isCurrent = filePid === process.pid
-
-    if (!isCurrent) {
-      if (isPluginAlive(filePid)) {
-        continue
-      }
-    }
-
-    scannedFiles++
-
-    let content: string
-    try {
-      content = await readFile(filePath, 'utf-8')
-    } catch {
-      continue
-    }
-
-    const lines = content.split('\n')
-    const entries: PidEntry[] = []
-    for (const line of lines) {
-      if (!line.trim()) continue
-      const entry = parseLine(line)
-      if (entry) entries.push(entry)
-    }
-
-    const result = await processEntries(
-      entries,
+    const outcome = await reapOneFile(
+      filePath,
+      filePid,
+      filePid === process.pid,
+      currentInstancePath,
+      isPluginAlive,
       killProcessTree,
       getPidComm,
       getPidStartTime,
     )
-    reaped += result.reaped
-    skipped += result.skipped
 
-    if (isCurrent) {
-      try {
-        await writeFile(currentInstancePath, '')
-      } catch {
-        // ignore
-      }
-    } else {
-      try {
-        await unlink(filePath)
-        deletedFiles++
-      } catch {
-        // ignore
-      }
-    }
+    reaped += outcome.reaped
+    skipped += outcome.skipped
+    if (outcome.scanned) scannedFiles++
+    if (outcome.deleted) deletedFiles++
   }
 
   return { reaped, skipped, scannedFiles, deletedFiles }
