@@ -114,8 +114,10 @@ describe('task registry PID-file hooks', () => {
           cwd: process.cwd(),
           stdoutLineBuffer: '',
           events: [],
-          // biome-ignore lint/suspicious/noExplicitAny: ghost-pid fixture has no real child
-          child: { pid: ghostPid } as any,
+          // Double-cast through unknown: this fixture intentionally only sets
+          // pid because the silent-skip path under test exits before any other
+          // child property is read.
+          child: { pid: ghostPid } as unknown as ReturnType<typeof Bun.spawn>,
           completionPromise: Promise.resolve(),
           abortController,
           pidFilePath,

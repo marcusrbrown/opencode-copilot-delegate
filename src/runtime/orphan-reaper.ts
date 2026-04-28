@@ -87,6 +87,14 @@ export async function getPidIdentity(
 ): Promise<{ comm: string; lstart: string } | null> {
   const raw = await runPs(['-p', String(pid), '-o', 'comm=,lstart='])
   if (raw === null) return null
+  // Splitting on the first whitespace is safe because `comm` is the kernel-
+  // tracked process name field, which is a single non-whitespace token capped
+  // at 15 chars on Linux and 16 chars on macOS. `lstart` is the multi-word
+  // date string that follows. If a future refactor adds different `-o` fields
+  // or runs on a platform that pads `comm` differently, this parse silently
+  // truncates at the first whitespace — the identity gate would then fail
+  // safe (skip, not kill) because the truncated value won't match the
+  // recorded one.
   const firstWs = raw.search(/\s/)
   if (firstWs === -1) return null
   const comm = raw.slice(0, firstWs)
@@ -171,6 +179,10 @@ async function processEntries(
       const entry = queue.shift()
       if (!entry) return
       const result = await processEntry(entry, killProcessTree, getPidIdentity)
+      // Mutating shared `reaped`/`skipped` from concurrent workers is safe
+      // because JS executes each ++ as a single synchronous read-modify-write
+      // with no yield between the read and the store. Workers only interleave
+      // at await boundaries, never inside a ++.
       if (result.reaped) reaped++
       else if (result.skipped) skipped++
     }

@@ -332,10 +332,14 @@ describe('orphan-reaper', () => {
       })
 
       expect(res.reaped).toBe(10)
-      // With a streaming worker pool, the 9 fast probes proceed past the
-      // slow first probe instead of being trapped behind a Promise.all
-      // wave. With chunked-of-5, only 4 fast probes can finish before the
-      // slow one (the rest wait for the next chunk).
+      // With a streaming worker pool: the slow probe occupies worker 0 for
+      // 200ms; workers 1–4 each handle ~2-3 of the remaining 9 fast probes
+      // (10ms each) and finish well before t=200ms. All 9 fast probes complete
+      // before the slow one, hence the >= 9 lower bound.
+      //
+      // With chunked-of-5: the first chunk of 5 (1 slow + 4 fast) waits for
+      // the slow probe at t=200ms; the next chunk of 5 fast probes only starts
+      // at t=200ms and all finish AFTER the slow one, yielding exactly 4.
       expect(finishedBeforeSlow).toBeGreaterThanOrEqual(9)
     })
 
