@@ -84,6 +84,31 @@ describe('normalizeToolArgSchemas', () => {
     expect(normalizeToolArgSchemas(def)).toBe(def)
   })
 
+  test('applies the override when _zod.toJSONSchema is null (not a function)', () => {
+    const schema = tool.schema.string().describe('foo')
+    ;(schema as unknown as ZodInternals)._zod.toJSONSchema =
+      null as unknown as undefined
+    normalizeToolArgSchemas({ args: { field: schema } })
+
+    expect(typeof (schema as unknown as ZodInternals)._zod.toJSONSchema).toBe(
+      'function',
+    )
+  })
+
+  test('applies the override when _zod.toJSONSchema is a non-function truthy value', () => {
+    // Guards against a future Zod internals shape where the slot holds a
+    // non-function sentinel; only an existing function override should
+    // suppress re-attachment.
+    const schema = tool.schema.string().describe('foo')
+    const sentinel = { customMarker: true } as unknown as undefined
+    ;(schema as unknown as ZodInternals)._zod.toJSONSchema = sentinel
+    normalizeToolArgSchemas({ args: { field: schema } })
+
+    expect(typeof (schema as unknown as ZodInternals)._zod.toJSONSchema).toBe(
+      'function',
+    )
+  })
+
   test('override is re-entrant — calling it from within itself does not infinite-loop', () => {
     const schema = tool.schema.string().describe('foo')
     normalizeToolArgSchemas({ args: { field: schema } })

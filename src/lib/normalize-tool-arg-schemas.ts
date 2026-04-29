@@ -42,7 +42,10 @@ function stripRootJsonSchemaFields(
  */
 function attachJsonSchemaOverride(schema: unknown): void {
   const internals = (schema as ZodOverrideTarget)._zod
-  if (!internals || internals.toJSONSchema) return
+  if (!internals || typeof internals.toJSONSchema === 'function') return
+  // Exceptions thrown by `tool.schema.toJSONSchema(schema)` propagate to the
+  // caller; the `finally` block restores the override so subsequent calls
+  // remain idempotent even after a failure.
   internals.toJSONSchema = () => {
     const original = internals.toJSONSchema
     delete internals.toJSONSchema
