@@ -3,10 +3,12 @@ import {
   appendFileSync,
   mkdtempSync,
   readFileSync,
+  rmSync,
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { isErrnoException } from '../src/lib/errno'
 import {
   defaultIsPluginAlive,
   getPidIdentity,
@@ -589,6 +591,25 @@ describe('orphan-reaper', () => {
     it('should return false for non-existent PID', () => {
       expect(defaultIsPluginAlive(99999)).toBe(false)
     })
+
+    it('should return true for a system PID owned by another user (EPERM-as-alive)', () => {
+      // PID 1 (init/launchd) is owned by root. Calling process.kill(1, 0)
+      // from a non-root user throws EPERM, which defaultIsPluginAlive
+      // interprets as "alive but unsignaled" and returns true. This
+      // exercises the EPERM branch directly without injected mocks.
+      //
+      // Skip when this environment does not surface EPERM for PID 1 (root,
+      // Windows, or any platform where the probe behaves differently).
+      let preflightThrewEperm = false
+      try {
+        process.kill(1, 0)
+      } catch (e) {
+        preflightThrewEperm = isErrnoException(e) && e.code === 'EPERM'
+      }
+      if (!preflightThrewEperm) return
+
+      expect(defaultIsPluginAlive(1)).toBe(true)
+    })
   })
 
   describe('getPidIdentity', () => {
@@ -629,6 +650,34 @@ describe('orphan-reaper', () => {
         expect(matched).toBeTruthy()
       } finally {
         console.warn = origWarn
+      }
+    })
+
+    it('returns null when ps binary cannot be spawned', async () => {
+      // Set PATH to an empty directory so spawn('ps', ...) inside runPs
+      // fails with ENOENT. The 'error' event handler in runPs swallows
+      // the failure and resolves null; getPidIdentity propagates that as
+      // null without throwing. This exercises the spawn-error fallback
+      // path that no other test reaches.
+      let emptyDir: string | undefined
+      let originalPath: string | undefined
+      try {
+        emptyDir = mkdtempSync(join(tmpdir(), 'empty-path-'))
+        originalPath = process.env.PATH
+        process.env.PATH = emptyDir
+
+        const identity = await getPidIdentity(process.pid)
+        expect(identity).toBeNull()
+      } finally {
+        process.env.PATH = originalPath
+        // Best-effort cleanup of the temp PATH dir.
+        try {
+          if (emptyDir) {
+            rmSync(emptyDir, { recursive: true })
+          }
+        } catch {
+          // ignore
+        }
       }
     })
   })
