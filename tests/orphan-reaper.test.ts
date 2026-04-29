@@ -37,6 +37,7 @@ function result(overrides: Partial<ReapResult> = {}): ReapResult {
     skipped: 0,
     scannedFiles: 0,
     deletedFiles: 0,
+    timed_out: false,
     ...overrides,
   }
 }
@@ -133,6 +134,24 @@ describe('orphan-reaper', () => {
       expect(readFileSync(currentPath, 'utf-8')).toBe('')
       expect(() => readFileSync(foreignDeadPath, 'utf-8')).toThrow()
       expect(readFileSync(foreignAlivePath, 'utf-8')).toBeDefined()
+    })
+
+    it('reports timed_out: false on a successful reap', async () => {
+      const dir = makeTempDir()
+      const currentPath = join(dir, `${process.pid}.pids`)
+      writePidFile(currentPath, [
+        { pid: process.pid, comm: 'copilot', lstart: 't1' },
+      ])
+
+      const res = await reapOrphans({
+        pidFileDir: dir,
+        currentInstancePath: currentPath,
+        killProcessTree: async () => {},
+        getPidIdentity: async () => ({ comm: 'copilot', lstart: 't1' }),
+      })
+
+      expect(res.timed_out).toBe(false)
+      expect(res.reaped).toBe(1)
     })
   })
 
@@ -514,7 +533,7 @@ describe('orphan-reaper', () => {
       })
 
       const res = await reapPromise
-      expect(res).toEqual(result())
+      expect(res).toEqual(result({ timed_out: true }))
 
       // Simulate a new task being spawned right after init returns: append
       // a fresh entry to the current-instance file.
@@ -558,7 +577,7 @@ describe('orphan-reaper', () => {
           reapTimeoutMs: 50,
         })
 
-        expect(res).toEqual(result())
+        expect(res).toEqual(result({ timed_out: true }))
         const matched = warnings.find(
           (w) =>
             w.includes('orphan-reaper') &&

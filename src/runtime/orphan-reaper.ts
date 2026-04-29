@@ -16,11 +16,20 @@ export interface ReapDeps {
   isPluginAlive: (pid: number) => boolean
 }
 
+/**
+ * Aggregated outcome of a single `reapOrphans` invocation.
+ *
+ * `timed_out` is `true` when `reapOrphans` aborted due to its overall
+ * timeout. It distinguishes a successful no-op (no `.pids` files to scan,
+ * all counts zero) from a partial reap that gave up; downstream consumers
+ * can warn or retry when the flag is set.
+ */
 export interface ReapResult {
   reaped: number
   skipped: number
   scannedFiles: number
   deletedFiles: number
+  timed_out: boolean
 }
 
 export function defaultIsPluginAlive(pid: number): boolean {
@@ -384,7 +393,13 @@ async function doReap(opts: ReapOpts): Promise<ReapResult> {
   try {
     files = await readdir(pidFileDir)
   } catch {
-    return { reaped: 0, skipped: 0, scannedFiles: 0, deletedFiles: 0 }
+    return {
+      reaped: 0,
+      skipped: 0,
+      scannedFiles: 0,
+      deletedFiles: 0,
+      timed_out: false,
+    }
   }
 
   let reaped = 0
@@ -424,7 +439,7 @@ async function doReap(opts: ReapOpts): Promise<ReapResult> {
     if (outcome.deleted) deletedFiles++
   }
 
-  return { reaped, skipped, scannedFiles, deletedFiles }
+  return { reaped, skipped, scannedFiles, deletedFiles, timed_out: false }
 }
 
 /**
@@ -446,6 +461,7 @@ export async function reapOrphans(
     skipped: 0,
     scannedFiles: 0,
     deletedFiles: 0,
+    timed_out: false,
   }
 
   // Race the reap against an overall timeout. On timeout, abort the reap
@@ -461,7 +477,7 @@ export async function reapOrphans(
         `[orphan-reaper] reapOrphans exceeded ${reapTimeoutMs}ms budget; returning empty result`,
       )
       controller.abort()
-      resolve(empty)
+      resolve({ ...empty, timed_out: true })
     }, reapTimeoutMs)
   })
 
