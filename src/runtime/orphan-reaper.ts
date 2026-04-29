@@ -316,13 +316,15 @@ async function reapOneFile(
   return { reaped, skipped, scanned: true, deleted }
 }
 
-export async function reapOrphans(opts: {
+interface ReapOpts {
   pidFileDir: string
   currentInstancePath: string
   killProcessTree: ReapDeps['killProcessTree']
   getPidIdentity: ReapDeps['getPidIdentity']
   isPluginAlive?: ReapDeps['isPluginAlive']
-}): Promise<ReapResult> {
+}
+
+async function doReap(opts: ReapOpts): Promise<ReapResult> {
   const {
     pidFileDir,
     currentInstancePath,
@@ -373,4 +375,47 @@ export async function reapOrphans(opts: {
   }
 
   return { reaped, skipped, scannedFiles, deletedFiles }
+}
+
+/**
+ * Default overall reap budget. Generous enough to cover N pidfiles ×
+ * MAX_CONCURRENT_PROBES workers × per-probe timeout in normal conditions
+ * (with N typically <= a handful and the per-probe timeout at 1s, the
+ * theoretical worst case is well under 15s). The budget is the safety
+ * net for pathological cases — NFS readdir hang, all probes timing out
+ * simultaneously — that would otherwise block plugin init indefinitely.
+ */
+const DEFAULT_REAP_TIMEOUT_MS = 15_000
+
+export async function reapOrphans(
+  opts: ReapOpts & { reapTimeoutMs?: number },
+): Promise<ReapResult> {
+  const reapTimeoutMs = opts.reapTimeoutMs ?? DEFAULT_REAP_TIMEOUT_MS
+  const empty: ReapResult = {
+    reaped: 0,
+    skipped: 0,
+    scannedFiles: 0,
+    deletedFiles: 0,
+  }
+
+  // Race the reap against an overall timeout. On timeout, return the
+  // empty result and emit a warn for operator visibility. The reap's
+  // workers continue running but their result is discarded; this is
+  // acceptable because reapOrphans runs once at plugin init and the
+  // detached workers are bounded by their own per-probe timeouts.
+  let timeoutId: ReturnType<typeof setTimeout> | undefined
+  const timeoutPromise = new Promise<ReapResult>((resolve) => {
+    timeoutId = setTimeout(() => {
+      console.warn(
+        `[orphan-reaper] reapOrphans exceeded ${reapTimeoutMs}ms budget; returning empty result`,
+      )
+      resolve(empty)
+    }, reapTimeoutMs)
+  })
+
+  try {
+    return await Promise.race([doReap(opts), timeoutPromise])
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId)
+  }
 }

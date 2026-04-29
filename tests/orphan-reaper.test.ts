@@ -450,6 +450,46 @@ describe('orphan-reaper', () => {
       )
     })
 
+    it('honors reapTimeoutMs and returns empty result with warn on timeout', async () => {
+      const dir = makeTempDir()
+      const currentPath = join(dir, `${process.pid}.pids`)
+
+      writePidFile(currentPath, [
+        { pid: process.pid, comm: 'copilot', lstart: 't1' },
+      ])
+
+      const warnings: string[] = []
+      const origWarn = console.warn
+      console.warn = (...args: unknown[]) => {
+        warnings.push(args.join(' '))
+      }
+
+      try {
+        // getPidIdentity takes 200ms; reapTimeoutMs=50 fires first.
+        // The reap returns the zero result, and the slow probe completes
+        // silently in the background.
+        const res = await reapOrphans({
+          pidFileDir: dir,
+          currentInstancePath: currentPath,
+          killProcessTree: async () => {},
+          getPidIdentity: () =>
+            new Promise((resolve) => setTimeout(() => resolve(null), 200)),
+          reapTimeoutMs: 50,
+        })
+
+        expect(res).toEqual(result())
+        const matched = warnings.find(
+          (w) =>
+            w.includes('orphan-reaper') &&
+            w.includes('reapOrphans') &&
+            w.includes('50'),
+        )
+        expect(matched).toBeTruthy()
+      } finally {
+        console.warn = origWarn
+      }
+    })
+
     it('should return zeros when fs.readdir throws (missing dir)', async () => {
       const res = await reapOrphans({
         pidFileDir: '/nonexistent/dir/for/sure',
