@@ -26,42 +26,78 @@ function appendRepeatedFlag(
   }
 }
 
+const TOOL_DESCRIPTION = [
+  'Delegate a task to GitHub Copilot CLI as a background subprocess.',
+  '',
+  'Returns a `task_id` immediately so the parent agent can continue other work in parallel.',
+  'When Copilot completes, a `system-reminder` is injected into this OpenCode session and the',
+  'agent retrieves the structured result with `copilot_output(task_id)`.',
+  '',
+  'Use for:',
+  '- Long-running research, implementation, or multi-step automation that would otherwise stall the parent session.',
+  '- Running multiple Copilot calls in parallel (subject to a 10-call concurrency cap, enforced here).',
+  '- Isolating Copilot tool permissions per-task via `allow_tool` / `deny_tool`.',
+  '',
+  'Do not use for:',
+  '- Short single-turn prompts the parent session can answer directly.',
+  '- Tasks where the prompt would contain secrets — Copilot CLI exposes prompts in `ps` output (upstream limitation).',
+  '',
+  'Lifecycle:',
+  '1. `copilot_delegate(...)` → returns `{ task_id }`. The subprocess starts immediately.',
+  '2. Continue with other work; do not poll `copilot_output` while the task is running.',
+  '3. When the task ends (success, error, or cancellation) a `system-reminder` arrives in this session.',
+  '4. `copilot_output(task_id)` returns the structured envelope (status, exit_code, final_message, summary, events, ...).',
+  '5. `copilot_cancel(task_id)` aborts a running task at any time.',
+  '',
+  'Concurrency: at most 10 Copilot delegations may be running concurrently per OpenCode session. Exceeding the cap returns `{ error: ... }` and the agent should wait for an in-flight task to complete or cancel.',
+  '',
+  'Agent argument: `--agent <name>` must resolve to a discovered `<name>.md` file in `~/.copilot/agents` (user-level) or `.github/agents` (repo-level). An unrecognized name is rejected by Copilot CLI at spawn time.',
+  '',
+].join('\n')
+
 export function createDelegateTool(options: DelegateToolOptions) {
   return tool({
-    description:
-      'Delegate a task to GitHub Copilot CLI as a background subprocess.\n' +
-      'Returns a task_id immediately; parent agent continues other work.\n' +
-      'When Copilot completes, a system-reminder is injected into this session.\n' +
-      'Retrieve the structured result with `copilot_output(task_id)`.\n\n' +
-      options.description,
+    description: `${TOOL_DESCRIPTION}${options.description}`,
     args: {
       prompt: tool.schema
         .string()
         .min(1)
-        .describe('The prompt to send to Copilot CLI.'),
+        .describe(
+          'The instruction Copilot should execute. The prompt body is the entire user-visible task; Copilot owns the planning, tool selection, and execution. Required and must be non-empty. Visible in `ps` output (upstream limitation) — never include secrets, tokens, or PII.',
+        ),
       agent: tool.schema
         .string()
         .optional()
-        .describe('Copilot agent name. Omit for default.'),
+        .describe(
+          'Agent name (without .md extension) to use for this task. Must match a discovered agent file in `~/.copilot/agents` or `.github/agents`. The list of currently discovered agents appears at the bottom of this tool description; an empty list means no agents are discoverable and `agent` must be omitted. Omit to use the Copilot CLI default.',
+        ),
       model: tool.schema
         .string()
         .optional()
-        .describe('Model override. Omit for default.'),
+        .describe(
+          "Override the default model for this task. Accepts any model string Copilot CLI recognizes — for example `claude-opus-4.7`, `claude-sonnet-4.7`, or `gpt-5`. Omit to use the user's configured default.",
+        ),
       add_dir: tool.schema
         .string()
         .array()
         .optional()
-        .describe('Additional directories to allow.'),
+        .describe(
+          'Additional repository paths to grant Copilot access to (multi-repo workflows). Each entry becomes a `--add-dir <path>` flag. Use absolute paths. Examples: `["/Users/me/repo-a", "/Users/me/repo-b"]`.',
+        ),
       allow_tool: tool.schema
         .string()
         .array()
         .optional()
-        .describe('Tool patterns to allow.'),
+        .describe(
+          'Copilot tool patterns to allow during this task. Each entry becomes an `--allow-tool <pattern>` flag. Examples: `"shell(*)"`, `"edit"`, `"fetch"`. See the Copilot CLI docs for the full pattern syntax. Layered with `deny_tool` when both are present.',
+        ),
       deny_tool: tool.schema
         .string()
         .array()
         .optional()
-        .describe('Tool patterns to deny.'),
+        .describe(
+          'Copilot tool patterns to deny during this task. Each entry becomes a `--deny-tool <pattern>` flag. Examples: `"shell(rm)"`, `"shell(curl)"`. Use to harden a task by blocking dangerous operations even if `allow_tool` would permit them.',
+        ),
     },
     async execute(args, ctx) {
       const runningCount = getAllTasks().filter(
