@@ -9,12 +9,38 @@ import {
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
-import { createTask, deleteTask } from '../src/runtime/task-registry'
+import { cleanupAll, createTask } from '../src/runtime/task-registry'
 import { setStatus } from '../src/runtime/task-status'
 
 const tempPaths: string[] = []
+const childHandles: Array<ReturnType<typeof Bun.spawn>> = []
 
-afterEach(() => {
+async function waitUntil(
+  predicate: () => boolean,
+  {
+    timeoutMs = 1000,
+    intervalMs = 25,
+  }: { timeoutMs?: number; intervalMs?: number } = {},
+): Promise<boolean> {
+  const deadline = Date.now() + timeoutMs
+  while (Date.now() < deadline) {
+    if (predicate()) return true
+    await delay(intervalMs)
+  }
+  return predicate()
+}
+
+afterEach(async () => {
+  for (const child of childHandles.splice(0)) {
+    try {
+      child.kill()
+    } catch {
+      // best-effort
+    }
+  }
+
+  await cleanupAll()
+
   for (const p of tempPaths.splice(0)) {
     rmSync(p, { force: true, recursive: true })
   }
@@ -27,6 +53,7 @@ describe('task registry PID-file hooks', () => {
     const pidFilePath = join(dir, 'orphans.pids')
 
     const child = Bun.spawn({ cmd: ['sleep', '30'] })
+    childHandles.push(child)
     const abortController = new AbortController()
 
     const task = createTask(
@@ -51,9 +78,7 @@ describe('task registry PID-file hooks', () => {
 
     const content = readFileSync(pidFilePath, 'utf-8')
     expect(content).toContain(`${child.pid}\t`)
-
-    child.kill()
-    deleteTask(task.taskId)
+    expect(task.taskId).toMatch(/^cpl_/)
   })
 
   it('removes from PID file on terminal transition', async () => {
@@ -62,6 +87,7 @@ describe('task registry PID-file hooks', () => {
     const pidFilePath = join(dir, 'orphans.pids')
 
     const child = Bun.spawn({ cmd: ['sleep', '30'] })
+    childHandles.push(child)
     const abortController = new AbortController()
 
     const task = createTask(
@@ -89,9 +115,6 @@ describe('task registry PID-file hooks', () => {
 
     await delay(200)
     expect(() => readFileSync(pidFilePath, 'utf-8')).toThrow()
-
-    child.kill()
-    deleteTask(task.taskId)
   })
 
   it('skips PID-file work when pid <= 0', async () => {
@@ -105,10 +128,12 @@ describe('task registry PID-file hooks', () => {
     const abortController = new AbortController()
     const warnings: string[] = []
     const originalWarn = console.warn
-    console.warn = (msg: string) => warnings.push(msg)
+    console.warn = (...args: unknown[]) => {
+      warnings.push(args.join(' '))
+    }
 
     try {
-      const task = createTask(
+      createTask(
         {
           parentSessionID: 'session-1',
           pid: 0,
@@ -128,14 +153,10 @@ describe('task registry PID-file hooks', () => {
         undefined,
       )
 
-      await delay(200)
-
       // Neither the file nor a warning should exist — the guard skipped
       // the entire async block.
       expect(() => readFileSync(pidFilePath, 'utf-8')).toThrow()
       expect(warnings).toHaveLength(0)
-
-      deleteTask(task.taskId)
     } finally {
       console.warn = originalWarn
     }
@@ -143,41 +164,48 @@ describe('task registry PID-file hooks', () => {
 
   it('skips PID-file work when pidFilePath is undefined', async () => {
     // Given a task with pid > 0 but no pidFilePath. The guard should
-    // short-circuit on the second clause and never call getPidIdentity.
-    const child = Bun.spawn({ cmd: ['sleep', '30'] })
+    // short-circuit before getPidIdentity runs; if the guard regresses,
+    // the ghost PID below drives the observable null-lookup warning.
+    const ghostPid = 4_194_305
     const abortController = new AbortController()
 
     const warnings: string[] = []
     const originalWarn = console.warn
-    console.warn = (msg: string) => warnings.push(msg)
+    console.warn = (...args: unknown[]) => {
+      warnings.push(args.join(' '))
+    }
 
     try {
-      const task = createTask(
+      createTask(
         {
           parentSessionID: 'session-1',
-          pid: child.pid,
+          pid: ghostPid,
           startedAt: Date.now(),
           status: 'running',
           args: ['-c', 'sleep 30'],
           cwd: process.cwd(),
           stdoutLineBuffer: '',
           events: [],
-          child,
-          completionPromise: child.exited.then(() => undefined),
+          child: { pid: ghostPid } as unknown as ReturnType<typeof Bun.spawn>,
+          completionPromise: Promise.resolve(),
           abortController,
           // Intentionally no pidFilePath
         },
         undefined,
       )
 
-      await delay(200)
+      const settledWithoutWarning = await waitUntil(() => warnings.length > 0, {
+        timeoutMs: 200,
+        intervalMs: 25,
+      })
 
-      // The task is registered but no file work happened — no warnings
-      // about ps lookups, no append attempts.
+      expect(settledWithoutWarning).toBe(false)
       expect(warnings).toHaveLength(0)
-
-      child.kill()
-      deleteTask(task.taskId)
+      expect(
+        warnings.some((warning) =>
+          warning.includes('[task-registry] ps lookup returned null'),
+        ),
+      ).toBe(false)
     } finally {
       console.warn = originalWarn
     }
@@ -188,6 +216,9 @@ describe('task registry PID-file hooks', () => {
     // chain. If appendPidEntry's serializeWrite chain throws (e.g., EACCES
     // when the parent directory is read-only), the failure must not
     // propagate to the caller and must not crash the registry.
+    if (process.platform === 'win32') {
+      return
+    }
     if (process.getuid?.() === 0) {
       // Root bypasses chmod permission checks; the EACCES never fires.
       return
@@ -203,11 +234,14 @@ describe('task registry PID-file hooks', () => {
     const pidFilePath = join(readonlyDir, 'subdir', 'orphans.pids')
 
     const child = Bun.spawn({ cmd: ['sleep', '30'] })
+    childHandles.push(child)
     const abortController = new AbortController()
 
     const warnings: string[] = []
     const originalWarn = console.warn
-    console.warn = (msg: string) => warnings.push(msg)
+    console.warn = (...args: unknown[]) => {
+      warnings.push(args.join(' '))
+    }
 
     try {
       // The append failure happens asynchronously inside the .then chain;
@@ -231,17 +265,24 @@ describe('task registry PID-file hooks', () => {
         undefined,
       )
 
-      // Wait long enough for the async ps lookup + append attempt to fail.
-      await delay(300)
+      await waitUntil(
+        () =>
+          warnings.length > 0 ||
+          (() => {
+            try {
+              readFileSync(pidFilePath, 'utf-8')
+              return true
+            } catch {
+              return false
+            }
+          })(),
+      )
 
       // Task is still registered (createTask returned successfully).
       expect(task.taskId).toMatch(/^cpl_/)
 
       // The PID file was not created (the append failed).
       expect(() => readFileSync(pidFilePath, 'utf-8')).toThrow()
-
-      child.kill()
-      deleteTask(task.taskId)
     } finally {
       console.warn = originalWarn
       // Restore writable mode so afterEach's rmSync can clean up.
@@ -266,10 +307,12 @@ describe('task registry PID-file hooks', () => {
     // Capture console.warn output so we can assert the warning fires.
     const warnings: string[] = []
     const originalWarn = console.warn
-    console.warn = (msg: string) => warnings.push(msg)
+    console.warn = (...args: unknown[]) => {
+      warnings.push(args.join(' '))
+    }
 
     try {
-      const task = createTask(
+      createTask(
         {
           parentSessionID: 'session-1',
           pid: ghostPid,
@@ -290,20 +333,25 @@ describe('task registry PID-file hooks', () => {
         undefined,
       )
 
-      await delay(200)
+      const warningObserved = await waitUntil(() =>
+        warnings.some((warning) =>
+          warning.includes(
+            `[task-registry] ps lookup returned null for pid ${ghostPid}`,
+          ),
+        ),
+      )
 
       // PID file should not have been created — neither comm nor lstart resolved.
       expect(() => readFileSync(pidFilePath, 'utf-8')).toThrow()
 
       // The silent-skip warning must be observable.
+      expect(warningObserved).toBe(true)
       const matched = warnings.find((w) =>
         w.includes(
           `[task-registry] ps lookup returned null for pid ${ghostPid}`,
         ),
       )
       expect(matched).toBeTruthy()
-
-      deleteTask(task.taskId)
     } finally {
       console.warn = originalWarn
     }

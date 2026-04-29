@@ -1,5 +1,12 @@
 import { afterEach, describe, expect, it } from 'bun:test'
-import { chmodSync, mkdtempSync, rmSync, statSync } from 'node:fs'
+import {
+  chmodSync,
+  mkdirSync,
+  mkdtempSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { PluginInput } from '@opencode-ai/plugin'
@@ -88,10 +95,14 @@ describe('plugin init lifecycle', () => {
     ])
   })
 
-  it('returns tool dispatch even when mkdir or reap throws', async () => {
+  it('returns tool dispatch when mkdir throws', async () => {
     // Given an XDG_STATE_HOME whose parent directory is read-only, so mkdir
     // for the orphans subdir fails with EACCES. The plugin's try/catch must
     // swallow the failure and still return tools.
+    if (process.platform === 'win32') {
+      // Windows does not honor POSIX chmod permission bits for this fixture.
+      return
+    }
     if (process.getuid?.() === 0) {
       // Root bypasses chmod permission checks, so EACCES never fires; skip.
       return
@@ -121,35 +132,31 @@ describe('plugin init lifecycle', () => {
     expect(() => statSync(orphansDir)).toThrow()
   })
 
-  it('awaits reapOrphans before returning the tool dispatch', async () => {
-    // Sets XDG_STATE_HOME to a path that resolveInstancePidFilePath() can
-    // build under, then stale-populates a foreign-instance pidfile that
-    // reapOrphans should encounter and inspect during init. If the plugin
-    // returned before awaiting reap, the directory would still be empty
-    // post-init from reapOrphans's perspective — but the read happens
-    // inside plugin() before resolution, so by the time `await plugin(...)`
-    // resolves, the reap has been awaited (reapOrphans throws are caught,
-    // so we infer "awaited" from the fact that the plugin resolves
-    // successfully and tools are returned).
-    //
-    // This test asserts the user-observable contract: by the time a caller
-    // awaits the plugin factory, init is complete and the tool dispatch is
-    // safe to use. A future refactor that fires reapOrphans non-awaited
-    // would break this contract; this test would still pass on the happy
-    // path, so the explicit assertion is on the directory state being
-    // consistent with reap having run (orphans subdir exists, no zombie
-    // files left over).
+  it('completes orphan reaping before tool dispatch', async () => {
+    // Seed a foreign dead-spawner pidfile in the exact orphans directory that
+    // plugin init reaps. If init stops awaiting reapOrphans, the foreign file
+    // will still exist after `await plugin(...)` resolves; the awaited path
+    // must unlink it before returning the tool dispatch.
     const xdgState = mkdtempSync(join(tmpdir(), 'plugin-init-await-'))
     tempPaths.push(xdgState)
     process.env.XDG_STATE_HOME = xdgState
+    const orphansDir = join(xdgState, 'opencode-copilot-delegate', 'orphans')
+    mkdirSync(orphansDir, { recursive: true, mode: 0o700 })
+
+    const deadSpawnerPid = 4_194_305
+    const foreignPidFile = join(orphansDir, `${deadSpawnerPid}.pids`)
+    writeFileSync(
+      foreignPidFile,
+      `${deadSpawnerPid}\tcopilot\tTue Apr 28 23:45:30 2026\n`,
+    )
 
     // When the plugin is loaded
     const input = makePluginInput(process.cwd())
     const result = await plugin(input)
 
-    // Then the orphans dir exists (reap didn't abort init)
-    const orphansDir = join(xdgState, 'opencode-copilot-delegate', 'orphans')
+    // Then init finished reaping before returning the tool dispatch.
     expect(statSync(orphansDir).isDirectory()).toBe(true)
+    expect(() => statSync(foreignPidFile)).toThrow()
 
     // And tools dispatch is ready
     expect(result.tool).toBeDefined()
