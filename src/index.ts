@@ -4,6 +4,7 @@ import type { Plugin } from '@opencode-ai/plugin'
 import { discoverAgents } from './discovery/agents'
 import { buildDescription } from './discovery/description'
 import { killProcessTree } from './lib/kill-tree'
+import { normalizeToolArgSchemas } from './lib/normalize-tool-arg-schemas'
 import { getPidIdentity, reapOrphans } from './runtime/orphan-reaper'
 import { resolveInstancePidFilePath } from './runtime/pid-file'
 import { createCancelTool } from './tools/cancel'
@@ -44,14 +45,16 @@ const CopilotDelegate: Plugin = async ({ client, directory }) => {
 
   return {
     tool: {
-      copilot_delegate: createDelegateTool({
-        client,
-        description: delegateDescription,
-        directory,
-        pidFilePath: currentInstancePath,
-      }),
-      copilot_output: createOutputTool(),
-      copilot_cancel: createCancelTool(),
+      copilot_delegate: normalizeToolArgSchemas(
+        createDelegateTool({
+          client,
+          description: delegateDescription,
+          directory,
+          pidFilePath: currentInstancePath,
+        }),
+      ),
+      copilot_output: normalizeToolArgSchemas(createOutputTool()),
+      copilot_cancel: normalizeToolArgSchemas(createCancelTool()),
     },
   }
 }
