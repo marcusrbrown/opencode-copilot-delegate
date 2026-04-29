@@ -1,5 +1,10 @@
 import { describe, expect, it } from 'bun:test'
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import {
+  appendFileSync,
+  mkdtempSync,
+  readFileSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -448,6 +453,50 @@ describe('orphan-reaper', () => {
       expect(res).toEqual(
         result({ reaped: 0, skipped: 1, scannedFiles: 1, deletedFiles: 0 }),
       )
+    })
+
+    it('does not truncate current-instance file when timeout fires mid-reap', async () => {
+      // Regression test for the race where lingering reap workers complete
+      // after the overall timeout, then truncate the current-instance file
+      // — wiping any entries that new tasks have appended in the meantime.
+      // The fix is cooperative cancellation: when the overall timeout fires,
+      // reapOneFile must skip cleanupAfterReap.
+      const dir = makeTempDir()
+      const currentPath = join(dir, `${process.pid}.pids`)
+
+      // Pre-populate with a stale entry so reapOneFile descends into
+      // processEntries and triggers the slow getPidIdentity below.
+      writePidFile(currentPath, [
+        { pid: process.pid, comm: 'copilot', lstart: 'stale' },
+      ])
+
+      // Start the reap. getPidIdentity hangs for 200ms; reapTimeoutMs is 50ms,
+      // so the timeout fires while workers are still in processEntries.
+      const reapPromise = reapOrphans({
+        pidFileDir: dir,
+        currentInstancePath: currentPath,
+        killProcessTree: async () => {},
+        getPidIdentity: () =>
+          new Promise((resolve) => setTimeout(() => resolve(null), 200)),
+        reapTimeoutMs: 50,
+      })
+
+      const res = await reapPromise
+      expect(res).toEqual(result())
+
+      // Simulate a new task being spawned right after init returns: append
+      // a fresh entry to the current-instance file.
+      appendFileSync(currentPath, `${process.pid}\tcopilot\tfresh\n`)
+
+      // Wait long enough for any lingering workers (the 200ms slow probe)
+      // to complete their final continuation through cleanupAfterReap.
+      await new Promise((resolve) => setTimeout(resolve, 300))
+
+      // The fresh entry must still be in the file. Without cooperative
+      // cancellation, cleanupAfterReap's writeFile('', ...) truncates the
+      // file at ~200ms and wipes the fresh entry, leaving permanent orphans.
+      const content = readFileSync(currentPath, 'utf-8')
+      expect(content).toContain('fresh')
     })
 
     it('honors reapTimeoutMs and returns empty result with warn on timeout', async () => {

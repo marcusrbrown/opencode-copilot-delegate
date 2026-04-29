@@ -173,7 +173,10 @@ async function processEntry(
   entry: PidEntry,
   killProcessTree: ReapDeps['killProcessTree'],
   getPidIdentity: ReapDeps['getPidIdentity'],
+  signal?: AbortSignal,
 ): Promise<{ reaped: boolean; skipped: boolean }> {
+  if (signal?.aborted) return { reaped: false, skipped: true }
+
   try {
     process.kill(entry.pid, 0)
   } catch {
@@ -181,6 +184,11 @@ async function processEntry(
   }
 
   const live = await getPidIdentity(entry.pid)
+
+  // Re-check abort after the slow ps probe. If the overall reap timed
+  // out while this probe was in flight, skip the kill: the caller has
+  // already returned to plugin init and live tasks may have started up.
+  if (signal?.aborted) return { reaped: false, skipped: true }
 
   if (
     live === null ||
@@ -202,6 +210,7 @@ async function processEntries(
   entries: PidEntry[],
   killProcessTree: ReapDeps['killProcessTree'],
   getPidIdentity: ReapDeps['getPidIdentity'],
+  signal?: AbortSignal,
 ): Promise<{ reaped: number; skipped: number }> {
   let reaped = 0
   let skipped = 0
@@ -218,9 +227,15 @@ async function processEntries(
   const workerCount = Math.min(MAX_CONCURRENT_PROBES, entries.length)
   const workers = Array.from({ length: workerCount }, async () => {
     while (true) {
+      if (signal?.aborted) return
       const entry = queue.shift()
       if (!entry) return
-      const result = await processEntry(entry, killProcessTree, getPidIdentity)
+      const result = await processEntry(
+        entry,
+        killProcessTree,
+        getPidIdentity,
+        signal,
+      )
       // Mutating shared `reaped`/`skipped` from concurrent workers is safe
       // because JS executes each ++ as a single synchronous read-modify-write
       // with no yield between the read and the store. Workers only interleave
@@ -286,6 +301,7 @@ async function reapOneFile(
   isPluginAlive: ReapDeps['isPluginAlive'],
   killProcessTree: ReapDeps['killProcessTree'],
   getPidIdentity: ReapDeps['getPidIdentity'],
+  signal?: AbortSignal,
 ): Promise<ReapFileOutcome> {
   const empty: ReapFileOutcome = {
     reaped: 0,
@@ -307,7 +323,17 @@ async function reapOneFile(
     entries,
     killProcessTree,
     getPidIdentity,
+    signal,
   )
+
+  // Critical: skip cleanupAfterReap if the overall reap was aborted.
+  // Truncating the current-instance file (or unlinking a foreign file)
+  // after the caller has already returned would wipe entries appended
+  // by live tasks that started up after the timeout fired.
+  if (signal?.aborted) {
+    return { reaped, skipped, scanned: true, deleted: false }
+  }
+
   const deleted = await cleanupAfterReap(
     filePath,
     isCurrent,
@@ -322,6 +348,7 @@ interface ReapOpts {
   killProcessTree: ReapDeps['killProcessTree']
   getPidIdentity: ReapDeps['getPidIdentity']
   isPluginAlive?: ReapDeps['isPluginAlive']
+  signal?: AbortSignal
 }
 
 async function doReap(opts: ReapOpts): Promise<ReapResult> {
@@ -331,6 +358,7 @@ async function doReap(opts: ReapOpts): Promise<ReapResult> {
     killProcessTree,
     getPidIdentity,
     isPluginAlive = defaultIsPluginAlive,
+    signal,
   } = opts
 
   let files: string[]
@@ -346,6 +374,7 @@ async function doReap(opts: ReapOpts): Promise<ReapResult> {
   let deletedFiles = 0
 
   for (const file of files) {
+    if (signal?.aborted) break
     if (!file.endsWith('.pids')) continue
 
     const filePath = join(pidFileDir, file)
@@ -366,6 +395,7 @@ async function doReap(opts: ReapOpts): Promise<ReapResult> {
       isPluginAlive,
       killProcessTree,
       getPidIdentity,
+      signal,
     )
 
     reaped += outcome.reaped
@@ -388,7 +418,7 @@ async function doReap(opts: ReapOpts): Promise<ReapResult> {
 const DEFAULT_REAP_TIMEOUT_MS = 15_000
 
 export async function reapOrphans(
-  opts: ReapOpts & { reapTimeoutMs?: number },
+  opts: Omit<ReapOpts, 'signal'> & { reapTimeoutMs?: number },
 ): Promise<ReapResult> {
   const reapTimeoutMs = opts.reapTimeoutMs ?? DEFAULT_REAP_TIMEOUT_MS
   const empty: ReapResult = {
@@ -398,23 +428,28 @@ export async function reapOrphans(
     deletedFiles: 0,
   }
 
-  // Race the reap against an overall timeout. On timeout, return the
-  // empty result and emit a warn for operator visibility. The reap's
-  // workers continue running but their result is discarded; this is
-  // acceptable because reapOrphans runs once at plugin init and the
-  // detached workers are bounded by their own per-probe timeouts.
+  // Race the reap against an overall timeout. On timeout, abort the reap
+  // signal and resolve with an empty result; in-flight workers cooperate
+  // by skipping their next mutating step (kill, truncate, unlink) so no
+  // dangerous side effects can occur after reapOrphans returns. Lingering
+  // ps probes still drain to completion but their results are discarded.
+  const controller = new AbortController()
   let timeoutId: ReturnType<typeof setTimeout> | undefined
   const timeoutPromise = new Promise<ReapResult>((resolve) => {
     timeoutId = setTimeout(() => {
       console.warn(
         `[orphan-reaper] reapOrphans exceeded ${reapTimeoutMs}ms budget; returning empty result`,
       )
+      controller.abort()
       resolve(empty)
     }, reapTimeoutMs)
   })
 
   try {
-    return await Promise.race([doReap(opts), timeoutPromise])
+    return await Promise.race([
+      doReap({ ...opts, signal: controller.signal }),
+      timeoutPromise,
+    ])
   } finally {
     if (timeoutId) clearTimeout(timeoutId)
   }
