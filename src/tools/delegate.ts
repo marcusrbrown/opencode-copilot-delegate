@@ -67,37 +67,37 @@ export function createDelegateTool(options: DelegateToolOptions) {
         ),
       agent: tool.schema
         .string()
-        .optional()
         .describe(
           'Agent name (without .md extension) to use for this task. Must match a discovered agent file in `~/.copilot/agents` or `.github/agents`. The list of currently discovered agents appears at the bottom of this tool description; an empty list means no agents are discoverable and `agent` must be omitted. Omit to use the Copilot CLI default.',
-        ),
+        )
+        .optional(),
       model: tool.schema
         .string()
-        .optional()
         .describe(
           "Override the default model for this task. Accepts any model string Copilot CLI recognizes — for example `claude-opus-4.7`, `claude-sonnet-4.7`, or `gpt-5`. Omit to use the user's configured default.",
-        ),
+        )
+        .optional(),
       add_dir: tool.schema
         .string()
         .array()
-        .optional()
         .describe(
           'Additional repository paths to grant Copilot access to (multi-repo workflows). Each entry becomes a `--add-dir <path>` flag. Use absolute paths. Examples: `["/Users/me/repo-a", "/Users/me/repo-b"]`.',
-        ),
+        )
+        .optional(),
       allow_tool: tool.schema
         .string()
         .array()
-        .optional()
         .describe(
           'Copilot tool patterns to allow during this task. Each entry becomes an `--allow-tool <pattern>` flag. Examples: `"shell(*)"`, `"edit"`, `"fetch"`. See the Copilot CLI docs for the full pattern syntax. Layered with `deny_tool` when both are present.',
-        ),
+        )
+        .optional(),
       deny_tool: tool.schema
         .string()
         .array()
-        .optional()
         .describe(
           'Copilot tool patterns to deny during this task. Each entry becomes a `--deny-tool <pattern>` flag. Examples: `"shell(rm)"`, `"shell(curl)"`. Use to harden a task by blocking dangerous operations even if `allow_tool` would permit them.',
-        ),
+        )
+        .optional(),
     },
     async execute(args, ctx) {
       const runningCount = getAllTasks().filter(

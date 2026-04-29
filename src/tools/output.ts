@@ -47,19 +47,19 @@ export function createOutputTool() {
         ),
       block: tool.schema
         .boolean()
-        .optional()
         .describe(
           'If the task is still running, wait for completion up to `timeout_ms` before returning. Default `false` — returns immediately with the current state. Set to `true` only when the agent has nothing else to do but wait.',
-        ),
+        )
+        .optional(),
       timeout_ms: tool.schema
         .number()
         .int()
         .min(0)
         .max(MAX_TIMEOUT_MS)
-        .optional()
         .describe(
           'Maximum wait in milliseconds when `block` is `true`. Default 30000. Range 0–120000 (the upper cap protects the OpenCode session from a single hung delegation). For long research tasks, prefer multiple non-blocking calls over a long block.',
-        ),
+        )
+        .optional(),
     },
     async execute(args) {
       if (!isValidTaskId(args.task_id)) {

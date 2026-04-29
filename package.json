@@ -33,14 +33,12 @@
     "node": ">=24"
   },
   "peerDependencies": {
-    "@opencode-ai/plugin": ">=1.14.0",
-    "@opencode-ai/sdk": ">=1.14.0"
+    "@opencode-ai/plugin": ">=1.14.0"
   },
   "devDependencies": {
     "@biomejs/biome": "^2.4.13",
     "@changesets/cli": "^2.31.0",
     "@opencode-ai/plugin": "^1.14.29",
-    "@opencode-ai/sdk": "^1.14.29",
     "@types/bun": "^1.2.0",
     "@types/node": "^24.0.0",
     "rimraf": "^6.0.1",
@@ -48,7 +46,7 @@
   },
   "scripts": {
     "clean": "rimraf dist",
-    "build": "bun run clean && bun build src/index.ts --outdir dist --target bun --external @opencode-ai/plugin --external @opencode-ai/sdk && tsc --emitDeclarationOnly --noEmit false",
+    "build": "bun run clean && bun build src/index.ts --outdir dist --target bun --external @opencode-ai/plugin && tsc --emitDeclarationOnly --noEmit false",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "test:unit": "bun test tests/*.test.ts",
