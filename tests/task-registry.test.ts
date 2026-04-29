@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it } from 'bun:test'
 import {
   chmodSync,
+  existsSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
@@ -74,7 +75,11 @@ describe('task registry PID-file hooks', () => {
       undefined,
     )
 
-    await delay(200)
+    await waitUntil(
+      () =>
+        existsSync(pidFilePath) &&
+        readFileSync(pidFilePath, 'utf-8').includes(`${child.pid}\t`),
+    )
 
     const content = readFileSync(pidFilePath, 'utf-8')
     expect(content).toContain(`${child.pid}\t`)
@@ -108,12 +113,16 @@ describe('task registry PID-file hooks', () => {
       undefined,
     )
 
-    await delay(200)
+    await waitUntil(
+      () =>
+        existsSync(pidFilePath) &&
+        readFileSync(pidFilePath, 'utf-8').includes(`${child.pid}\t`),
+    )
     expect(readFileSync(pidFilePath, 'utf-8')).toContain(`${child.pid}\t`)
 
     setStatus(task, 'cancelled', { pidFilePath })
 
-    await delay(200)
+    await waitUntil(() => !existsSync(pidFilePath))
     expect(() => readFileSync(pidFilePath, 'utf-8')).toThrow()
   })
 
