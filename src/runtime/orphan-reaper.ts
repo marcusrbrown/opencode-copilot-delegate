@@ -5,8 +5,13 @@ import { isErrnoException } from '../lib/errno'
 
 export interface ReapDeps {
   killProcessTree: (pid: number) => Promise<void>
+  // The optional `timeoutMs` second arg is the per-probe budget the worker
+  // pool will pass when configured via `reapOrphans({ psTimeoutMs })`.
+  // Injected implementations may ignore it (and bind a fixed timeout at the
+  // injection seam) or honor it as a per-call override.
   getPidIdentity: (
     pid: number,
+    timeoutMs?: number,
   ) => Promise<{ comm: string; lstart: string } | null>
   isPluginAlive: (pid: number) => boolean
 }
@@ -28,15 +33,35 @@ export function defaultIsPluginAlive(pid: number): boolean {
 }
 
 /**
+ * Default ps probe timeout. Tuned for unloaded systems where any
+ * legitimate ps response returns well under this bound. Loaded systems
+ * (CI throttled containers, low-priority processes) may exceed this and
+ * miss the identity gate; callers can pass a longer timeout to compensate
+ * and inspect `console.warn` output for degradation signals.
+ */
+const DEFAULT_PS_TIMEOUT_MS = 1000
+
+/**
  * Spawn `ps` with the given args, return trimmed stdout, or null on any
  * failure mode (timeout, spawn error, non-zero exit, empty output).
  *
- * Bounded 1-second SIGTERM timeout. Stderr is drained via resume() so the
- * OS pipe buffer never fills under backpressure — an unread stderr pipe on
- * a long-running or backlogged ps invocation can stall the subprocess and
- * block plugin init.
+ * `timeoutMs` controls the SIGTERM timeout (default 1s). When the timeout
+ * fires, `runPs` emits a `console.warn` so operators can detect ps probe
+ * degradation; the timer's expiry remains a non-fatal failure mode that
+ * resolves to null. Stderr is drained via resume() so the OS pipe buffer
+ * never fills under backpressure — an unread stderr pipe on a long-running
+ * or backlogged ps invocation can stall the subprocess and block plugin
+ * init.
+ *
+ * On timeout, only SIGTERM is sent — there is no SIGKILL escalation. A
+ * theoretically-misbehaving ps that ignores SIGTERM would leave a child
+ * process running indefinitely. In practice, ps respects SIGTERM cleanly
+ * and the close handler fires within the kernel's normal teardown window.
  */
-function runPs(args: string[]): Promise<string | null> {
+function runPs(
+  args: string[],
+  timeoutMs: number = DEFAULT_PS_TIMEOUT_MS,
+): Promise<string | null> {
   return new Promise((resolve) => {
     const child = spawn('ps', args)
     let stdout = ''
@@ -44,8 +69,11 @@ function runPs(args: string[]): Promise<string | null> {
 
     const timeout = setTimeout(() => {
       timedOut = true
+      console.warn(
+        `[orphan-reaper] ps invocation exceeded ${timeoutMs}ms timeout: ps ${args.join(' ')}`,
+      )
       child.kill('SIGTERM')
-    }, 1000)
+    }, timeoutMs)
 
     child.stdout?.on('data', (chunk: Buffer) => {
       stdout += chunk.toString('utf-8')
@@ -70,13 +98,49 @@ function runPs(args: string[]): Promise<string | null> {
 }
 
 /**
+ * Parse `ps -p <pid> -o comm=,lstart=` output into `{ comm, lstart }`.
+ *
+ * Output format: `<comm><whitespace><lstart>` where `comm` is a single
+ * non-whitespace token (kernel-tracked process name field, capped at 15
+ * chars on Linux and 16 chars on macOS) and `lstart` is the multi-word
+ * date string that follows (e.g., `Tue Apr 28 23:45:30 2026`).
+ *
+ * Splitting on the first whitespace is safe because the kernel `comm`
+ * field never contains whitespace. If a future refactor adds different
+ * `-o` fields or runs on a platform that emits padded output, this parse
+ * fails safe: a truncated comm won't match the recorded one, so the
+ * identity gate skips rather than kills.
+ *
+ * Callers must trim their input first (e.g., via `runPs`'s built-in
+ * trim). Leading whitespace yields an empty comm and the parser returns
+ * null \u2014 the safe behavior, but a poor signal for the caller.
+ *
+ * Returns null on empty input, single-token input (no lstart), and any
+ * other malformed shape.
+ */
+export function parsePsIdentity(
+  raw: string,
+): { comm: string; lstart: string } | null {
+  if (!raw) return null
+  const firstWs = raw.search(/\s/)
+  if (firstWs === -1) return null
+  const comm = raw.slice(0, firstWs)
+  const lstart = raw.slice(firstWs).trim()
+  if (!comm || !lstart) return null
+  return { comm, lstart }
+}
+
+/**
  * Read both comm (kernel-tracked executable name) and lstart (process
  * start time) for a PID via a single ps invocation.
  *
  * Halves the fork/exec cost of identity verification compared with two
- * separate `ps -o comm=` and `ps -o lstart=` calls. The combined output
- * format is `<comm> <lstart>` where comm is a single token and lstart is
- * a multi-word date string (e.g., `Tue Apr 28 23:45:30 2026`).
+ * separate `ps -o comm=` and `ps -o lstart=` calls.
+ *
+ * `timeoutMs` controls the underlying ps timeout (default 1s). On loaded
+ * systems where legitimate ps responses can exceed 1s, callers can pass
+ * a longer timeout; the timeout-fire path emits a `console.warn` for
+ * operator visibility.
  *
  * Returns null on any failure mode (timeout, spawn error, non-zero exit,
  * empty output, malformed output). Callers must treat null as "identity
@@ -84,23 +148,11 @@ function runPs(args: string[]): Promise<string | null> {
  */
 export async function getPidIdentity(
   pid: number,
+  timeoutMs: number = DEFAULT_PS_TIMEOUT_MS,
 ): Promise<{ comm: string; lstart: string } | null> {
-  const raw = await runPs(['-p', String(pid), '-o', 'comm=,lstart='])
+  const raw = await runPs(['-p', String(pid), '-o', 'comm=,lstart='], timeoutMs)
   if (raw === null) return null
-  // Splitting on the first whitespace is safe because `comm` is the kernel-
-  // tracked process name field, which is a single non-whitespace token capped
-  // at 15 chars on Linux and 16 chars on macOS. `lstart` is the multi-word
-  // date string that follows. If a future refactor adds different `-o` fields
-  // or runs on a platform that pads `comm` differently, this parse silently
-  // truncates at the first whitespace — the identity gate would then fail
-  // safe (skip, not kill) because the truncated value won't match the
-  // recorded one.
-  const firstWs = raw.search(/\s/)
-  if (firstWs === -1) return null
-  const comm = raw.slice(0, firstWs)
-  const lstart = raw.slice(firstWs).trim()
-  if (!comm || !lstart) return null
-  return { comm, lstart }
+  return parsePsIdentity(raw)
 }
 
 interface PidEntry {
@@ -131,14 +183,23 @@ async function processEntry(
   entry: PidEntry,
   killProcessTree: ReapDeps['killProcessTree'],
   getPidIdentity: ReapDeps['getPidIdentity'],
+  signal?: AbortSignal,
+  psTimeoutMs?: number,
 ): Promise<{ reaped: boolean; skipped: boolean }> {
+  if (signal?.aborted) return { reaped: false, skipped: true }
+
   try {
     process.kill(entry.pid, 0)
   } catch {
     return { reaped: false, skipped: true }
   }
 
-  const live = await getPidIdentity(entry.pid)
+  const live = await getPidIdentity(entry.pid, psTimeoutMs)
+
+  // Re-check abort after the slow ps probe. If the overall reap timed
+  // out while this probe was in flight, skip the kill: the caller has
+  // already returned to plugin init and live tasks may have started up.
+  if (signal?.aborted) return { reaped: false, skipped: true }
 
   if (
     live === null ||
@@ -160,6 +221,8 @@ async function processEntries(
   entries: PidEntry[],
   killProcessTree: ReapDeps['killProcessTree'],
   getPidIdentity: ReapDeps['getPidIdentity'],
+  signal?: AbortSignal,
+  psTimeoutMs?: number,
 ): Promise<{ reaped: number; skipped: number }> {
   let reaped = 0
   let skipped = 0
@@ -176,9 +239,16 @@ async function processEntries(
   const workerCount = Math.min(MAX_CONCURRENT_PROBES, entries.length)
   const workers = Array.from({ length: workerCount }, async () => {
     while (true) {
+      if (signal?.aborted) return
       const entry = queue.shift()
       if (!entry) return
-      const result = await processEntry(entry, killProcessTree, getPidIdentity)
+      const result = await processEntry(
+        entry,
+        killProcessTree,
+        getPidIdentity,
+        signal,
+        psTimeoutMs,
+      )
       // Mutating shared `reaped`/`skipped` from concurrent workers is safe
       // because JS executes each ++ as a single synchronous read-modify-write
       // with no yield between the read and the store. Workers only interleave
@@ -244,6 +314,8 @@ async function reapOneFile(
   isPluginAlive: ReapDeps['isPluginAlive'],
   killProcessTree: ReapDeps['killProcessTree'],
   getPidIdentity: ReapDeps['getPidIdentity'],
+  signal?: AbortSignal,
+  psTimeoutMs?: number,
 ): Promise<ReapFileOutcome> {
   const empty: ReapFileOutcome = {
     reaped: 0,
@@ -265,7 +337,18 @@ async function reapOneFile(
     entries,
     killProcessTree,
     getPidIdentity,
+    signal,
+    psTimeoutMs,
   )
+
+  // Critical: skip cleanupAfterReap if the overall reap was aborted.
+  // Truncating the current-instance file (or unlinking a foreign file)
+  // after the caller has already returned would wipe entries appended
+  // by live tasks that started up after the timeout fired.
+  if (signal?.aborted) {
+    return { reaped, skipped, scanned: true, deleted: false }
+  }
+
   const deleted = await cleanupAfterReap(
     filePath,
     isCurrent,
@@ -274,19 +357,27 @@ async function reapOneFile(
   return { reaped, skipped, scanned: true, deleted }
 }
 
-export async function reapOrphans(opts: {
+interface ReapOpts {
   pidFileDir: string
   currentInstancePath: string
   killProcessTree: ReapDeps['killProcessTree']
   getPidIdentity: ReapDeps['getPidIdentity']
   isPluginAlive?: ReapDeps['isPluginAlive']
-}): Promise<ReapResult> {
+  signal?: AbortSignal
+  // Per-probe ps timeout forwarded to every `getPidIdentity(pid, timeoutMs)`
+  // call that the worker pool issues. Injected implementations may ignore it.
+  psTimeoutMs?: number
+}
+
+async function doReap(opts: ReapOpts): Promise<ReapResult> {
   const {
     pidFileDir,
     currentInstancePath,
     killProcessTree,
     getPidIdentity,
     isPluginAlive = defaultIsPluginAlive,
+    signal,
+    psTimeoutMs,
   } = opts
 
   let files: string[]
@@ -302,6 +393,7 @@ export async function reapOrphans(opts: {
   let deletedFiles = 0
 
   for (const file of files) {
+    if (signal?.aborted) break
     if (!file.endsWith('.pids')) continue
 
     const filePath = join(pidFileDir, file)
@@ -322,6 +414,8 @@ export async function reapOrphans(opts: {
       isPluginAlive,
       killProcessTree,
       getPidIdentity,
+      signal,
+      psTimeoutMs,
     )
 
     reaped += outcome.reaped
@@ -331,4 +425,57 @@ export async function reapOrphans(opts: {
   }
 
   return { reaped, skipped, scannedFiles, deletedFiles }
+}
+
+/**
+ * Default overall reap budget. Generous enough to cover N pidfiles ×
+ * MAX_CONCURRENT_PROBES workers × per-probe timeout in normal conditions
+ * (with N typically <= a handful and the per-probe timeout at 1s, the
+ * theoretical worst case is well under 15s). The budget is the safety
+ * net for pathological cases — NFS readdir hang, all probes timing out
+ * simultaneously — that would otherwise block plugin init indefinitely.
+ */
+const DEFAULT_REAP_TIMEOUT_MS = 15_000
+
+export async function reapOrphans(
+  opts: Omit<ReapOpts, 'signal'> & { reapTimeoutMs?: number },
+): Promise<ReapResult> {
+  const reapTimeoutMs = opts.reapTimeoutMs ?? DEFAULT_REAP_TIMEOUT_MS
+  const empty: ReapResult = {
+    reaped: 0,
+    skipped: 0,
+    scannedFiles: 0,
+    deletedFiles: 0,
+  }
+
+  // Race the reap against an overall timeout. On timeout, abort the reap
+  // signal and resolve with an empty result; in-flight workers cooperate
+  // by skipping their next mutating step (kill, truncate, unlink) so no
+  // dangerous side effects can occur after reapOrphans returns. Lingering
+  // ps probes still drain to completion but their results are discarded.
+  const controller = new AbortController()
+  let timeoutId: ReturnType<typeof setTimeout> | undefined
+  const timeoutPromise = new Promise<ReapResult>((resolve) => {
+    timeoutId = setTimeout(() => {
+      console.warn(
+        `[orphan-reaper] reapOrphans exceeded ${reapTimeoutMs}ms budget; returning empty result`,
+      )
+      controller.abort()
+      resolve(empty)
+    }, reapTimeoutMs)
+  })
+
+  // Attach a no-op rejection handler to the abandoned doReap promise. doReap
+  // currently catches every internal throw, so this is defensive: if a future
+  // refactor introduces an uncaught throw path inside doReap, the rejection
+  // would otherwise surface as an unhandled rejection after the timeout has
+  // resolved Promise.race and reapOrphans has returned.
+  const reapPromise = doReap({ ...opts, signal: controller.signal })
+  reapPromise.catch(() => {})
+
+  try {
+    return await Promise.race([reapPromise, timeoutPromise])
+  } finally {
+    if (timeoutId) clearTimeout(timeoutId)
+  }
 }

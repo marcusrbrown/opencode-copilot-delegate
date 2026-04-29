@@ -1,10 +1,16 @@
 import { describe, expect, it } from 'bun:test'
-import { mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import {
+  appendFileSync,
+  mkdtempSync,
+  readFileSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   defaultIsPluginAlive,
   getPidIdentity,
+  parsePsIdentity,
   type ReapResult,
   reapOrphans,
 } from '../src/runtime/orphan-reaper'
@@ -343,6 +349,36 @@ describe('orphan-reaper', () => {
       expect(finishedBeforeSlow).toBeGreaterThanOrEqual(9)
     })
 
+    it('forwards psTimeoutMs through the worker pool to injected getPidIdentity', async () => {
+      const dir = makeTempDir()
+      const currentPath = join(dir, `${process.pid}.pids`)
+
+      // Two distinct entries so we observe forwarding across multiple
+      // worker invocations, not just the first call.
+      writePidFile(currentPath, [
+        { pid: process.pid, comm: 'copilot', lstart: 't1' },
+        { pid: process.ppid, comm: 'copilot', lstart: 't2' },
+      ])
+
+      const recordedTimeouts: (number | undefined)[] = []
+
+      await reapOrphans({
+        pidFileDir: dir,
+        currentInstancePath: currentPath,
+        killProcessTree: async () => {},
+        getPidIdentity: async (_pid, timeoutMs) => {
+          recordedTimeouts.push(timeoutMs)
+          // Returning null skips the kill path; we only care about
+          // verifying that the forwarded timeoutMs reaches each worker.
+          return null
+        },
+        psTimeoutMs: 2500,
+      })
+
+      expect(recordedTimeouts).toHaveLength(2)
+      expect(recordedTimeouts.every((t) => t === 2500)).toBe(true)
+    })
+
     it('should cap concurrent getPidIdentity invocations at 5 for 10 entries', async () => {
       const dir = makeTempDir()
       const currentPath = join(dir, `${process.pid}.pids`)
@@ -449,6 +485,90 @@ describe('orphan-reaper', () => {
       )
     })
 
+    it('does not truncate current-instance file when timeout fires mid-reap', async () => {
+      // Regression test for the race where lingering reap workers complete
+      // after the overall timeout, then truncate the current-instance file
+      // — wiping any entries that new tasks have appended in the meantime.
+      // The fix is cooperative cancellation: when the overall timeout fires,
+      // reapOneFile must skip cleanupAfterReap.
+      const dir = makeTempDir()
+      const currentPath = join(dir, `${process.pid}.pids`)
+
+      // Pre-populate with a stale entry so reapOneFile descends into
+      // processEntries and triggers the slow getPidIdentity below.
+      writePidFile(currentPath, [
+        { pid: process.pid, comm: 'copilot', lstart: 'stale' },
+      ])
+
+      // Start the reap. getPidIdentity hangs for 200ms; reapTimeoutMs is 50ms,
+      // so the timeout fires while workers are still in processEntries.
+      const reapPromise = reapOrphans({
+        pidFileDir: dir,
+        currentInstancePath: currentPath,
+        killProcessTree: async () => {},
+        getPidIdentity: () =>
+          new Promise((resolve) => setTimeout(() => resolve(null), 200)),
+        reapTimeoutMs: 50,
+      })
+
+      const res = await reapPromise
+      expect(res).toEqual(result())
+
+      // Simulate a new task being spawned right after init returns: append
+      // a fresh entry to the current-instance file.
+      appendFileSync(currentPath, `${process.pid}\tcopilot\tfresh\n`)
+
+      // Wait long enough for any lingering workers (the 200ms slow probe)
+      // to complete their final continuation through cleanupAfterReap.
+      await new Promise((resolve) => setTimeout(resolve, 300))
+
+      // The fresh entry must still be in the file. Without cooperative
+      // cancellation, cleanupAfterReap's writeFile('', ...) truncates the
+      // file at ~200ms and wipes the fresh entry, leaving permanent orphans.
+      const content = readFileSync(currentPath, 'utf-8')
+      expect(content).toContain('fresh')
+    })
+
+    it('honors reapTimeoutMs and returns empty result with warn on timeout', async () => {
+      const dir = makeTempDir()
+      const currentPath = join(dir, `${process.pid}.pids`)
+
+      writePidFile(currentPath, [
+        { pid: process.pid, comm: 'copilot', lstart: 't1' },
+      ])
+
+      const warnings: string[] = []
+      const origWarn = console.warn
+      console.warn = (...args: unknown[]) => {
+        warnings.push(args.join(' '))
+      }
+
+      try {
+        // getPidIdentity takes 200ms; reapTimeoutMs=50 fires first.
+        // The reap returns the zero result, and the slow probe completes
+        // silently in the background.
+        const res = await reapOrphans({
+          pidFileDir: dir,
+          currentInstancePath: currentPath,
+          killProcessTree: async () => {},
+          getPidIdentity: () =>
+            new Promise((resolve) => setTimeout(() => resolve(null), 200)),
+          reapTimeoutMs: 50,
+        })
+
+        expect(res).toEqual(result())
+        const matched = warnings.find(
+          (w) =>
+            w.includes('orphan-reaper') &&
+            w.includes('reapOrphans') &&
+            w.includes('50'),
+        )
+        expect(matched).toBeTruthy()
+      } finally {
+        console.warn = origWarn
+      }
+    })
+
     it('should return zeros when fs.readdir throws (missing dir)', async () => {
       const res = await reapOrphans({
         pidFileDir: '/nonexistent/dir/for/sure',
@@ -485,6 +605,87 @@ describe('orphan-reaper', () => {
       // 4_194_305 is above pid_max on Linux/macOS, guaranteed not assigned.
       const identity = await getPidIdentity(4_194_305)
       expect(identity).toBeNull()
+    })
+
+    it('honors a configurable timeout for the ps probe', async () => {
+      // 1ms is reliably shorter than spawn+exec+IO of any real ps, so the
+      // timeout fires first and the function returns null. This proves the
+      // timeoutMs parameter is wired through to runPs.
+      const identity = await getPidIdentity(process.pid, 1)
+      expect(identity).toBeNull()
+    })
+
+    it('emits a degradation warning when the ps timeout fires', async () => {
+      const warnings: string[] = []
+      const origWarn = console.warn
+      console.warn = (...args: unknown[]) => {
+        warnings.push(args.join(' '))
+      }
+      try {
+        await getPidIdentity(process.pid, 1)
+        const matched = warnings.find(
+          (w) => w.includes('orphan-reaper') && w.includes('timeout'),
+        )
+        expect(matched).toBeTruthy()
+      } finally {
+        console.warn = origWarn
+      }
+    })
+  })
+
+  describe('parsePsIdentity', () => {
+    it('returns null for empty input', () => {
+      expect(parsePsIdentity('')).toBeNull()
+    })
+
+    it('returns null for a single token with no lstart', () => {
+      expect(parsePsIdentity('copilot')).toBeNull()
+    })
+
+    it('returns null for input with only whitespace', () => {
+      expect(parsePsIdentity('   ')).toBeNull()
+    })
+
+    it('returns null for leading-whitespace input (trim is the caller responsibility)', () => {
+      // runPs trims its output before calling the parser. If a caller forgets
+      // to trim, the parser fails safe by emitting null rather than producing
+      // a comm with an empty string.
+      expect(parsePsIdentity(' copilot Tue Apr 28 23:45:30 2026')).toBeNull()
+    })
+
+    it('parses standard ps -o comm=,lstart= output', () => {
+      expect(parsePsIdentity('copilot Tue Apr 28 23:45:30 2026')).toEqual({
+        comm: 'copilot',
+        lstart: 'Tue Apr 28 23:45:30 2026',
+      })
+    })
+
+    it('handles a 15-char comm boundary (Linux kernel cap)', () => {
+      // Linux truncates `comm` at 15 chars. A maximum-length value should
+      // still parse cleanly.
+      const comm = 'a'.repeat(15)
+      expect(parsePsIdentity(`${comm} Tue Apr 28 23:45:30 2026`)).toEqual({
+        comm,
+        lstart: 'Tue Apr 28 23:45:30 2026',
+      })
+    })
+
+    it('handles a 16-char comm boundary (macOS kernel cap)', () => {
+      // macOS truncates `comm` at 16 chars.
+      const comm = 'b'.repeat(16)
+      expect(parsePsIdentity(`${comm} Tue Apr 28 23:45:30 2026`)).toEqual({
+        comm,
+        lstart: 'Tue Apr 28 23:45:30 2026',
+      })
+    })
+
+    it('collapses multi-whitespace separator into the lstart trim', () => {
+      // If ps emits column padding that survives runPs.trim(), the parser
+      // still recovers a correct lstart by trimming after the slice.
+      expect(parsePsIdentity('copilot   Tue Apr 28 23:45:30 2026')).toEqual({
+        comm: 'copilot',
+        lstart: 'Tue Apr 28 23:45:30 2026',
+      })
     })
   })
 })
