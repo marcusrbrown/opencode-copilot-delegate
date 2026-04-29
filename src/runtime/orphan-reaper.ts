@@ -28,15 +28,30 @@ export function defaultIsPluginAlive(pid: number): boolean {
 }
 
 /**
+ * Default ps probe timeout. Tuned for unloaded systems where any
+ * legitimate ps response returns well under this bound. Loaded systems
+ * (CI throttled containers, low-priority processes) may exceed this and
+ * miss the identity gate; callers can pass a longer timeout to compensate
+ * and inspect `console.warn` output for degradation signals.
+ */
+const DEFAULT_PS_TIMEOUT_MS = 1000
+
+/**
  * Spawn `ps` with the given args, return trimmed stdout, or null on any
  * failure mode (timeout, spawn error, non-zero exit, empty output).
  *
- * Bounded 1-second SIGTERM timeout. Stderr is drained via resume() so the
- * OS pipe buffer never fills under backpressure — an unread stderr pipe on
- * a long-running or backlogged ps invocation can stall the subprocess and
- * block plugin init.
+ * `timeoutMs` controls the SIGTERM timeout (default 1s). When the timeout
+ * fires, `runPs` emits a `console.warn` so operators can detect ps probe
+ * degradation; the timer's expiry remains a non-fatal failure mode that
+ * resolves to null. Stderr is drained via resume() so the OS pipe buffer
+ * never fills under backpressure — an unread stderr pipe on a long-running
+ * or backlogged ps invocation can stall the subprocess and block plugin
+ * init.
  */
-function runPs(args: string[]): Promise<string | null> {
+function runPs(
+  args: string[],
+  timeoutMs: number = DEFAULT_PS_TIMEOUT_MS,
+): Promise<string | null> {
   return new Promise((resolve) => {
     const child = spawn('ps', args)
     let stdout = ''
@@ -44,8 +59,11 @@ function runPs(args: string[]): Promise<string | null> {
 
     const timeout = setTimeout(() => {
       timedOut = true
+      console.warn(
+        `[orphan-reaper] ps invocation exceeded ${timeoutMs}ms timeout: ps ${args.join(' ')}`,
+      )
       child.kill('SIGTERM')
-    }, 1000)
+    }, timeoutMs)
 
     child.stdout?.on('data', (chunk: Buffer) => {
       stdout += chunk.toString('utf-8')
@@ -109,14 +127,20 @@ export function parsePsIdentity(
  * Halves the fork/exec cost of identity verification compared with two
  * separate `ps -o comm=` and `ps -o lstart=` calls.
  *
+ * `timeoutMs` controls the underlying ps timeout (default 1s). On loaded
+ * systems where legitimate ps responses can exceed 1s, callers can pass
+ * a longer timeout; the timeout-fire path emits a `console.warn` for
+ * operator visibility.
+ *
  * Returns null on any failure mode (timeout, spawn error, non-zero exit,
  * empty output, malformed output). Callers must treat null as "identity
  * unverifiable; do not trust this PID."
  */
 export async function getPidIdentity(
   pid: number,
+  timeoutMs: number = DEFAULT_PS_TIMEOUT_MS,
 ): Promise<{ comm: string; lstart: string } | null> {
-  const raw = await runPs(['-p', String(pid), '-o', 'comm=,lstart='])
+  const raw = await runPs(['-p', String(pid), '-o', 'comm=,lstart='], timeoutMs)
   if (raw === null) return null
   return parsePsIdentity(raw)
 }

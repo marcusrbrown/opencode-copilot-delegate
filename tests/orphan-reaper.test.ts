@@ -487,6 +487,31 @@ describe('orphan-reaper', () => {
       const identity = await getPidIdentity(4_194_305)
       expect(identity).toBeNull()
     })
+
+    it('honors a configurable timeout for the ps probe', async () => {
+      // 1ms is reliably shorter than spawn+exec+IO of any real ps, so the
+      // timeout fires first and the function returns null. This proves the
+      // timeoutMs parameter is wired through to runPs.
+      const identity = await getPidIdentity(process.pid, 1)
+      expect(identity).toBeNull()
+    })
+
+    it('emits a degradation warning when the ps timeout fires', async () => {
+      const warnings: string[] = []
+      const origWarn = console.warn
+      console.warn = (...args: unknown[]) => {
+        warnings.push(args.join(' '))
+      }
+      try {
+        await getPidIdentity(process.pid, 1)
+        const matched = warnings.find(
+          (w) => w.includes('orphan-reaper') && w.includes('timeout'),
+        )
+        expect(matched).toBeTruthy()
+      } finally {
+        console.warn = origWarn
+      }
+    })
   })
 
   describe('parsePsIdentity', () => {
