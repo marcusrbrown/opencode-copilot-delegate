@@ -70,13 +70,44 @@ function runPs(args: string[]): Promise<string | null> {
 }
 
 /**
+ * Parse `ps -p <pid> -o comm=,lstart=` output into `{ comm, lstart }`.
+ *
+ * Output format: `<comm><whitespace><lstart>` where `comm` is a single
+ * non-whitespace token (kernel-tracked process name field, capped at 15
+ * chars on Linux and 16 chars on macOS) and `lstart` is the multi-word
+ * date string that follows (e.g., `Tue Apr 28 23:45:30 2026`).
+ *
+ * Splitting on the first whitespace is safe because the kernel `comm`
+ * field never contains whitespace. If a future refactor adds different
+ * `-o` fields or runs on a platform that emits padded output, this parse
+ * fails safe: a truncated comm won't match the recorded one, so the
+ * identity gate skips rather than kills.
+ *
+ * Callers must trim their input first (e.g., via `runPs`'s built-in
+ * trim). Leading whitespace yields an empty comm and the parser returns
+ * null \u2014 the safe behavior, but a poor signal for the caller.
+ *
+ * Returns null on empty input, single-token input (no lstart), and any
+ * other malformed shape.
+ */
+export function parsePsIdentity(
+  raw: string,
+): { comm: string; lstart: string } | null {
+  if (!raw) return null
+  const firstWs = raw.search(/\s/)
+  if (firstWs === -1) return null
+  const comm = raw.slice(0, firstWs)
+  const lstart = raw.slice(firstWs).trim()
+  if (!comm || !lstart) return null
+  return { comm, lstart }
+}
+
+/**
  * Read both comm (kernel-tracked executable name) and lstart (process
  * start time) for a PID via a single ps invocation.
  *
  * Halves the fork/exec cost of identity verification compared with two
- * separate `ps -o comm=` and `ps -o lstart=` calls. The combined output
- * format is `<comm> <lstart>` where comm is a single token and lstart is
- * a multi-word date string (e.g., `Tue Apr 28 23:45:30 2026`).
+ * separate `ps -o comm=` and `ps -o lstart=` calls.
  *
  * Returns null on any failure mode (timeout, spawn error, non-zero exit,
  * empty output, malformed output). Callers must treat null as "identity
@@ -87,20 +118,7 @@ export async function getPidIdentity(
 ): Promise<{ comm: string; lstart: string } | null> {
   const raw = await runPs(['-p', String(pid), '-o', 'comm=,lstart='])
   if (raw === null) return null
-  // Splitting on the first whitespace is safe because `comm` is the kernel-
-  // tracked process name field, which is a single non-whitespace token capped
-  // at 15 chars on Linux and 16 chars on macOS. `lstart` is the multi-word
-  // date string that follows. If a future refactor adds different `-o` fields
-  // or runs on a platform that pads `comm` differently, this parse silently
-  // truncates at the first whitespace — the identity gate would then fail
-  // safe (skip, not kill) because the truncated value won't match the
-  // recorded one.
-  const firstWs = raw.search(/\s/)
-  if (firstWs === -1) return null
-  const comm = raw.slice(0, firstWs)
-  const lstart = raw.slice(firstWs).trim()
-  if (!comm || !lstart) return null
-  return { comm, lstart }
+  return parsePsIdentity(raw)
 }
 
 interface PidEntry {

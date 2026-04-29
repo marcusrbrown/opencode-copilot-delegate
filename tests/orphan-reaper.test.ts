@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import {
   defaultIsPluginAlive,
   getPidIdentity,
+  parsePsIdentity,
   type ReapResult,
   reapOrphans,
 } from '../src/runtime/orphan-reaper'
@@ -485,6 +486,62 @@ describe('orphan-reaper', () => {
       // 4_194_305 is above pid_max on Linux/macOS, guaranteed not assigned.
       const identity = await getPidIdentity(4_194_305)
       expect(identity).toBeNull()
+    })
+  })
+
+  describe('parsePsIdentity', () => {
+    it('returns null for empty input', () => {
+      expect(parsePsIdentity('')).toBeNull()
+    })
+
+    it('returns null for a single token with no lstart', () => {
+      expect(parsePsIdentity('copilot')).toBeNull()
+    })
+
+    it('returns null for input with only whitespace', () => {
+      expect(parsePsIdentity('   ')).toBeNull()
+    })
+
+    it('returns null for leading-whitespace input (trim is the caller responsibility)', () => {
+      // runPs trims its output before calling the parser. If a caller forgets
+      // to trim, the parser fails safe by emitting null rather than producing
+      // a comm with an empty string.
+      expect(parsePsIdentity(' copilot Tue Apr 28 23:45:30 2026')).toBeNull()
+    })
+
+    it('parses standard ps -o comm=,lstart= output', () => {
+      expect(parsePsIdentity('copilot Tue Apr 28 23:45:30 2026')).toEqual({
+        comm: 'copilot',
+        lstart: 'Tue Apr 28 23:45:30 2026',
+      })
+    })
+
+    it('handles a 15-char comm boundary (Linux kernel cap)', () => {
+      // Linux truncates `comm` at 15 chars. A maximum-length value should
+      // still parse cleanly.
+      const comm = 'a'.repeat(15)
+      expect(parsePsIdentity(`${comm} Tue Apr 28 23:45:30 2026`)).toEqual({
+        comm,
+        lstart: 'Tue Apr 28 23:45:30 2026',
+      })
+    })
+
+    it('handles a 16-char comm boundary (macOS kernel cap)', () => {
+      // macOS truncates `comm` at 16 chars.
+      const comm = 'b'.repeat(16)
+      expect(parsePsIdentity(`${comm} Tue Apr 28 23:45:30 2026`)).toEqual({
+        comm,
+        lstart: 'Tue Apr 28 23:45:30 2026',
+      })
+    })
+
+    it('collapses multi-whitespace separator into the lstart trim', () => {
+      // If ps emits column padding that survives runPs.trim(), the parser
+      // still recovers a correct lstart by trimming after the slice.
+      expect(parsePsIdentity('copilot   Tue Apr 28 23:45:30 2026')).toEqual({
+        comm: 'copilot',
+        lstart: 'Tue Apr 28 23:45:30 2026',
+      })
     })
   })
 })
