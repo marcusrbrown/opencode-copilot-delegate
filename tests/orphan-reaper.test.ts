@@ -349,6 +349,36 @@ describe('orphan-reaper', () => {
       expect(finishedBeforeSlow).toBeGreaterThanOrEqual(9)
     })
 
+    it('forwards psTimeoutMs through the worker pool to injected getPidIdentity', async () => {
+      const dir = makeTempDir()
+      const currentPath = join(dir, `${process.pid}.pids`)
+
+      // Two distinct entries so we observe forwarding across multiple
+      // worker invocations, not just the first call.
+      writePidFile(currentPath, [
+        { pid: process.pid, comm: 'copilot', lstart: 't1' },
+        { pid: process.ppid, comm: 'copilot', lstart: 't2' },
+      ])
+
+      const recordedTimeouts: (number | undefined)[] = []
+
+      await reapOrphans({
+        pidFileDir: dir,
+        currentInstancePath: currentPath,
+        killProcessTree: async () => {},
+        getPidIdentity: async (_pid, timeoutMs) => {
+          recordedTimeouts.push(timeoutMs)
+          // Returning null skips the kill path; we only care about
+          // verifying that the forwarded timeoutMs reaches each worker.
+          return null
+        },
+        psTimeoutMs: 2500,
+      })
+
+      expect(recordedTimeouts).toHaveLength(2)
+      expect(recordedTimeouts.every((t) => t === 2500)).toBe(true)
+    })
+
     it('should cap concurrent getPidIdentity invocations at 5 for 10 entries', async () => {
       const dir = makeTempDir()
       const currentPath = join(dir, `${process.pid}.pids`)

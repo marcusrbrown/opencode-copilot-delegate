@@ -5,8 +5,13 @@ import { isErrnoException } from '../lib/errno'
 
 export interface ReapDeps {
   killProcessTree: (pid: number) => Promise<void>
+  // The optional `timeoutMs` second arg is the per-probe budget the worker
+  // pool will pass when configured via `reapOrphans({ psTimeoutMs })`.
+  // Injected implementations may ignore it (and bind a fixed timeout at the
+  // injection seam) or honor it as a per-call override.
   getPidIdentity: (
     pid: number,
+    timeoutMs?: number,
   ) => Promise<{ comm: string; lstart: string } | null>
   isPluginAlive: (pid: number) => boolean
 }
@@ -47,6 +52,11 @@ const DEFAULT_PS_TIMEOUT_MS = 1000
  * never fills under backpressure — an unread stderr pipe on a long-running
  * or backlogged ps invocation can stall the subprocess and block plugin
  * init.
+ *
+ * On timeout, only SIGTERM is sent — there is no SIGKILL escalation. A
+ * theoretically-misbehaving ps that ignores SIGTERM would leave a child
+ * process running indefinitely. In practice, ps respects SIGTERM cleanly
+ * and the close handler fires within the kernel's normal teardown window.
  */
 function runPs(
   args: string[],
@@ -174,6 +184,7 @@ async function processEntry(
   killProcessTree: ReapDeps['killProcessTree'],
   getPidIdentity: ReapDeps['getPidIdentity'],
   signal?: AbortSignal,
+  psTimeoutMs?: number,
 ): Promise<{ reaped: boolean; skipped: boolean }> {
   if (signal?.aborted) return { reaped: false, skipped: true }
 
@@ -183,7 +194,7 @@ async function processEntry(
     return { reaped: false, skipped: true }
   }
 
-  const live = await getPidIdentity(entry.pid)
+  const live = await getPidIdentity(entry.pid, psTimeoutMs)
 
   // Re-check abort after the slow ps probe. If the overall reap timed
   // out while this probe was in flight, skip the kill: the caller has
@@ -211,6 +222,7 @@ async function processEntries(
   killProcessTree: ReapDeps['killProcessTree'],
   getPidIdentity: ReapDeps['getPidIdentity'],
   signal?: AbortSignal,
+  psTimeoutMs?: number,
 ): Promise<{ reaped: number; skipped: number }> {
   let reaped = 0
   let skipped = 0
@@ -235,6 +247,7 @@ async function processEntries(
         killProcessTree,
         getPidIdentity,
         signal,
+        psTimeoutMs,
       )
       // Mutating shared `reaped`/`skipped` from concurrent workers is safe
       // because JS executes each ++ as a single synchronous read-modify-write
@@ -302,6 +315,7 @@ async function reapOneFile(
   killProcessTree: ReapDeps['killProcessTree'],
   getPidIdentity: ReapDeps['getPidIdentity'],
   signal?: AbortSignal,
+  psTimeoutMs?: number,
 ): Promise<ReapFileOutcome> {
   const empty: ReapFileOutcome = {
     reaped: 0,
@@ -324,6 +338,7 @@ async function reapOneFile(
     killProcessTree,
     getPidIdentity,
     signal,
+    psTimeoutMs,
   )
 
   // Critical: skip cleanupAfterReap if the overall reap was aborted.
@@ -349,6 +364,9 @@ interface ReapOpts {
   getPidIdentity: ReapDeps['getPidIdentity']
   isPluginAlive?: ReapDeps['isPluginAlive']
   signal?: AbortSignal
+  // Per-probe ps timeout forwarded to every `getPidIdentity(pid, timeoutMs)`
+  // call that the worker pool issues. Injected implementations may ignore it.
+  psTimeoutMs?: number
 }
 
 async function doReap(opts: ReapOpts): Promise<ReapResult> {
@@ -359,6 +377,7 @@ async function doReap(opts: ReapOpts): Promise<ReapResult> {
     getPidIdentity,
     isPluginAlive = defaultIsPluginAlive,
     signal,
+    psTimeoutMs,
   } = opts
 
   let files: string[]
@@ -396,6 +415,7 @@ async function doReap(opts: ReapOpts): Promise<ReapResult> {
       killProcessTree,
       getPidIdentity,
       signal,
+      psTimeoutMs,
     )
 
     reaped += outcome.reaped
@@ -445,11 +465,16 @@ export async function reapOrphans(
     }, reapTimeoutMs)
   })
 
+  // Attach a no-op rejection handler to the abandoned doReap promise. doReap
+  // currently catches every internal throw, so this is defensive: if a future
+  // refactor introduces an uncaught throw path inside doReap, the rejection
+  // would otherwise surface as an unhandled rejection after the timeout has
+  // resolved Promise.race and reapOrphans has returned.
+  const reapPromise = doReap({ ...opts, signal: controller.signal })
+  reapPromise.catch(() => {})
+
   try {
-    return await Promise.race([
-      doReap({ ...opts, signal: controller.signal }),
-      timeoutPromise,
-    ])
+    return await Promise.race([reapPromise, timeoutPromise])
   } finally {
     if (timeoutId) clearTimeout(timeoutId)
   }
