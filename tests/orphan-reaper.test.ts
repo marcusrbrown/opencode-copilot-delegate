@@ -37,7 +37,7 @@ function result(overrides: Partial<ReapResult> = {}): ReapResult {
     skipped: 0,
     scannedFiles: 0,
     deletedFiles: 0,
-    timed_out: false,
+    timedOut: false,
     ...overrides,
   }
 }
@@ -136,22 +136,50 @@ describe('orphan-reaper', () => {
       expect(readFileSync(foreignAlivePath, 'utf-8')).toBeDefined()
     })
 
-    it('reports timed_out: false on a successful reap', async () => {
+    it('reports timedOut with zero counts even after partial progress', async () => {
+      // Locks the contract: when the overall timeout wins, in-flight
+      // workers may have already invoked side effects (killProcessTree,
+      // counter increments) before the abort signal landed, but those
+      // are NOT reflected in the returned counts. Counts are placeholders.
+      //
+      // Uses process.pid and process.ppid for entry pids because
+      // processEntry probes `process.kill(entry.pid, 0)` before calling
+      // getPidIdentity; synthetic ghost pids would short-circuit as
+      // skipped and never exercise the slow probe path.
       const dir = makeTempDir()
       const currentPath = join(dir, `${process.pid}.pids`)
-      writePidFile(currentPath, [
-        { pid: process.pid, comm: 'copilot', lstart: 't1' },
+      const foreignDeadPath = join(dir, '9999.pids')
+      writePidFile(currentPath, [])
+      writePidFile(foreignDeadPath, [
+        { pid: process.pid, comm: 'sleep', lstart: 't1' },
+        { pid: process.ppid, comm: 'sleep', lstart: 't2' },
       ])
 
+      let killCount = 0
       const res = await reapOrphans({
         pidFileDir: dir,
         currentInstancePath: currentPath,
-        killProcessTree: async () => {},
-        getPidIdentity: async () => ({ comm: 'copilot', lstart: 't1' }),
+        killProcessTree: async () => {
+          killCount++
+        },
+        getPidIdentity: (pid) => {
+          // First entry: returns matching identity immediately and is reaped.
+          if (pid === process.pid)
+            return Promise.resolve({ comm: 'sleep', lstart: 't1' })
+          // Second entry: hangs past reapTimeoutMs so timeout wins the race.
+          return new Promise((resolve) => setTimeout(() => resolve(null), 200))
+        },
+        isPluginAlive: (pid) => pid !== 9999,
+        reapTimeoutMs: 50,
       })
 
-      expect(res.timed_out).toBe(false)
-      expect(res.reaped).toBe(1)
+      expect(res.timedOut).toBe(true)
+      expect(res.reaped).toBe(0)
+      expect(res.scannedFiles).toBe(0)
+      expect(res.deletedFiles).toBe(0)
+      // Side effect observable: entry for process.pid was killed before the
+      // timeout, but the count fields don't reflect it.
+      expect(killCount).toBe(1)
     })
   })
 
@@ -533,7 +561,7 @@ describe('orphan-reaper', () => {
       })
 
       const res = await reapPromise
-      expect(res).toEqual(result({ timed_out: true }))
+      expect(res).toEqual(result({ timedOut: true }))
 
       // Simulate a new task being spawned right after init returns: append
       // a fresh entry to the current-instance file.
@@ -577,7 +605,7 @@ describe('orphan-reaper', () => {
           reapTimeoutMs: 50,
         })
 
-        expect(res).toEqual(result({ timed_out: true }))
+        expect(res).toEqual(result({ timedOut: true }))
         const matched = warnings.find(
           (w) =>
             w.includes('orphan-reaper') &&
