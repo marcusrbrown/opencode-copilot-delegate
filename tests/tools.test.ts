@@ -202,6 +202,37 @@ describe('plugin tools', () => {
     expect(result.tool?.copilot_delegate.description.length).toBeGreaterThan(50)
   })
 
+  it('wires normalizeToolArgSchemas on registered tool args', async () => {
+    // Given a plugin input
+    const input = makePluginInput(process.cwd())
+
+    // When the plugin is loaded
+    const result = await plugin(input)
+    const tools = requireTools(result)
+
+    // Then each registered tool's args carry a _zod.toJSONSchema override that
+    // surfaces .describe() text — guards against a future tool registration
+    // path forgetting to call normalizeToolArgSchemas(...).
+    const cases: Array<{ tool: keyof typeof tools; arg: string }> = [
+      { tool: 'copilot_delegate', arg: 'prompt' },
+      { tool: 'copilot_delegate', arg: 'agent' },
+      { tool: 'copilot_output', arg: 'task_id' },
+      { tool: 'copilot_output', arg: 'block' },
+      { tool: 'copilot_cancel', arg: 'task_id' },
+    ]
+
+    for (const { tool: toolId, arg } of cases) {
+      const schema = (tools[toolId].args as Record<string, unknown>)[arg]
+      const override = (schema as { _zod: { toJSONSchema?: () => unknown } })
+        ._zod.toJSONSchema
+      expect(typeof override).toBe('function')
+
+      const emitted = override?.() as Record<string, unknown>
+      expect(typeof emitted.description).toBe('string')
+      expect((emitted.description as string).length).toBeGreaterThan(10)
+    }
+  })
+
   it('delegates a task and returns a cpl_ task id', async () => {
     // Given a fake copilot binary that emits valid JSONL and exits successfully
     const cwd = mkdtempSync(join(tmpdir(), 'copilot-tools-cwd-'))
