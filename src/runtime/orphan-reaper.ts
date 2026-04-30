@@ -16,11 +16,27 @@ export interface ReapDeps {
   isPluginAlive: (pid: number) => boolean
 }
 
+/**
+ * Aggregated outcome of a single `reapOrphans` invocation.
+ *
+ * `timedOut` is `true` when `reapOrphans` aborted due to its overall
+ * timeout budget. The flag distinguishes a successful no-op (no `.pids`
+ * files to scan, all counts naturally zero) from a timeout-aborted reap
+ * that stopped mid-flight (orphans may remain).
+ *
+ * IMPORTANT: when `timedOut` is `true`, the count fields are zero
+ * placeholders, NOT partial-progress accounting. In-flight workers may
+ * have already incremented internal counters or even invoked
+ * `killProcessTree` before the timeout fired, but those side effects are
+ * not reflected in the returned counts. Treat a timed-out result as "no
+ * reliable count signal" and consider warning or retrying.
+ */
 export interface ReapResult {
   reaped: number
   skipped: number
   scannedFiles: number
   deletedFiles: number
+  timedOut: boolean
 }
 
 export function defaultIsPluginAlive(pid: number): boolean {
@@ -384,7 +400,13 @@ async function doReap(opts: ReapOpts): Promise<ReapResult> {
   try {
     files = await readdir(pidFileDir)
   } catch {
-    return { reaped: 0, skipped: 0, scannedFiles: 0, deletedFiles: 0 }
+    return {
+      reaped: 0,
+      skipped: 0,
+      scannedFiles: 0,
+      deletedFiles: 0,
+      timedOut: false,
+    }
   }
 
   let reaped = 0
@@ -424,7 +446,7 @@ async function doReap(opts: ReapOpts): Promise<ReapResult> {
     if (outcome.deleted) deletedFiles++
   }
 
-  return { reaped, skipped, scannedFiles, deletedFiles }
+  return { reaped, skipped, scannedFiles, deletedFiles, timedOut: false }
 }
 
 /**
@@ -441,11 +463,16 @@ export async function reapOrphans(
   opts: Omit<ReapOpts, 'signal'> & { reapTimeoutMs?: number },
 ): Promise<ReapResult> {
   const reapTimeoutMs = opts.reapTimeoutMs ?? DEFAULT_REAP_TIMEOUT_MS
-  const empty: ReapResult = {
+  // Zero-counts shape used both as the cold-start success default and as
+  // the base for the timed-out shape (which overrides `timedOut`). Named
+  // `zeros` rather than `empty` so future readers don't conflate the
+  // success and timeout cases at a glance.
+  const zeros: ReapResult = {
     reaped: 0,
     skipped: 0,
     scannedFiles: 0,
     deletedFiles: 0,
+    timedOut: false,
   }
 
   // Race the reap against an overall timeout. On timeout, abort the reap
@@ -461,7 +488,7 @@ export async function reapOrphans(
         `[orphan-reaper] reapOrphans exceeded ${reapTimeoutMs}ms budget; returning empty result`,
       )
       controller.abort()
-      resolve(empty)
+      resolve({ ...zeros, timedOut: true })
     }, reapTimeoutMs)
   })
 
