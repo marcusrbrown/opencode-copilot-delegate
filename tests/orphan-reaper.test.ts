@@ -1,9 +1,12 @@
-import { describe, expect, it } from 'bun:test'
+import { describe, expect, it, spyOn } from 'bun:test'
 import {
   appendFileSync,
+  lstatSync,
+  mkdirSync,
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -463,6 +466,87 @@ describe('orphan-reaper', () => {
   })
 
   describe('error paths', () => {
+    it('skips a symlinked current-instance pid file without truncating the target', async () => {
+      const dir = makeTempDir()
+      const pidFileDir = join(dir, 'orphans')
+      const currentPath = join(pidFileDir, `${process.pid}.pids`)
+      const targetPath = join(dir, 'target.txt')
+
+      mkdirSync(pidFileDir, { mode: 0o700 })
+      writeFileSync(targetPath, '99999\tcopilot\tt1\n')
+      symlinkSync(targetPath, currentPath)
+
+      const res = await reapOrphans({
+        pidFileDir,
+        currentInstancePath: currentPath,
+        killProcessTree: async () => {},
+        getPidIdentity: async () => null,
+      })
+
+      expect(res).toEqual(result())
+      expect(lstatSync(currentPath).isSymbolicLink()).toBe(true)
+      expect(readFileSync(targetPath, 'utf-8')).toBe('99999\tcopilot\tt1\n')
+    })
+
+    it('skips a symlinked pidFileDir without deleting files in its target', async () => {
+      const dir = makeTempDir()
+      const realDir = join(dir, 'real-orphans')
+      const pidFileDir = join(dir, 'linked-orphans')
+      const currentPath = join(pidFileDir, `${process.pid}.pids`)
+      const foreignPath = join(realDir, '9999.pids')
+
+      mkdirSync(realDir, { mode: 0o700 })
+      writePidFile(foreignPath, [{ pid: 99999, comm: 'copilot', lstart: 't1' }])
+      symlinkSync(realDir, pidFileDir)
+
+      const res = await reapOrphans({
+        pidFileDir,
+        currentInstancePath: currentPath,
+        killProcessTree: async () => {},
+        getPidIdentity: async () => null,
+        isPluginAlive: (pid) => pid !== 9999,
+      })
+
+      expect(res).toEqual(result())
+      expect(lstatSync(pidFileDir).isSymbolicLink()).toBe(true)
+      expect(readFileSync(foreignPath, 'utf-8')).toBe('99999\tcopilot\tt1\n')
+    })
+
+    it('does not enumerate entries through a symlinked pidFileDir', async () => {
+      const dir = makeTempDir()
+      const realDir = join(dir, 'real-orphans')
+      const pidFileDir = join(dir, 'linked-orphans')
+      const currentPath = join(pidFileDir, `${process.pid}.pids`)
+      const foreignPath = join(realDir, 'not-a-pid.pids')
+
+      mkdirSync(realDir, { mode: 0o700 })
+      writePidFile(foreignPath, [{ pid: 99999, comm: 'copilot', lstart: 't1' }])
+      symlinkSync(realDir, pidFileDir)
+
+      const warnSpy = spyOn(console, 'warn').mockImplementation(() => {})
+      let probed = 0
+      try {
+        const res = await reapOrphans({
+          pidFileDir,
+          currentInstancePath: currentPath,
+          killProcessTree: async () => {},
+          getPidIdentity: async () => {
+            probed++
+            return null
+          },
+          isPluginAlive: () => false,
+        })
+
+        expect(res).toEqual(result())
+        expect(probed).toBe(0)
+        expect(warnSpy).not.toHaveBeenCalled()
+        expect(lstatSync(pidFileDir).isSymbolicLink()).toBe(true)
+        expect(readFileSync(foreignPath, 'utf-8')).toBe('99999\tcopilot\tt1\n')
+      } finally {
+        warnSpy.mockRestore()
+      }
+    })
+
     it('should silently skip malformed lines', async () => {
       const dir = makeTempDir()
       const currentPath = join(dir, `${process.pid}.pids`)

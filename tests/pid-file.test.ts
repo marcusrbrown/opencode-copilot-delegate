@@ -1,5 +1,14 @@
 import { describe, expect, it } from 'bun:test'
-import { existsSync, mkdtempSync, readFileSync, statSync } from 'node:fs'
+import {
+  existsSync,
+  lstatSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  statSync,
+  symlinkSync,
+  writeFileSync,
+} from 'node:fs'
 import { writeFile } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -198,7 +207,7 @@ describe('pid-file', () => {
       const lines = content
         .trim()
         .split('\n')
-        .filter((l) => l.length > 0)
+        .filter((l: string) => l.length > 0)
       expect(lines).toHaveLength(10)
 
       const pids = new Set<number>()
@@ -251,6 +260,111 @@ describe('pid-file', () => {
       const filePath = join(dir, 'missing.pids')
 
       await expect(unlinkPidFile(filePath)).resolves.toBeUndefined()
+    })
+  })
+
+  describe('symlink hardening', () => {
+    it('rejects a symlinked pid file in appendPidEntry', async () => {
+      const dir = makeTempDir()
+      const targetPath = join(dir, 'target.txt')
+      const filePath = join(dir, 'test.pids')
+
+      writeFileSync(targetPath, 'secret\n')
+      symlinkSync(targetPath, filePath)
+
+      await expect(
+        appendPidEntry(filePath, 12345, 'copilot', 'Mon Jan 1 00:00:00 2024'),
+      ).rejects.toThrow()
+
+      expect(lstatSync(filePath).isSymbolicLink()).toBe(true)
+      expect(readFileSync(targetPath, 'utf-8')).toBe('secret\n')
+    })
+
+    it('rejects a symlinked parent directory in appendPidEntry', async () => {
+      const dir = makeTempDir()
+      const realDir = join(dir, 'real-orphans')
+      const linkedDir = join(dir, 'linked-orphans')
+      const filePath = join(linkedDir, 'test.pids')
+
+      mkdirSync(realDir, { mode: 0o700 })
+      symlinkSync(realDir, linkedDir)
+
+      await expect(
+        appendPidEntry(filePath, 12345, 'copilot', 'Mon Jan 1 00:00:00 2024'),
+      ).rejects.toThrow(/refusing symlink path/)
+
+      expect(lstatSync(linkedDir).isSymbolicLink()).toBe(true)
+      expect(existsSync(join(realDir, 'test.pids'))).toBe(false)
+    })
+
+    it('rejects a symlinked pid file in removePidEntry', async () => {
+      const dir = makeTempDir()
+      const targetPath = join(dir, 'target.txt')
+      const filePath = join(dir, 'test.pids')
+
+      writeFileSync(targetPath, '12345\tcopilot\tMon Jan 1 00:00:00 2024\n')
+      symlinkSync(targetPath, filePath)
+
+      await expect(removePidEntry(filePath, 12345)).rejects.toThrow()
+
+      expect(lstatSync(filePath).isSymbolicLink()).toBe(true)
+      expect(readFileSync(targetPath, 'utf-8')).toBe(
+        '12345\tcopilot\tMon Jan 1 00:00:00 2024\n',
+      )
+    })
+
+    it('rejects a symlinked parent directory in removePidEntry', async () => {
+      const dir = makeTempDir()
+      const realDir = join(dir, 'real-orphans')
+      const linkedDir = join(dir, 'linked-orphans')
+      const realFilePath = join(realDir, 'test.pids')
+      const filePath = join(linkedDir, 'test.pids')
+
+      mkdirSync(realDir, { mode: 0o700 })
+      writeFileSync(realFilePath, '12345\tcopilot\tMon Jan 1 00:00:00 2024\n')
+      symlinkSync(realDir, linkedDir)
+
+      await expect(removePidEntry(filePath, 12345)).rejects.toThrow(
+        /refusing symlink path/,
+      )
+
+      expect(lstatSync(linkedDir).isSymbolicLink()).toBe(true)
+      expect(readFileSync(realFilePath, 'utf-8')).toBe(
+        '12345\tcopilot\tMon Jan 1 00:00:00 2024\n',
+      )
+    })
+
+    it('rejects a symlinked pid file in truncatePidFile', async () => {
+      const dir = makeTempDir()
+      const targetPath = join(dir, 'target.txt')
+      const filePath = join(dir, 'test.pids')
+
+      writeFileSync(targetPath, 'secret\n')
+      symlinkSync(targetPath, filePath)
+
+      await expect(truncatePidFile(filePath)).rejects.toThrow()
+
+      expect(lstatSync(filePath).isSymbolicLink()).toBe(true)
+      expect(readFileSync(targetPath, 'utf-8')).toBe('secret\n')
+    })
+
+    it('rejects a symlinked parent directory in unlinkPidFile', async () => {
+      const dir = makeTempDir()
+      const realDir = join(dir, 'real-orphans')
+      const linkedDir = join(dir, 'linked-orphans')
+      const realFilePath = join(realDir, 'test.pids')
+      const filePath = join(linkedDir, 'test.pids')
+
+      mkdirSync(realDir, { mode: 0o700 })
+      writeFileSync(realFilePath, '12345\tcopilot\tMon Jan 1 00:00:00 2024\n')
+      symlinkSync(realDir, linkedDir)
+
+      await expect(unlinkPidFile(filePath)).rejects.toThrow(
+        /refusing symlink path/,
+      )
+
+      expect(lstatSync(linkedDir).isSymbolicLink()).toBe(true)
+      expect(existsSync(realFilePath)).toBe(true)
     })
   })
 

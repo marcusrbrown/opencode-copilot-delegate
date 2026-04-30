@@ -6,7 +6,11 @@ import { buildDescription } from './discovery/description'
 import { killProcessTree } from './lib/kill-tree'
 import { normalizeToolArgSchemas } from './lib/normalize-tool-arg-schemas'
 import { getPidIdentity, reapOrphans } from './runtime/orphan-reaper'
-import { resolveInstancePidFilePath } from './runtime/pid-file'
+import {
+  assertOrphansDirNotSymlink,
+  assertPluginStateDirNotSymlink,
+  resolveInstancePidFilePath,
+} from './runtime/pid-file'
 import { plugInOnce } from './runtime/plugin-singleton'
 import { createCancelTool } from './tools/cancel'
 import { createDelegateTool } from './tools/delegate'
@@ -33,7 +37,9 @@ async function initializePlugin({ client, directory }: PluginInput) {
     // filesystems (EROFS) or permission-denied state dirs (EACCES). Both
     // failure modes degrade gracefully: reapOrphans's own readdir guard
     // returns an empty result when the directory cannot be enumerated.
+    await assertPluginStateDirNotSymlink(currentInstancePath)
     await mkdir(pidFileDir, { recursive: true, mode: 0o700 })
+    await assertOrphansDirNotSymlink(currentInstancePath)
     await reapOrphans({
       pidFileDir,
       currentInstancePath,

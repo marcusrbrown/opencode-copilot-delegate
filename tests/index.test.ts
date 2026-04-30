@@ -1,10 +1,13 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
 import {
   chmodSync,
+  lstatSync,
   mkdirSync,
   mkdtempSync,
+  readFileSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -171,5 +174,34 @@ describe('plugin init lifecycle', () => {
     // And tools dispatch is ready
     expect(result.tool).toBeDefined()
     expect(typeof result.tool?.copilot_delegate.execute).toBe('function')
+  })
+
+  it('returns tools without following a symlinked pid state parent into orphans', async () => {
+    const xdgState = mkdtempSync(join(tmpdir(), 'plugin-init-symlink-'))
+    tempPaths.push(xdgState)
+    process.env.XDG_STATE_HOME = xdgState
+
+    const realPluginStateDir = join(xdgState, 'real-plugin-state')
+    const realOrphansDir = join(realPluginStateDir, 'orphans')
+    mkdirSync(realOrphansDir, { recursive: true, mode: 0o700 })
+
+    const linkedPluginStateDir = join(xdgState, 'opencode-copilot-delegate')
+    symlinkSync(realPluginStateDir, linkedPluginStateDir)
+
+    const foreignPidFile = join(realOrphansDir, '4194305.pids')
+    writeFileSync(foreignPidFile, '99999\tcopilot\tTue Apr 28 23:45:30 2026\n')
+
+    const input = makePluginInput(process.cwd())
+    const result = await plugin(input)
+
+    expect(Object.keys(result.tool ?? {}).sort()).toEqual([
+      'copilot_cancel',
+      'copilot_delegate',
+      'copilot_output',
+    ])
+    expect(lstatSync(linkedPluginStateDir).isSymbolicLink()).toBe(true)
+    expect(readFileSync(foreignPidFile, 'utf-8')).toBe(
+      '99999\tcopilot\tTue Apr 28 23:45:30 2026\n',
+    )
   })
 })

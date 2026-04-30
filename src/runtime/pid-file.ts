@@ -2,12 +2,11 @@ import { randomBytes } from 'node:crypto'
 import {
   chmod,
   constants as fsConstants,
+  lstat,
   mkdir,
   open,
-  readFile,
   rename,
   unlink,
-  writeFile,
 } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -19,6 +18,42 @@ import { isErrnoException } from '../lib/errno'
 // are deleted once the tail promise settles and no new work has been enqueued,
 // preventing unbounded map growth over long-lived sessions.
 const writeChains = new Map<string, Promise<void>>()
+
+function symlinkPathError(path: string): Error {
+  return new Error(`[copilot-delegate] refusing symlink path: ${path}`)
+}
+
+async function assertNotSymlink(path: string): Promise<void> {
+  const stats = await lstat(path)
+  if (stats.isSymbolicLink()) {
+    throw symlinkPathError(path)
+  }
+}
+
+export async function assertPluginStateDirNotSymlink(
+  filePath: string,
+): Promise<void> {
+  try {
+    await assertNotSymlink(dirname(dirname(filePath)))
+  } catch (e) {
+    if (!isErrnoException(e) || e.code !== 'ENOENT') throw e
+  }
+}
+
+export async function assertOrphansDirNotSymlink(
+  filePath: string,
+): Promise<void> {
+  await assertNotSymlink(dirname(filePath))
+}
+
+export async function readPidFileNoFollow(filePath: string): Promise<string> {
+  const fd = await open(filePath, fsConstants.O_NOFOLLOW | fsConstants.O_RDONLY)
+  try {
+    return await fd.readFile({ encoding: 'utf-8' })
+  } finally {
+    await fd.close()
+  }
+}
 
 async function serializeWrite(
   filePath: string,
@@ -54,11 +89,13 @@ export async function appendPidEntry(
   lstart: string,
 ): Promise<void> {
   await serializeWrite(filePath, async () => {
+    await assertPluginStateDirNotSymlink(filePath)
     await mkdir(dirname(filePath), { recursive: true, mode: 0o700 })
+    await assertOrphansDirNotSymlink(filePath)
 
     let existing = ''
     try {
-      existing = await readFile(filePath, 'utf-8')
+      existing = await readPidFileNoFollow(filePath)
     } catch (e) {
       if (!isErrnoException(e) || e.code !== 'ENOENT') throw e
     }
@@ -69,7 +106,10 @@ export async function appendPidEntry(
     const tempPath = `${filePath}.tmp.${randomBytes(8).toString('hex')}`
     const fd = await open(
       tempPath,
-      fsConstants.O_EXCL | fsConstants.O_CREAT | fsConstants.O_WRONLY,
+      fsConstants.O_EXCL |
+        fsConstants.O_CREAT |
+        fsConstants.O_NOFOLLOW |
+        fsConstants.O_WRONLY,
       0o600,
     )
     try {
@@ -90,7 +130,8 @@ export async function removePidEntry(
   await serializeWrite(filePath, async () => {
     let existing = ''
     try {
-      existing = await readFile(filePath, 'utf-8')
+      await assertOrphansDirNotSymlink(filePath)
+      existing = await readPidFileNoFollow(filePath)
     } catch (e) {
       if (!isErrnoException(e) || e.code !== 'ENOENT') throw e
       return
@@ -108,7 +149,10 @@ export async function removePidEntry(
     const tempPath = `${filePath}.tmp.${randomBytes(8).toString('hex')}`
     const fd = await open(
       tempPath,
-      fsConstants.O_EXCL | fsConstants.O_CREAT | fsConstants.O_WRONLY,
+      fsConstants.O_EXCL |
+        fsConstants.O_CREAT |
+        fsConstants.O_NOFOLLOW |
+        fsConstants.O_WRONLY,
       0o600,
     )
     try {
@@ -136,7 +180,16 @@ export async function removePidEntry(
 export async function truncatePidFile(filePath: string): Promise<void> {
   await serializeWrite(filePath, async () => {
     try {
-      await writeFile(filePath, '')
+      await assertOrphansDirNotSymlink(filePath)
+      const fd = await open(
+        filePath,
+        fsConstants.O_NOFOLLOW | fsConstants.O_WRONLY,
+      )
+      try {
+        await fd.truncate(0)
+      } finally {
+        await fd.close()
+      }
     } catch (e) {
       if (!isErrnoException(e) || e.code !== 'ENOENT') throw e
     }
@@ -150,6 +203,7 @@ export async function truncatePidFile(filePath: string): Promise<void> {
 export async function unlinkPidFile(filePath: string): Promise<void> {
   await serializeWrite(filePath, async () => {
     try {
+      await assertOrphansDirNotSymlink(filePath)
       await unlink(filePath)
     } catch (e) {
       if (!isErrnoException(e) || e.code !== 'ENOENT') throw e

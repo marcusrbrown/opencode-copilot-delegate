@@ -1,8 +1,13 @@
 import { spawn } from 'node:child_process'
-import { readdir, readFile } from 'node:fs/promises'
+import { readdir } from 'node:fs/promises'
 import { basename, extname, join } from 'node:path'
 import { isErrnoException } from '../lib/errno'
-import { truncatePidFile, unlinkPidFile } from './pid-file'
+import {
+  assertOrphansDirNotSymlink,
+  readPidFileNoFollow,
+  truncatePidFile,
+  unlinkPidFile,
+} from './pid-file'
 
 export interface ReapDeps {
   killProcessTree: (pid: number) => Promise<void>
@@ -285,7 +290,8 @@ async function readPidFileEntries(
 ): Promise<PidEntry[] | null> {
   let content: string
   try {
-    content = await readFile(filePath, 'utf-8')
+    await assertOrphansDirNotSymlink(filePath)
+    content = await readPidFileNoFollow(filePath)
   } catch {
     return null
   }
@@ -310,6 +316,9 @@ async function cleanupAfterReap(
   // ensures no entry written after the reap decision can be silently
   // wiped by a truncate or unlink that was already in flight.
   try {
+    // Keep cleanup's own contract explicit; truncate/unlink repeat this check
+    // under the serialize lock as the authoritative enforcement point.
+    await assertOrphansDirNotSymlink(isCurrent ? currentInstancePath : filePath)
     if (isCurrent) {
       // For the current instance we always truncate via the canonical
       // `currentInstancePath`, never `filePath`. The two are equal in
@@ -421,6 +430,7 @@ async function doReap(opts: ReapOptions): Promise<ReapResult> {
 
   let files: string[]
   try {
+    await assertOrphansDirNotSymlink(currentInstancePath)
     files = await readdir(pidFileDir)
   } catch {
     return {
