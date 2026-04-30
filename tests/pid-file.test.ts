@@ -1,11 +1,14 @@
 import { describe, expect, it } from 'bun:test'
-import { mkdtempSync, readFileSync, statSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, statSync } from 'node:fs'
+import { writeFile } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   appendPidEntry,
   removePidEntry,
   resolveInstancePidFilePath,
+  truncatePidFile,
+  unlinkPidFile,
 } from '../src/runtime/pid-file'
 
 function makeTempDir(): string {
@@ -208,6 +211,73 @@ describe('pid-file', () => {
         pids.add(Number(parts[0]))
       }
       expect(pids.size).toBe(10)
+    })
+  })
+
+  describe('truncatePidFile', () => {
+    it('clears file content', async () => {
+      const dir = makeTempDir()
+      const filePath = join(dir, 'test.pids')
+      await writeFile(filePath, '12345\tbash\tMon Apr 27 10:00:00 2026\n')
+
+      await truncatePidFile(filePath)
+
+      expect(readFileSync(filePath, 'utf-8')).toBe('')
+    })
+
+    it('swallows ENOENT silently', async () => {
+      const dir = makeTempDir()
+      // Parent dir does not exist -> writeFile rejects with ENOENT
+      const filePath = join(dir, 'missing-subdir', 'missing.pids')
+
+      await expect(truncatePidFile(filePath)).resolves.toBeUndefined()
+      expect(existsSync(filePath)).toBe(false)
+    })
+  })
+
+  describe('unlinkPidFile', () => {
+    it('removes the file', async () => {
+      const dir = makeTempDir()
+      const filePath = join(dir, 'test.pids')
+      await writeFile(filePath, '12345\tbash\tMon Apr 27 10:00:00 2026\n')
+
+      await unlinkPidFile(filePath)
+
+      expect(existsSync(filePath)).toBe(false)
+    })
+
+    it('swallows ENOENT silently', async () => {
+      const dir = makeTempDir()
+      const filePath = join(dir, 'missing.pids')
+
+      await expect(unlinkPidFile(filePath)).resolves.toBeUndefined()
+    })
+  })
+
+  describe('serialize lock interaction', () => {
+    it('truncatePidFile and appendPidEntry serialize against each other', async () => {
+      const dir = makeTempDir()
+      const filePath = join(dir, 'concurrent.pids')
+
+      // Seed: one entry already present
+      await appendPidEntry(filePath, 1111, 'bash', 'Mon Apr 27 10:00:00 2026')
+
+      // Concurrently fire append + truncate. Whichever queues first wins
+      // on ordering, but neither must observe a torn write.
+      await Promise.all([
+        appendPidEntry(filePath, 2222, 'node', 'Mon Apr 27 10:00:01 2026'),
+        truncatePidFile(filePath),
+      ])
+
+      const final = existsSync(filePath) ? readFileSync(filePath, 'utf-8') : ''
+
+      // Acceptable terminal states (any serial ordering of the two ops
+      // over the seeded baseline produces one of these; no torn / partial
+      // line is permitted):
+      //   A) seed -> append -> truncate         => ''
+      //   B) seed -> truncate -> append         => '2222\tnode\t...\n'
+      const acceptable = new Set(['', '2222\tnode\tMon Apr 27 10:00:01 2026\n'])
+      expect(acceptable.has(final)).toBe(true)
     })
   })
 })
