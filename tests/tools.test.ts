@@ -1,10 +1,11 @@
-import { afterEach, describe, expect, it } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { PluginInput } from '@opencode-ai/plugin'
 import type { ToolContext } from '@opencode-ai/plugin/tool'
 import plugin from '../src/index'
+import { _resetPluginSingleton } from '../src/runtime/plugin-singleton'
 import { cleanupAll } from '../src/runtime/task-registry'
 import { createDelegateTool } from '../src/tools/delegate'
 
@@ -28,6 +29,14 @@ type ToolResultObject = Record<string, unknown>
 
 const tempPaths: string[] = []
 const originalPath = process.env.PATH
+
+beforeEach(() => {
+  // Each test loads `plugin(input)` and asserts on the returned tool dispatch.
+  // The singleton would short-circuit subsequent invocations and reuse the
+  // first test's MockClient/PATH, breaking per-test isolation. Reset between
+  // tests so each `await plugin(input)` runs init for real.
+  _resetPluginSingleton()
+})
 
 afterEach(async () => {
   await cleanupAll()
@@ -392,6 +401,9 @@ describe('plugin tools', () => {
       client,
       description: 'delegate test',
       directory: invalidCwd,
+      // pidFilePath is currently optional; pass an explicit fixture so a
+      // future required-parameter refactor does not break this test silently.
+      pidFilePath: join(tmpdir(), 'spawn-error-fixture.pids'),
     })
 
     // When delegation is attempted

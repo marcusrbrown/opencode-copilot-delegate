@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
 import {
   chmodSync,
   mkdirSync,
@@ -11,10 +11,20 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { PluginInput } from '@opencode-ai/plugin'
 import plugin from '../src/index'
+import { _resetPluginSingleton } from '../src/runtime/plugin-singleton'
 import { cleanupAll } from '../src/runtime/task-registry'
 
 const tempPaths: string[] = []
 const originalXdgStateHome = process.env.XDG_STATE_HOME
+
+beforeEach(() => {
+  // Each lifecycle test asserts side effects of a fresh `await plugin(input)`
+  // (orphans-dir creation, foreign-pidfile reaping). Reset BEFORE each test so
+  // singleton state from a previous test file (e.g. `tests/tools.test.ts`)
+  // cannot short-circuit init and serve stale cached hooks tied to a different
+  // XDG_STATE_HOME.
+  _resetPluginSingleton()
+})
 
 afterEach(async () => {
   await cleanupAll()

@@ -1,12 +1,13 @@
 import { mkdir } from 'node:fs/promises'
 import { dirname } from 'node:path'
-import type { Plugin } from '@opencode-ai/plugin'
+import type { Plugin, PluginInput } from '@opencode-ai/plugin'
 import { discoverAgents } from './discovery/agents'
 import { buildDescription } from './discovery/description'
 import { killProcessTree } from './lib/kill-tree'
 import { normalizeToolArgSchemas } from './lib/normalize-tool-arg-schemas'
 import { getPidIdentity, reapOrphans } from './runtime/orphan-reaper'
 import { resolveInstancePidFilePath } from './runtime/pid-file'
+import { plugInOnce } from './runtime/plugin-singleton'
 import { createCancelTool } from './tools/cancel'
 import { createDelegateTool } from './tools/delegate'
 import { createOutputTool } from './tools/output'
@@ -21,7 +22,7 @@ function getAgentsDirectories(directory: string): {
   }
 }
 
-const CopilotDelegate: Plugin = async ({ client, directory }) => {
+async function initializePlugin({ client, directory }: PluginInput) {
   const agents = discoverAgents(getAgentsDirectories(directory))
   const delegateDescription = buildDescription(agents)
 
@@ -58,5 +59,24 @@ const CopilotDelegate: Plugin = async ({ client, directory }) => {
     },
   }
 }
+
+const CopilotDelegate: Plugin = async (input) =>
+  plugInOnce({
+    doInit: () => initializePlugin(input),
+    onDuplicate: (pid) => {
+      const message = `[copilot-delegate] duplicate factory invocation in same process (pid=${pid}); reusing existing hooks. Multiple opencode.json sources may list this plugin.`
+      console.warn(message)
+      // Fire-and-forget so the log call never blocks plugin init.
+      input.client.app
+        .log({
+          body: {
+            service: 'copilot-delegate',
+            level: 'warn',
+            message,
+          },
+        })
+        .catch(() => {})
+    },
+  })
 
 export default CopilotDelegate
