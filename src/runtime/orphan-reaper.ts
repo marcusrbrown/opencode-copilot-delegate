@@ -1,7 +1,8 @@
 import { spawn } from 'node:child_process'
-import { readdir, readFile, unlink, writeFile } from 'node:fs/promises'
+import { readdir, readFile } from 'node:fs/promises'
 import { basename, extname, join } from 'node:path'
 import { isErrnoException } from '../lib/errno'
+import { truncatePidFile, unlinkPidFile } from './pid-file'
 
 export interface ReapDeps {
   killProcessTree: (pid: number) => Promise<void>
@@ -305,10 +306,10 @@ async function cleanupAfterReap(
 ): Promise<boolean> {
   try {
     if (isCurrent) {
-      await writeFile(currentInstancePath, '')
+      await truncatePidFile(currentInstancePath)
       return false
     }
-    await unlink(filePath)
+    await unlinkPidFile(filePath)
     return true
   } catch {
     return false
@@ -322,17 +323,30 @@ interface ReapFileOutcome {
   deleted: boolean
 }
 
-async function reapOneFile(
-  filePath: string,
-  filePid: number,
-  isCurrent: boolean,
-  currentInstancePath: string,
-  isPluginAlive: ReapDeps['isPluginAlive'],
-  killProcessTree: ReapDeps['killProcessTree'],
-  getPidIdentity: ReapDeps['getPidIdentity'],
-  signal?: AbortSignal,
-  psTimeoutMs?: number,
-): Promise<ReapFileOutcome> {
+interface ReapOneFileArgs {
+  filePath: string
+  filePid: number
+  isCurrent: boolean
+  currentInstancePath: string
+  isPluginAlive: ReapDeps['isPluginAlive']
+  killProcessTree: ReapDeps['killProcessTree']
+  getPidIdentity: ReapDeps['getPidIdentity']
+  signal?: AbortSignal
+  psTimeoutMs?: number
+}
+
+async function reapOneFile(args: ReapOneFileArgs): Promise<ReapFileOutcome> {
+  const {
+    filePath,
+    filePid,
+    isCurrent,
+    currentInstancePath,
+    isPluginAlive,
+    killProcessTree,
+    getPidIdentity,
+    signal,
+    psTimeoutMs,
+  } = args
   const empty: ReapFileOutcome = {
     reaped: 0,
     skipped: 0,
@@ -373,11 +387,9 @@ async function reapOneFile(
   return { reaped, skipped, scanned: true, deleted }
 }
 
-interface ReapOpts {
+export interface ReapOptions extends Omit<ReapDeps, 'isPluginAlive'> {
   pidFileDir: string
   currentInstancePath: string
-  killProcessTree: ReapDeps['killProcessTree']
-  getPidIdentity: ReapDeps['getPidIdentity']
   isPluginAlive?: ReapDeps['isPluginAlive']
   signal?: AbortSignal
   // Per-probe ps timeout forwarded to every `getPidIdentity(pid, timeoutMs)`
@@ -385,7 +397,7 @@ interface ReapOpts {
   psTimeoutMs?: number
 }
 
-async function doReap(opts: ReapOpts): Promise<ReapResult> {
+async function doReap(opts: ReapOptions): Promise<ReapResult> {
   const {
     pidFileDir,
     currentInstancePath,
@@ -428,17 +440,17 @@ async function doReap(opts: ReapOpts): Promise<ReapResult> {
     }
     const filePid = Number(stem)
 
-    const outcome = await reapOneFile(
+    const outcome = await reapOneFile({
       filePath,
       filePid,
-      filePid === process.pid,
+      isCurrent: filePid === process.pid,
       currentInstancePath,
       isPluginAlive,
       killProcessTree,
       getPidIdentity,
       signal,
       psTimeoutMs,
-    )
+    })
 
     reaped += outcome.reaped
     skipped += outcome.skipped
@@ -460,7 +472,7 @@ async function doReap(opts: ReapOpts): Promise<ReapResult> {
 const DEFAULT_REAP_TIMEOUT_MS = 15_000
 
 export async function reapOrphans(
-  opts: Omit<ReapOpts, 'signal'> & { reapTimeoutMs?: number },
+  opts: Omit<ReapOptions, 'signal'> & { reapTimeoutMs?: number },
 ): Promise<ReapResult> {
   const reapTimeoutMs = opts.reapTimeoutMs ?? DEFAULT_REAP_TIMEOUT_MS
   // Zero-counts shape used both as the cold-start success default and as

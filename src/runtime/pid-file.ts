@@ -7,6 +7,7 @@ import {
   readFile,
   rename,
   unlink,
+  writeFile,
 } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -116,6 +117,35 @@ export async function removePidEntry(
 
     if (content.trim().length === 0) {
       await unlink(filePath)
+    }
+  })
+}
+
+/**
+ * Truncate a PID file under the same per-file serialize lock used by
+ * appendPidEntry/removePidEntry, so a concurrent writer cannot interleave
+ * with the truncation. ENOENT is silently swallowed (file already gone).
+ */
+export async function truncatePidFile(filePath: string): Promise<void> {
+  await serializeWrite(filePath, async () => {
+    try {
+      await writeFile(filePath, '')
+    } catch (e) {
+      if (!isErrnoException(e) || e.code !== 'ENOENT') throw e
+    }
+  })
+}
+
+/**
+ * Remove a PID file under the same per-file serialize lock. ENOENT is
+ * silently swallowed (file already gone). Other errno values propagate.
+ */
+export async function unlinkPidFile(filePath: string): Promise<void> {
+  await serializeWrite(filePath, async () => {
+    try {
+      await unlink(filePath)
+    } catch (e) {
+      if (!isErrnoException(e) || e.code !== 'ENOENT') throw e
     }
   })
 }
