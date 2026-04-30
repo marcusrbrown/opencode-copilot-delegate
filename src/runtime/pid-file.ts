@@ -124,7 +124,9 @@ export async function removePidEntry(
 /**
  * Truncate a PID file under the same per-file serialize lock used by
  * appendPidEntry/removePidEntry, so a concurrent writer cannot interleave
- * with the truncation. ENOENT is silently swallowed (file already gone).
+ * with the truncation. ENOENT is silently swallowed in both forms:
+ * file-already-gone AND parent-directory-missing. Other errno values
+ * propagate.
  */
 export async function truncatePidFile(filePath: string): Promise<void> {
   await serializeWrite(filePath, async () => {

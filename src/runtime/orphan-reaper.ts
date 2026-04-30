@@ -306,6 +306,12 @@ async function cleanupAfterReap(
 ): Promise<boolean> {
   try {
     if (isCurrent) {
+      // For the current instance we always truncate via the canonical
+      // `currentInstancePath`, never `filePath`. The two are equal in
+      // practice today, but the canonical path is the contract: the
+      // serialize-lock is keyed on it, and any future caller passing a
+      // different `filePath` (e.g. a stale name resolution) must still
+      // truncate the same file the writers are appending to.
       await truncatePidFile(currentInstancePath)
       return false
     }
