@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'bun:test'
+import { afterEach, describe, expect, it, mock, spyOn } from 'bun:test'
 import type { ChildProcess } from 'node:child_process'
 import {
   chmodSync,
@@ -89,6 +89,24 @@ async function loadModules() {
   }
 }
 
+let killTreeImportNonce = 0
+
+// Cache-bust the dynamic import so each test gets a fresh module evaluation.
+// Bun's loader keys on the full URL, so appending `?test=N` (with N
+// monotonically increasing) forces re-evaluation; without this trick, the
+// `mock.module('fkill', ...)` setup from a prior test leaks into the next.
+async function loadIsolatedKillProcessTree(): Promise<KillProcessTreeFn> {
+  killTreeImportNonce += 1
+
+  const killTreeModule = await import(
+    `../src/lib/kill-tree.ts?test=${killTreeImportNonce}`
+  )
+
+  return requireFunction<KillProcessTreeFn>(
+    Reflect.get(killTreeModule, 'killProcessTree'),
+  )
+}
+
 function makeFakeCopilotBin(): string {
   const binDir = mkdtempSync(join(tmpdir(), 'copilot-bin-'))
   const copilotPath = join(binDir, 'copilot')
@@ -124,6 +142,8 @@ function expectProcessToBeGone(pid: number): void {
 const tempPaths: string[] = []
 
 afterEach(async () => {
+  mock.restore()
+
   const { cleanupAll } = await loadModules()
   await cleanupAll()
 
@@ -423,6 +443,123 @@ describe('subprocess runtime', () => {
       await killProcessTree(0)
 
       // Then the helper exits without throwing
+    })
+
+    describe('killProcessTree observability', () => {
+      it('logs and skips when fkill fails after the root pid is already gone', async () => {
+        // Given fkill fails and the root pid probe reports ESRCH
+        const fkillError = new AggregateError(
+          ['Killing process -1234 failed: Process does not exist'],
+          'Failed to kill processes',
+        )
+        const fkillMock = mock(async () => {
+          throw fkillError
+        })
+        await mock.module('fkill', () => ({ default: fkillMock }))
+
+        const killProcessTree = await loadIsolatedKillProcessTree()
+        const warnSpy = spyOn(console, 'warn').mockImplementation(() => {})
+        const probeError = new Error('no such process') as NodeJS.ErrnoException
+        probeError.code = 'ESRCH'
+        const killSpy = spyOn(process, 'kill').mockImplementation(() => {
+          throw probeError
+        })
+
+        // When killProcessTree handles the failed fkill
+        await expect(killProcessTree(1234)).resolves.toBeUndefined()
+
+        // Then it logs the benign race and suppresses the failure
+        expect(fkillMock).toHaveBeenCalledWith(-1234, {
+          force: false,
+          forceAfterTimeout: 2000,
+          waitForExit: 5000,
+        })
+        expect(killSpy).toHaveBeenCalledWith(-1234, 0)
+        expect(warnSpy).toHaveBeenCalledTimes(1)
+        const goneMessage = warnSpy.mock.calls[0]?.[0]
+        expect(goneMessage).toEqual(
+          expect.stringContaining('[copilot-delegate]'),
+        )
+        expect(goneMessage).toEqual(
+          expect.stringContaining('root pid 1234 is already gone'),
+        )
+      })
+
+      it('warns and rethrows when fkill fails while the root pid is still alive', async () => {
+        // Given fkill fails but the root pid still exists
+        const fkillError = new AggregateError(
+          ['Killing process -4321 failed: Operation not permitted'],
+          'Failed to kill processes',
+        )
+        const fkillMock = mock(async () => {
+          throw fkillError
+        })
+        await mock.module('fkill', () => ({ default: fkillMock }))
+
+        const killProcessTree = await loadIsolatedKillProcessTree()
+        const warnSpy = spyOn(console, 'warn').mockImplementation(() => {})
+        const killSpy = spyOn(process, 'kill').mockImplementation(() => true)
+
+        // When killProcessTree handles the failed fkill
+        await expect(killProcessTree(4321)).rejects.toBe(fkillError)
+
+        // Then it warns that live processes may remain and preserves failure
+        expect(fkillMock).toHaveBeenCalledWith(-4321, {
+          force: false,
+          forceAfterTimeout: 2000,
+          waitForExit: 5000,
+        })
+        expect(killSpy).toHaveBeenCalledWith(-4321, 0)
+        expect(warnSpy).toHaveBeenCalledTimes(1)
+        const aliveMessage = warnSpy.mock.calls[0]?.[0]
+        expect(aliveMessage).toEqual(
+          expect.stringContaining('[copilot-delegate]'),
+        )
+        expect(aliveMessage).toEqual(
+          expect.stringContaining('root pid 4321 is still alive'),
+        )
+      })
+
+      it('warns and rethrows when the root pid probe fails with an unexpected errno', async () => {
+        // Given fkill fails and the follow-up root pid probe also errors
+        const fkillError = new AggregateError(
+          ['Killing process -9876 failed: Operation not permitted'],
+          'Failed to kill processes',
+        )
+        const fkillMock = mock(async () => {
+          throw fkillError
+        })
+        await mock.module('fkill', () => ({ default: fkillMock }))
+
+        const killProcessTree = await loadIsolatedKillProcessTree()
+        const warnSpy = spyOn(console, 'warn').mockImplementation(() => {})
+        const probeError = new Error(
+          'operation not permitted',
+        ) as NodeJS.ErrnoException
+        probeError.code = 'EPERM'
+        const killSpy = spyOn(process, 'kill').mockImplementation(() => {
+          throw probeError
+        })
+
+        // When killProcessTree handles the failed fkill
+        await expect(killProcessTree(9876)).rejects.toBe(fkillError)
+
+        // Then it surfaces the unexpected probe errno and preserves failure
+        expect(fkillMock).toHaveBeenCalledWith(-9876, {
+          force: false,
+          forceAfterTimeout: 2000,
+          waitForExit: 5000,
+        })
+        expect(killSpy).toHaveBeenCalledWith(-9876, 0)
+        expect(warnSpy).toHaveBeenCalledTimes(1)
+        const probeMessage = warnSpy.mock.calls[0]?.[0]
+        expect(probeMessage).toEqual(
+          expect.stringContaining('[copilot-delegate]'),
+        )
+        expect(probeMessage).toEqual(
+          expect.stringContaining('root pid probe failed with EPERM'),
+        )
+      })
     })
   })
 

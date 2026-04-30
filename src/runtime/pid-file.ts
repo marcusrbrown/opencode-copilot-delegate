@@ -13,6 +13,11 @@ import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { isErrnoException } from '../lib/errno'
 
+// Per-file write serializer: maps each file path to the tail of its pending
+// work chain. Each new write operation appends to this chain via .then(), so
+// concurrent callers for the same path are sequenced without a mutex. Entries
+// are deleted once the tail promise settles and no new work has been enqueued,
+// preventing unbounded map growth over long-lived sessions.
 const writeChains = new Map<string, Promise<void>>()
 
 async function serializeWrite(
