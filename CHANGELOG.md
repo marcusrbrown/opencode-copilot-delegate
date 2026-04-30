@@ -1,5 +1,32 @@
 # opencode-copilot-delegate
 
+## 0.8.0
+
+### Minor Changes
+
+- 0c21f43: Make the plugin factory idempotent across multiple OpenCode config sources within the same process. When `~/.config/opencode/opencode.json` AND a project-level `opencode.json` (or any other combination of config sources) both list `opencode-copilot-delegate`, OpenCode previously invoked the factory once per source — each invocation evaluating the plugin module fresh, running orphan reaping, and registering its own copy of the three tools. The result was duplicated tools in the catalog, duplicated init side effects (PID-file `mkdir`, `reapOrphans`), and per-invocation closure state that could diverge across registrations.
+
+  The factory now resolves at most once per process via a `globalThis` symbol singleton (`Symbol.for('opencode-copilot-delegate.singleton.v1')`). Subsequent invocations within the same PID return the cached hooks promise, skip the heavy init, and emit a single one-shot warning (via `console.warn` AND `client.app.log` under `service=copilot-delegate`) so duplicate-config situations remain observable in logs. Across distinct OpenCode processes the singleton is fresh — each process initializes normally.
+
+  No configuration change is required for users with a single config source. Users with duplicate registrations will see one warning per process and a single set of tools in the catalog.
+
+- 1fc343d: Tighten orphan-reaper internals and add two new exported helpers from `src/runtime/pid-file.ts`:
+
+  - `truncatePidFile(filePath)` — truncate under the per-file `serializeWrite` lock; ENOENT (file or parent missing) silently swallowed.
+  - `unlinkPidFile(filePath)` — unlink under the per-file `serializeWrite` lock; ENOENT silently swallowed.
+
+  Also export `ReapOptions` from `src/runtime/orphan-reaper.ts` (consolidates `ReapDeps` + reap-specific opts via interface extension), and consolidate `reapOneFile` to a single opts-bag parameter. `cleanupAfterReap` now routes its truncate-on-current and unlink-on-foreign paths through the new helpers so any future change that runs reap concurrent with task spawns is automatically race-safe.
+
+  No user-visible behavior change in default usage; the bump reflects the new exported surface.
+
+- 42c5239: Add `timedOut: boolean` to `ReapResult` so consumers can distinguish a successful no-op reap (nothing to do) from a timeout-aborted reap (gave up; orphans may remain). The flag is `false` on every success path and `true` only when the overall `reapOrphans` timeout fires.
+
+  When `timedOut` is `true`, the count fields are zero placeholders, not partial-progress accounting — in-flight workers may have already invoked `killProcessTree` or scanned files before the abort signal landed, but those side effects are not reflected in the returned counts. Treat a timed-out result as "no reliable count signal" and warn or retry.
+
+  Note for TypeScript consumers: `ReapResult` is exported from the package's runtime types and gains a required field. Any caller constructing a `ReapResult` literal will need to add `timedOut` explicitly. Internal callers in this repo are already updated.
+
+- 3491e63: Tighten the `setStatus` lifecycle helper to forbid terminal → non-terminal transitions. Once a task reaches `complete`, `failed`, or `cancelled`, every subsequent `setStatus` call is a no-op. Previously the helper short-circuited only when both old and new status were terminal, leaving an unintended resurrection path that no caller exercises but the contract permitted. This narrows the public API contract; no caller behavior changes.
+
 ## 0.7.0
 
 ### Minor Changes
