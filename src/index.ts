@@ -63,8 +63,8 @@ async function initializePlugin({ client, directory }: PluginInput) {
 const CopilotDelegate: Plugin = async (input) =>
   plugInOnce({
     doInit: () => initializePlugin(input),
-    onDuplicate: () => {
-      const message = `[copilot-delegate] duplicate factory invocation in same process (pid=${process.pid}); reusing existing hooks. Multiple opencode.json sources may list this plugin.`
+    onDuplicate: (pid) => {
+      const message = `[copilot-delegate] duplicate factory invocation in same process (pid=${pid}); reusing existing hooks. Multiple opencode.json sources may list this plugin.`
       console.warn(message)
       // Fire-and-forget so the log call never blocks plugin init.
       input.client.app

@@ -50,6 +50,25 @@ describe('plugInOnce', () => {
     expect(calls).toBe(2)
   })
 
+  it('reruns init on a different pid without manual reset', async () => {
+    // Exercises the singleton's PID-mismatch branch directly: populate
+    // state with pid=1, then call again with pid=2 WITHOUT calling
+    // `_resetPluginSingleton()`. Init must run fresh because the cached
+    // pid does not match. This is the production code path for any
+    // (extremely unlikely) cross-process state leak — the test confirms
+    // the guard fires without test-only plumbing.
+    let calls = 0
+    const doInit = async () => {
+      calls += 1
+      return { call: calls }
+    }
+    const r1 = await plugInOnce({ doInit, pid: 1 })
+    const r2 = await plugInOnce({ doInit, pid: 2 })
+    expect(r1.call).toBe(1)
+    expect(r2.call).toBe(2)
+    expect(calls).toBe(2)
+  })
+
   it('fires onDuplicate exactly once on first duplicate invocation', async () => {
     let duplicateCalls = 0
     const doInit = async () => ({})
@@ -75,10 +94,50 @@ describe('plugInOnce', () => {
     expect(duplicateCalls).toBe(0)
   })
 
+  it('passes the resolved pid to onDuplicate (test override flows through)', async () => {
+    // The `pid` parameter is meant to make the singleton testable in a
+    // single-process Bun run by simulating different OS PIDs. The duplicate
+    // warning emitted by callers includes the PID for diagnostics, so the
+    // value passed to `onDuplicate` must match the one the guard used —
+    // not the live `process.pid` — so test overrides surface faithfully.
+    let receivedPid: number | undefined
+    const onDuplicate = (pid: number) => {
+      receivedPid = pid
+    }
+    await plugInOnce({ doInit: async () => ({}), onDuplicate, pid: 9001 })
+    await plugInOnce({ doInit: async () => ({}), onDuplicate, pid: 9001 })
+    expect(receivedPid).toBe(9001)
+  })
+
+  it('caches a rejected doInit promise on subsequent calls', async () => {
+    // Documents the known limitation in the JSDoc as test-form: when
+    // `doInit()` rejects, the rejected promise is cached and every
+    // subsequent invocation in the same PID returns the same rejection
+    // without retrying init. Recovery requires a process restart.
+    const error = new Error('init failed')
+    let calls = 0
+    const doInit = async () => {
+      calls += 1
+      throw error
+    }
+    await expect(plugInOnce({ doInit, pid: 1 })).rejects.toBe(error)
+    await expect(plugInOnce({ doInit, pid: 1 })).rejects.toBe(error)
+    await expect(plugInOnce({ doInit, pid: 1 })).rejects.toBe(error)
+    expect(calls).toBe(1)
+  })
+
   it('converges concurrent invocations on the same hooks promise', async () => {
     let started = 0
     const doInit = async () => {
       started += 1
+      // The 20ms delay is intentionally larger than the time it takes for
+      // `Promise.all([...])` to issue all three `plugInOnce` calls. The
+      // second and third calls observe the in-flight promise already
+      // cached on `globalThis` and skip running `doInit`. Bun's microtask
+      // scheduler resolves the synchronous portion of all three calls
+      // before the 20ms timer fires; if a future Bun release introduces
+      // microtask preemption between awaits, this test would need to
+      // pivot to an explicit deferred-resolve fixture.
       await new Promise((r) => setTimeout(r, 20))
       return { tool: 'concurrent' }
     }

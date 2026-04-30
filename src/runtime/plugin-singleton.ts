@@ -21,6 +21,15 @@
  * a second invocation that arrives while the first is still awaiting
  * `mkdir` / `reapOrphans` converges on the same init result instead of
  * starting a parallel init.
+ *
+ * **Known limitation — rejected init is cached.** If `doInit()` rejects,
+ * the rejected promise is stored on `globalThis` and every subsequent
+ * invocation in the same PID returns the same rejection without
+ * retrying init. This is intentional: re-running heavy init on every
+ * call would defeat the singleton's purpose. Recovery requires a
+ * process restart. OpenCode currently surfaces a failed plugin factory
+ * as a startup error rather than retrying within the process, so this
+ * matches the upstream contract.
  */
 
 const SINGLETON_KEY: unique symbol = Symbol.for(
@@ -34,16 +43,32 @@ interface SingletonState<T> {
   warned: boolean
 }
 
+/**
+ * Type-safe view onto `globalThis` for our symbol-keyed singleton slot.
+ *
+ * TypeScript's `declare global { var ... }` augmentation does not accept
+ * computed property keys, so a unique-symbol-keyed slot on `globalThis`
+ * is reachable only via an intersection cast. The cast is contained at
+ * a single point (`globalThis as unknown as GlobalWithSingleton<T>`)
+ * and the property type drives subsequent reads and writes — callers do
+ * not re-assert the value's shape with additional casts.
+ */
+type GlobalWithSingleton<T> = typeof globalThis & {
+  [SINGLETON_KEY]?: SingletonState<T>
+}
+
 export interface PlugInOnceOptions<T> {
   /** Heavy init work that should run at most once per process. */
   doInit: () => Promise<T>
   /**
    * Called exactly once on the first duplicate invocation in the same
-   * process. Subsequent duplicates are silent. Implementations must not
-   * throw; fire-and-forget side effects (logging, metrics) are expected.
-   * Synchronous exceptions are swallowed defensively.
+   * process. Subsequent duplicates are silent. Receives the same `pid`
+   * value the guard used for its identity check (so test overrides flow
+   * through faithfully). Implementations must not throw; fire-and-forget
+   * side effects (logging, metrics) are expected. Synchronous exceptions
+   * are swallowed defensively.
    */
-  onDuplicate?: () => void
+  onDuplicate?: (pid: number) => void
   /** Test override; defaults to `process.pid`. */
   pid?: number
 }
@@ -58,14 +83,14 @@ export async function plugInOnce<T>({
   pid,
 }: PlugInOnceOptions<T>): Promise<T> {
   const currentPid = pid ?? process.pid
-  const g = globalThis as { [K: symbol]: unknown }
-  const existing = g[SINGLETON_KEY] as SingletonState<T> | undefined
+  const g = globalThis as unknown as GlobalWithSingleton<T>
+  const existing = g[SINGLETON_KEY]
 
   if (existing && existing.pid === currentPid) {
     if (!existing.warned) {
       existing.warned = true
       try {
-        onDuplicate?.()
+        onDuplicate?.(currentPid)
       } catch {
         // onDuplicate must not block plugin init.
       }
@@ -74,13 +99,12 @@ export async function plugInOnce<T>({
   }
 
   const hooksPromise = doInit()
-  const state: SingletonState<T> = {
+  g[SINGLETON_KEY] = {
     pid: currentPid,
     loadedAt: Date.now(),
     hooksPromise,
     warned: false,
   }
-  g[SINGLETON_KEY] = state
   return hooksPromise
 }
 
@@ -89,6 +113,6 @@ export async function plugInOnce<T>({
  * init. Must not be called in production code paths.
  */
 export function _resetPluginSingleton(): void {
-  const g = globalThis as { [K: symbol]: unknown }
+  const g = globalThis as unknown as GlobalWithSingleton<unknown>
   delete g[SINGLETON_KEY]
 }

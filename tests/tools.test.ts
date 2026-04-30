@@ -401,6 +401,9 @@ describe('plugin tools', () => {
       client,
       description: 'delegate test',
       directory: invalidCwd,
+      // pidFilePath is currently optional; pass an explicit fixture so a
+      // future required-parameter refactor does not break this test silently.
+      pidFilePath: join(tmpdir(), 'spawn-error-fixture.pids'),
     })
 
     // When delegation is attempted

@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
 import {
   chmodSync,
   mkdirSync,
@@ -17,15 +17,17 @@ import { cleanupAll } from '../src/runtime/task-registry'
 const tempPaths: string[] = []
 const originalXdgStateHome = process.env.XDG_STATE_HOME
 
+beforeEach(() => {
+  // Each lifecycle test asserts side effects of a fresh `await plugin(input)`
+  // (orphans-dir creation, foreign-pidfile reaping). Reset BEFORE each test so
+  // singleton state from a previous test file (e.g. `tests/tools.test.ts`)
+  // cannot short-circuit init and serve stale cached hooks tied to a different
+  // XDG_STATE_HOME.
+  _resetPluginSingleton()
+})
+
 afterEach(async () => {
   await cleanupAll()
-
-  // Each lifecycle test asserts side effects of a fresh `await plugin(input)`
-  // (orphans-dir creation, foreign-pidfile reaping). The singleton would
-  // short-circuit subsequent invocations and return cached hooks from a
-  // previous test's temp XDG_STATE_HOME, masking the assertion. Reset between
-  // tests so each `await plugin(input)` runs init for real.
-  _resetPluginSingleton()
 
   process.env.XDG_STATE_HOME = originalXdgStateHome
 
