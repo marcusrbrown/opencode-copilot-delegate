@@ -345,7 +345,7 @@ describe('task registry PID-file hooks', () => {
       const warningObserved = await waitUntil(() =>
         warnings.some((warning) =>
           warning.includes(
-            `[task-registry] ps lookup returned null for pid ${ghostPid}`,
+            `[copilot-delegate] ps lookup returned null for pid ${ghostPid}`,
           ),
         ),
       )
@@ -357,7 +357,7 @@ describe('task registry PID-file hooks', () => {
       expect(warningObserved).toBe(true)
       const matched = warnings.find((w) =>
         w.includes(
-          `[task-registry] ps lookup returned null for pid ${ghostPid}`,
+          `[copilot-delegate] ps lookup returned null for pid ${ghostPid}`,
         ),
       )
       expect(matched).toBeTruthy()

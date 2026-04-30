@@ -7,10 +7,11 @@ import {
   resetInFlightCounters,
 } from '../src/runtime/notify'
 
-/** Create a mock client that records prompt and toast calls. */
+/** Create a mock client that records prompt, toast, and app.log calls. */
 function mockClient(): NotifyClient & {
   promptCalls: Array<{ sessionId: string; noReply: boolean; text: string }>
   toastCalls: Array<{ message: string; variant: string }>
+  logCalls: Array<unknown>
 } {
   const promptCalls: Array<{
     sessionId: string
@@ -18,10 +19,12 @@ function mockClient(): NotifyClient & {
     text: string
   }> = []
   const toastCalls: Array<{ message: string; variant: string }> = []
+  const logCalls: Array<unknown> = []
 
   return {
     promptCalls,
     toastCalls,
+    logCalls,
     session: {
       prompt: async (opts: {
         path: { id: string }
@@ -46,7 +49,10 @@ function mockClient(): NotifyClient & {
       },
     },
     app: {
-      log: () => {},
+      log: (arg: unknown) => {
+        logCalls.push(arg)
+        return Promise.resolve()
+      },
     },
   }
 }
@@ -313,6 +319,30 @@ describe('notification injection', () => {
       await expect(
         notifyCompletion(client, makeTaskInfo()),
       ).resolves.toBeUndefined()
+    })
+
+    it('should call app.log with structured body shape when prompt fails', async () => {
+      // Given a client whose prompt throws
+      const client = mockClient()
+      client.session.prompt = async () => {
+        throw new Error('session expired')
+      }
+      incrementInFlight('session-A')
+
+      // When notified
+      await notifyCompletion(client, makeTaskInfo({ taskId: 'cpl_log-test' }))
+
+      // Then app.log is called with a structured body object, not positional args
+      expect(client.logCalls).toHaveLength(1)
+      const logArg = client.logCalls[0]
+      expect(typeof logArg).toBe('object')
+      expect(logArg).not.toBeNull()
+      const arg = logArg as {
+        body: { service: string; level: string; message: string }
+      }
+      expect(arg.body.service).toBe('copilot-delegate')
+      expect(arg.body.level).toBe('warn')
+      expect(arg.body.message).toContain('cpl_log-test')
     })
   })
 })

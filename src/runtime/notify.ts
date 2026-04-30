@@ -32,7 +32,9 @@ export type NotifyClient = {
     }) => unknown
   }
   app: {
-    log: (...args: unknown[]) => void
+    log: (opts: {
+      body: { service: string; level: string; message: string; extra?: unknown }
+    }) => Promise<unknown>
   }
 }
 
@@ -140,10 +142,23 @@ export async function notifyCompletion(
       },
     })
   } catch (error) {
-    client.app.log(
-      'notify',
-      `Failed to inject notification for ${task.taskId}: ${error}`,
-    )
+    // Wrap in try/catch as well as .catch() because client.app.log may throw
+    // synchronously (e.g., shape validation, dead session binding) before
+    // returning a Promise; .catch() alone would let those escape and violate
+    // notifyCompletion's "never throws" contract.
+    try {
+      client.app
+        .log({
+          body: {
+            service: 'copilot-delegate',
+            level: 'warn',
+            message: `Failed to inject notification for ${task.taskId}: ${error}`,
+          },
+        })
+        .catch(() => {})
+    } catch {
+      // Swallow synchronous throws from client.app.log
+    }
   }
 
   try {

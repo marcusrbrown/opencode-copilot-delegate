@@ -87,7 +87,7 @@ function runPs(
     const timeout = setTimeout(() => {
       timedOut = true
       console.warn(
-        `[orphan-reaper] ps invocation exceeded ${timeoutMs}ms timeout: ps ${args.join(' ')}`,
+        `[copilot-delegate] ps invocation exceeded ${timeoutMs}ms timeout: ps ${args.join(' ')}`,
       )
       child.kill('SIGTERM')
     }, timeoutMs)
@@ -304,6 +304,11 @@ async function cleanupAfterReap(
   isCurrent: boolean,
   currentInstancePath: string,
 ): Promise<boolean> {
+  // Both truncatePidFile and unlinkPidFile route through the per-file
+  // writeChains serialize lock in pid-file.ts, so cleanup is sequenced
+  // behind any concurrent appendPidEntry/removePidEntry callers. This
+  // ensures no entry written after the reap decision can be silently
+  // wiped by a truncate or unlink that was already in flight.
   try {
     if (isCurrent) {
       // For the current instance we always truncate via the canonical
@@ -441,7 +446,7 @@ async function doReap(opts: ReapOptions): Promise<ReapResult> {
     // Strict integer parse: filename stem must be a positive integer; reject
     // negative, zero, decimal, and partial-parse oddities like '1234abc'.
     if (!/^[1-9]\d*$/.test(stem)) {
-      console.warn(`[orphan-reaper] Skipping non-numeric PID file: ${file}`)
+      console.warn(`[copilot-delegate] Skipping non-numeric PID file: ${file}`)
       continue
     }
     const filePid = Number(stem)
@@ -503,7 +508,7 @@ export async function reapOrphans(
   const timeoutPromise = new Promise<ReapResult>((resolve) => {
     timeoutId = setTimeout(() => {
       console.warn(
-        `[orphan-reaper] reapOrphans exceeded ${reapTimeoutMs}ms budget; returning empty result`,
+        `[copilot-delegate] reapOrphans exceeded ${reapTimeoutMs}ms budget; returning empty result`,
       )
       controller.abort()
       resolve({ ...zeros, timedOut: true })

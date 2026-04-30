@@ -234,6 +234,9 @@ describe('orphan-reaper', () => {
 
         expect(res).toEqual(result())
         expect(warnings.some((w) => w.includes('garbage'))).toBe(true)
+        expect(warnings.some((w) => w.startsWith('[copilot-delegate]'))).toBe(
+          true,
+        )
         expect(readFileSync(garbagePath, 'utf-8')).toBeDefined()
       } finally {
         console.warn = origWarn
@@ -608,7 +611,7 @@ describe('orphan-reaper', () => {
         expect(res).toEqual(result({ timedOut: true }))
         const matched = warnings.find(
           (w) =>
-            w.includes('orphan-reaper') &&
+            w.includes('copilot-delegate') &&
             w.includes('reapOrphans') &&
             w.includes('50'),
         )
@@ -692,7 +695,7 @@ describe('orphan-reaper', () => {
       try {
         await getPidIdentity(process.pid, 1)
         const matched = warnings.find(
-          (w) => w.includes('orphan-reaper') && w.includes('timeout'),
+          (w) => w.includes('copilot-delegate') && w.includes('timeout'),
         )
         expect(matched).toBeTruthy()
       } finally {

@@ -15,17 +15,20 @@ function isTerminal(s: TaskStatus): boolean {
   return TERMINAL_STATUSES.has(s)
 }
 
+/**
+ * Transition `task` to `newStatus`, enforcing the forward-only lifecycle.
+ *
+ * Idempotent on any terminal state (complete, failed, cancelled): once a task
+ * reaches a terminal status every subsequent call is a no-op. This prevents
+ * both terminal→terminal re-classification and terminal→non-terminal
+ * resurrection. When transitioning to a terminal state and `pidFilePath` is
+ * provided, the task's PID entry is removed from the orphan-reaper file.
+ */
 export function setStatus(
   task: { status: TaskStatus; pid: number },
   newStatus: TaskStatus,
   options?: SetStatusOptions,
 ): void {
-  // Idempotent on terminal state: once a task is terminal (complete,
-  // failed, or cancelled), every subsequent setStatus call is a no-op.
-  // The forward-only lifecycle forbids both terminal -> terminal
-  // transitions (which would lose the original terminal classification)
-  // and terminal -> non-terminal transitions (which would resurrect a
-  // finalized task).
   if (isTerminal(task.status)) {
     return
   }

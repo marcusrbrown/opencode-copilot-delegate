@@ -52,7 +52,7 @@ export function createTask(
           // subprocess is invisible to the orphan reaper. Surface a warning
           // so degraded coverage is observable.
           console.warn(
-            `[task-registry] ps lookup returned null for pid ${task.pid}; subprocess will not be tracked for orphan reaping`,
+            `[copilot-delegate] ps lookup returned null for pid ${task.pid}; subprocess will not be tracked for orphan reaping`,
           )
         }
       })
