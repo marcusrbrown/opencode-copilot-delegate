@@ -68,6 +68,40 @@ describe('setStatus', () => {
     expect(task.status).toBe('failed')
   })
 
+  it('preserves complete when setStatus is called with running', () => {
+    const task = makeTask('complete', 12345)
+    setStatus(task, 'running')
+    expect(task.status).toBe('complete')
+  })
+
+  it('preserves failed when setStatus is called with running', () => {
+    const task = makeTask('failed', 12345)
+    setStatus(task, 'running')
+    expect(task.status).toBe('failed')
+  })
+
+  it('preserves cancelled when setStatus is called with running and options', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'task-status-'))
+    tempPaths.push(dir)
+    const pidFilePath = join(dir, 'orphans.pids')
+
+    const task = makeTask('cancelled', 12345)
+    await appendPidEntry(
+      pidFilePath,
+      task.pid,
+      'bash',
+      'Mon Apr 27 10:00:00 2026',
+    )
+
+    setStatus(task, 'running', { pidFilePath })
+    expect(task.status).toBe('cancelled')
+
+    // PID file entry must remain — no removePidEntry should have fired.
+    await delay(100)
+    const content = readFileSync(pidFilePath, 'utf-8')
+    expect(content).toContain('12345')
+  })
+
   it('allows non-terminal transitions without removing PID entry', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'task-status-'))
     tempPaths.push(dir)
