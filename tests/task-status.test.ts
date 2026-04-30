@@ -74,6 +74,12 @@ describe('setStatus', () => {
     expect(task.status).toBe('complete')
   })
 
+  it('preserves failed when setStatus is called with running', () => {
+    const task = makeTask('failed', 12345)
+    setStatus(task, 'running')
+    expect(task.status).toBe('failed')
+  })
+
   it('preserves cancelled when setStatus is called with running and options', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'task-status-'))
     tempPaths.push(dir)
