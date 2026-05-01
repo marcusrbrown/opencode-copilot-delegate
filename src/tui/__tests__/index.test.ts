@@ -269,4 +269,128 @@ describe('tui entrypoint', () => {
     expect(frame).toContain('No Copilot delegations are running.')
     expect(frame).not.toContain('Unit 6')
   })
+
+  it('opens the confirm card for the selected task when c is pressed in the modal list', async () => {
+    const plugin = await loadTuiPlugin()
+    const controls = createTestApi()
+    const cacheHome = makeCacheHome()
+    const sessionDiscriminator = 'tui-index-confirm-card'
+
+    process.env.XDG_CACHE_HOME = cacheHome
+    process.env.OPENCODE_SESSION_ID = sessionDiscriminator
+
+    writePortFile(cacheHome, sessionDiscriminator, {
+      port: 43124,
+      pid: process.pid,
+      token: 'token-index-confirm-card',
+    })
+
+    const stubFetch = Object.assign(
+      async (_input: string | URL | Request, init?: RequestInit) => {
+        if (typeof init?.body === 'string' && init.body.includes('taskId')) {
+          return new Response(JSON.stringify({ cancelled: true }), {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          })
+        }
+
+        return new Response(
+          JSON.stringify({
+            tasks: [
+              {
+                taskId: 'cpl_alpha',
+                status: 'running',
+                agent: 'default',
+                model: 'gpt-5',
+                elapsedMs: 0,
+                toolCallCount: 1,
+                startedAt: 0,
+              },
+              {
+                taskId: 'cpl_beta',
+                status: 'running',
+                agent: 'reviewer',
+                model: 'claude-sonnet-4.7',
+                elapsedMs: 0,
+                toolCallCount: 2,
+                startedAt: 0,
+              },
+            ],
+          }),
+          {
+            status: 200,
+            headers: { 'content-type': 'application/json' },
+          },
+        )
+      },
+      { preconnect: originalFetch.preconnect },
+    )
+
+    globalThis.fetch = stubFetch as unknown as typeof fetch
+
+    await plugin(controls.api, undefined, makePluginMeta())
+
+    const [command] = controls.commandFactories[0]()
+    command.onSelect?.()
+
+    expect(controls.dialogReplacements).toHaveLength(1)
+
+    const listRender = await testRender(
+      () => controls.dialogReplacements[0].render(),
+      {
+        width: 120,
+        height: 20,
+        useThread: false,
+      },
+    )
+
+    await listRender.renderOnce()
+
+    const listFrame = await waitForFrame({
+      renderOnce: listRender.renderOnce,
+      idle: () => listRender.renderer.idle(),
+      captureCharFrame: listRender.captureCharFrame,
+      includes: '2 running · 0 recent',
+    })
+    expect(listFrame).toContain('cpl_beta')
+
+    listRender.mockInput.pressKey('j')
+    await waitForFrame({
+      renderOnce: listRender.renderOnce,
+      idle: () => listRender.renderer.idle(),
+      captureCharFrame: listRender.captureCharFrame,
+      includes: 'cpl_beta',
+    })
+    listRender.mockInput.pressKey('c')
+    await waitForFrame({
+      renderOnce: listRender.renderOnce,
+      idle: () => listRender.renderer.idle(),
+      captureCharFrame: listRender.captureCharFrame,
+      includes: 'cpl_beta',
+    })
+
+    expect(controls.dialogReplacements).toHaveLength(2)
+
+    const confirmRender = await testRender(
+      () => controls.dialogReplacements[1].render(),
+      {
+        width: 120,
+        height: 20,
+        useThread: false,
+      },
+    )
+
+    await confirmRender.renderOnce()
+
+    const confirmFrame = await waitForFrame({
+      renderOnce: confirmRender.renderOnce,
+      idle: () => confirmRender.renderer.idle(),
+      captureCharFrame: confirmRender.captureCharFrame,
+      includes: 'Cancel Copilot delegation cpl_beta?',
+    })
+
+    expect(confirmFrame).toContain('Cancel Copilot delegation cpl_beta?')
+    expect(confirmFrame).toContain('Cancel Task')
+    expect(confirmFrame).toContain('Keep Running')
+  })
 })

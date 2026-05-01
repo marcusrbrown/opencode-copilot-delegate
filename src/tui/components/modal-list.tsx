@@ -31,6 +31,7 @@ type ModalListProps = {
   rpc: Pick<RpcClient, 'tasksList'>
   onClose: () => void
   onCancelTask?: (task: ModalListTask) => void
+  initialTaskId?: string
   clock?: ModalListClock
 }
 
@@ -244,6 +245,23 @@ export function ModalList(props: ModalListProps) {
   const loadTasks = async () => {
     try {
       const response = await props.rpc.tasksList()
+      const initialIndex = props.initialTaskId
+        ? response.tasks.findIndex(
+            (task) => task.taskId === props.initialTaskId,
+          )
+        : -1
+
+      if (initialIndex >= 0) {
+        focusedIndex.value = initialIndex
+      } else if (response.tasks.length === 0) {
+        focusedIndex.value = 0
+      } else {
+        focusedIndex.value = Math.min(
+          focusedIndex.value,
+          response.tasks.length - 1,
+        )
+      }
+
       state.value = { kind: 'ready', tasks: response.tasks }
     } catch (error) {
       state.value = { kind: 'error', message: errorMessage(error) }
