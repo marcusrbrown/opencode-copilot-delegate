@@ -19,6 +19,8 @@ import { isErrnoException } from '../lib/errno'
 // preventing unbounded map growth over long-lived sessions.
 const writeChains = new Map<string, Promise<void>>()
 
+const oNoFollow = fsConstants.O_NOFOLLOW ?? 0
+
 function symlinkPathError(path: string): Error {
   return new Error(`[copilot-delegate] refusing symlink path: ${path}`)
 }
@@ -47,7 +49,7 @@ export async function assertOrphansDirNotSymlink(
 }
 
 export async function readPidFileNoFollow(filePath: string): Promise<string> {
-  const fd = await open(filePath, fsConstants.O_NOFOLLOW | fsConstants.O_RDONLY)
+  const fd = await open(filePath, oNoFollow | fsConstants.O_RDONLY)
   try {
     return await fd.readFile({ encoding: 'utf-8' })
   } finally {
@@ -108,7 +110,7 @@ export async function appendPidEntry(
       tempPath,
       fsConstants.O_EXCL |
         fsConstants.O_CREAT |
-        fsConstants.O_NOFOLLOW |
+        oNoFollow |
         fsConstants.O_WRONLY,
       0o600,
     )
@@ -151,7 +153,7 @@ export async function removePidEntry(
       tempPath,
       fsConstants.O_EXCL |
         fsConstants.O_CREAT |
-        fsConstants.O_NOFOLLOW |
+        oNoFollow |
         fsConstants.O_WRONLY,
       0o600,
     )
@@ -181,10 +183,7 @@ export async function truncatePidFile(filePath: string): Promise<void> {
   await serializeWrite(filePath, async () => {
     try {
       await assertOrphansDirNotSymlink(filePath)
-      const fd = await open(
-        filePath,
-        fsConstants.O_NOFOLLOW | fsConstants.O_WRONLY,
-      )
+      const fd = await open(filePath, oNoFollow | fsConstants.O_WRONLY)
       try {
         await fd.truncate(0)
       } finally {

@@ -1,10 +1,12 @@
 import { describe, expect, it } from 'bun:test'
 import {
   existsSync,
+  constants as fsConstants,
   lstatSync,
   mkdirSync,
   mkdtempSync,
   readFileSync,
+  rmSync,
   statSync,
   symlinkSync,
   writeFileSync,
@@ -14,6 +16,8 @@ import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   appendPidEntry,
+  assertPluginStateDirNotSymlink,
+  readPidFileNoFollow,
   removePidEntry,
   resolveInstancePidFilePath,
   truncatePidFile,
@@ -260,6 +264,72 @@ describe('pid-file', () => {
       const filePath = join(dir, 'missing.pids')
 
       await expect(unlinkPidFile(filePath)).resolves.toBeUndefined()
+    })
+
+    it('removes a symlink without following it', async () => {
+      const dir = makeTempDir()
+      const targetPath = join(dir, 'target.txt')
+      const filePath = join(dir, 'test.pids')
+
+      writeFileSync(targetPath, '12345\tbash\tMon Apr 27 10:00:00 2026\n')
+      symlinkSync(targetPath, filePath)
+
+      await unlinkPidFile(filePath)
+
+      expect(existsSync(filePath)).toBe(false)
+      expect(readFileSync(targetPath, 'utf-8')).toBe(
+        '12345\tbash\tMon Apr 27 10:00:00 2026\n',
+      )
+    })
+  })
+
+  describe('no-follow read', () => {
+    it('reads a regular pid file', async () => {
+      const dir = makeTempDir()
+      const filePath = join(dir, 'test.pids')
+      writeFileSync(filePath, '12345\tbash\tMon Apr 27 10:00:00 2026\n')
+
+      await expect(readPidFileNoFollow(filePath)).resolves.toBe(
+        '12345\tbash\tMon Apr 27 10:00:00 2026\n',
+      )
+    })
+
+    it('reads a regular pid file when O_NOFOLLOW is unavailable', async () => {
+      const dir = makeTempDir()
+      const filePath = join(dir, 'test.pids')
+      const originalNoFollow = fsConstants.O_NOFOLLOW
+      writeFileSync(filePath, '12345\tbash\tMon Apr 27 10:00:00 2026\n')
+
+      try {
+        Reflect.set(fsConstants, 'O_NOFOLLOW', undefined)
+        const modulePath = `../src/runtime/pid-file.ts?no-follow-fallback=${Date.now()}`
+        const pidFile = (await import(
+          modulePath
+        )) as typeof import('../src/runtime/pid-file')
+
+        await expect(pidFile.readPidFileNoFollow(filePath)).resolves.toBe(
+          '12345\tbash\tMon Apr 27 10:00:00 2026\n',
+        )
+      } finally {
+        Reflect.set(fsConstants, 'O_NOFOLLOW', originalNoFollow)
+      }
+    })
+  })
+
+  describe('plugin state directory guard', () => {
+    it('swallows ENOENT before the plugin state directory exists', async () => {
+      const dir = makeTempDir()
+      const filePath = join(dir, 'state', 'orphans', 'test.pids')
+
+      await expect(
+        assertPluginStateDirNotSymlink(filePath),
+      ).resolves.toBeUndefined()
+
+      rmSync(join(dir, 'state'), { force: true, recursive: true })
+
+      await expect(
+        assertPluginStateDirNotSymlink(filePath),
+      ).resolves.toBeUndefined()
     })
   })
 
