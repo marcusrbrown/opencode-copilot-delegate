@@ -317,7 +317,7 @@ describe('notification injection', () => {
       const clientWithoutTui = {
         ...client,
         tui: undefined,
-      } as unknown as NotifyClient
+      } satisfies NotifyClient
 
       await expect(
         notifySpawn(clientWithoutTui, 'cpl_abc'),
@@ -328,6 +328,8 @@ describe('notification injection', () => {
     it('should swallow showToast failures', async () => {
       const client = mockClient()
       const notifySpawn = getNotifySpawn()
+
+      if (!client.tui) throw new Error('expected mock client to include tui')
 
       client.tui.showToast = () => {
         throw new Error('toast failed')

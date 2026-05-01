@@ -23,7 +23,7 @@ export type NotifyClient = {
       }
     }) => Promise<unknown>
   }
-  tui: {
+  tui?: {
     showToast: (opts: {
       body: {
         message: string
@@ -81,14 +81,12 @@ export async function notifySpawn(
   client: NotifyClient,
   taskId: string,
 ): Promise<void> {
-  const tui = (client as { tui?: NotifyClient['tui'] }).tui
-
-  if (!tui) {
+  if (!client.tui) {
     return
   }
 
   try {
-    await tui.showToast({
+    await client.tui.showToast({
       body: {
         message: `Copilot delegation ${taskId} started`,
         variant: 'info',
@@ -190,7 +188,7 @@ export async function notifyCompletion(
         ? `Copilot delegation ${task.taskId} completed`
         : `Copilot delegation ${task.taskId} ${task.status}`
 
-    client.tui.showToast({
+    client.tui?.showToast({
       body: { message: toastMessage, variant },
     })
   } catch {

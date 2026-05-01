@@ -17,6 +17,7 @@ import {
   PortFileSchema,
   TasksCancelRequestSchema,
   TasksCancelResponseSchema,
+  type TasksListResponse,
   TasksListResponseSchema,
 } from './rpc-contract'
 
@@ -126,7 +127,7 @@ function countToolCalls(events: ParsedEvent[] | undefined): number {
 function mapTask(
   task: RpcTaskRecord,
   now: () => number,
-): (typeof TasksListResponseSchema._output.tasks)[number] {
+): TasksListResponse['tasks'][number] {
   const elapsedEnd = typeof task.endedAt === 'number' ? task.endedAt : now()
 
   return {
