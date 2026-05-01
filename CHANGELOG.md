@@ -1,5 +1,21 @@
 # opencode-copilot-delegate
 
+## 0.9.0
+
+### Minor Changes
+
+- 80b549e: Improve runtime observability and fix a silent failure in completion notifications.
+
+  - `killProcessTree` now classifies fkill failures by probing the process group with `process.kill(-pid, 0)`. ESRCH is reported as an already-gone group and the failure is suppressed; alive or unknown states preserve the original throw with a more accurate warning. The probe targets `-pid` (the process group) rather than the leader so children leaking after a leader exit are no longer misclassified as benign.
+  - `notifyCompletion`'s fallback `client.app.log` call now uses the structured SDK shape (`{ body: { service, level, message } }`) and is wrapped in `try/catch` so synchronous SDK throws can no longer escape the documented "never throws" contract.
+  - All runtime warnings now share the `[copilot-delegate]` prefix across `kill-tree`, `orphan-reaper`, `pid-file`, `task-registry`, and `task-status`, making operator log filtering predictable.
+  - Internal contract documentation: `setStatus` and `writeChains` carry JSDoc covering terminal-state transitions and the per-file serialize chain.
+
+- 4f2e8b5: Harden PID file and orphan-reaper state path handling against same-user symlink attacks.
+
+  - Use no-follow PID file opens for read and truncate paths so symlinked `.pids` files are rejected instead of read or truncated.
+  - Reject symlinked PID file parent directories before orphan reaping, cleanup, and plugin init state-directory creation so `orphans/` scans and cleanup do not follow attacker-controlled links.
+
 ## 0.8.0
 
 ### Minor Changes
