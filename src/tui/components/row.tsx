@@ -1,15 +1,6 @@
-/** @jsxImportSource @opentui/solid */
-
-import { TextAttributes } from '@opentui/core'
 import type { TasksListResponse } from '../../runtime/rpc-contract'
 
 export type ModalListTask = TasksListResponse['tasks'][number]
-
-type RowProps = {
-  task: ModalListTask
-  focused: boolean
-  nowMs: number
-}
 
 export function displayValue(value: string): string {
   const trimmed = value.trim()
@@ -48,17 +39,3 @@ export function formatRowText(task: ModalListTask, nowMs: number): string {
 
   return `${formatStatus(task.status)}  ${task.taskId}  ${displayValue(task.agent)}  ${displayValue(task.model)}  ${formatElapsed(elapsed)}  ${formatToolCalls(task.toolCallCount)}`
 }
-
-export function Row(props: RowProps) {
-  const attributes = props.focused
-    ? TextAttributes.INVERSE
-    : TextAttributes.NONE
-
-  return (
-    <text attributes={attributes}>
-      {formatRowText(props.task, props.nowMs)}
-    </text>
-  )
-}
-
-export default Row

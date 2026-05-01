@@ -10,10 +10,15 @@ import {
 import { useRenderer } from '@opentui/solid'
 import { onCleanup } from 'solid-js'
 import type { RpcClient } from '../rpc-client'
-import { EMPTY_STATE_HINT, EMPTY_STATE_TITLE } from './empty-state'
-import { ERROR_STATE_HINT, ERROR_STATE_TITLE } from './error-state'
-import { LOADING_HEADER } from './loading-state'
 import { formatRowText, type ModalListTask } from './row'
+
+const LOADING_HEADER = 'Loading delegations…'
+const EMPTY_STATE_TITLE = 'No Copilot delegations are running.'
+const EMPTY_STATE_HINT =
+  'Start one with the copilot_delegate tool, then reopen /copilot-status.'
+const ERROR_STATE_TITLE = 'The Copilot delegate TUI plugin is not responding.'
+const ERROR_STATE_HINT =
+  'Try reloading the plugin (or run /copilot-status again).'
 
 export type ModalListClock = {
   now(): number

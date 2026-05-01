@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'bun:test'
+import { describe, expect, it } from 'bun:test'
 import type { TuiDialogProps } from '@opencode-ai/plugin/tui'
 import { type JSX, testRender } from '@opentui/solid'
 
@@ -238,11 +238,6 @@ async function waitForFrame(options: {
 
   return options.captureCharFrame()
 }
-
-afterEach(() => {
-  // Test files import runtime plugin support dynamically.
-  // No global cleanup is needed beyond renderer teardown.
-})
 
 describe('modal list', () => {
   it('renders a loading state before tasksList resolves', async () => {
