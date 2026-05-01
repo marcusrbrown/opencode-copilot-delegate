@@ -12,17 +12,24 @@
 
 ```
 src/
-├── index.ts              # Plugin entrypoint — wires tools to runtime
+├── index.ts              # Server plugin entrypoint — wires tools + RPC runtime
 ├── tools/
 │   ├── delegate.ts       # copilot_delegate tool
 │   ├── output.ts         # copilot_output tool
 │   └── cancel.ts         # copilot_cancel tool
 ├── runtime/
+│   ├── rpc-contract.ts   # Shared server/TUI RPC schemas + inferred types
+│   ├── rpc-server.ts     # localhost RPC server for the TUI half
+│   ├── cancel-helper.ts  # Shared cancellation path for tool + RPC
 │   ├── subprocess.ts     # Spawns copilot CLI, streams JSONL stdout
 │   ├── task-registry.ts  # In-memory task state (create/get/update/delete/cleanup)
 │   ├── jsonl-parser.ts   # Single-line JSONL parser for Copilot CLI output
 │   ├── envelope.ts       # Builds structured output envelopes from parsed events
 │   └── notify.ts         # Injects completion notifications into OpenCode sessions
+├── tui/
+│   ├── index.tsx         # TUI plugin entrypoint — registers /copilot-status
+│   ├── rpc-client.ts     # Reads per-session port file + calls RPC server
+│   └── components/       # OpenTUI/Solid modal list + confirm card
 ├── discovery/
 │   ├── agents.ts         # Discovers .agent.md files from Copilot agent directories
 │   └── description.ts    # Builds copilot_delegate tool description from discovered agents
@@ -49,6 +56,9 @@ docs/
 - **Notification safety**: in-flight counter is decremented synchronously (before any `await`) in close handlers; counter map entries are deleted at zero to prevent memory leaks over long-lived sessions.
 - **Agent discovery**: builtin agents (bundled with Copilot CLI) cannot be overridden by user or repo agents
 - **Structured errors**: tools return `{ error: string }` objects, never throw exceptions
+- **Two-entrypoint architecture**: package exports the existing server plugin at `.` and `./plugin`, plus the TUI source entrypoint at `./tui`. The server half owns subprocesses, task registry, notifications, and the localhost RPC server. The TUI half is opt-in and talks to the server through the per-session authenticated port file.
+- **TUI command registration**: `api.command.register` uses the `value` field for `/copilot-status` on the installed `@opencode-ai/plugin/tui` types.
+- **TUI JSX mode**: `tsconfig.json` keeps `jsx: "preserve"`; TUI `.tsx` files use `/** @jsxImportSource @opentui/solid */` pragmas.
 
 ## Coding Standards
 
