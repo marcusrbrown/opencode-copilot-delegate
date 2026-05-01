@@ -1,7 +1,11 @@
 import type { PluginInput } from '@opencode-ai/plugin'
 import { tool } from '@opencode-ai/plugin/tool'
 import type { NotifyClient } from '../runtime/notify'
-import { incrementInFlight, notifyCompletion } from '../runtime/notify'
+import {
+  incrementInFlight,
+  notifyCompletion,
+  notifySpawn,
+} from '../runtime/notify'
 import type { SpawnCopilotResult } from '../runtime/subprocess'
 import { spawnCopilot } from '../runtime/subprocess'
 import type { TaskState } from '../runtime/task-registry'
@@ -164,6 +168,11 @@ export function createDelegateTool(options: DelegateToolOptions) {
       }
 
       incrementInFlight(ctx.sessionID)
+      void notifySpawn(options.client as NotifyClient, task.taskId).catch(
+        () => {
+          // Spawn-toast failures are non-fatal for the tool call.
+        },
+      )
 
       void task.completionPromise
         .then(async () => {

@@ -1,4 +1,5 @@
 import { afterEach, describe, expect, it } from 'bun:test'
+import * as notifyModule from '../src/runtime/notify'
 import {
   incrementInFlight,
   type NotifyClient,
@@ -69,6 +70,17 @@ function makeTaskInfo(overrides: Partial<NotifyTaskInfo> = {}): NotifyTaskInfo {
     exitCode: 0,
     ...overrides,
   }
+}
+
+function getNotifySpawn(): (
+  client: NotifyClient,
+  taskId: string,
+) => Promise<void> {
+  const notifySpawn = Reflect.get(notifyModule, 'notifySpawn')
+
+  expect(typeof notifySpawn).toBe('function')
+
+  return notifySpawn as (client: NotifyClient, taskId: string) => Promise<void>
 }
 
 afterEach(() => {
@@ -281,6 +293,47 @@ describe('notification injection', () => {
 
       // Then toast is fired with error variant
       expect(client.toastCalls[0].variant).toBe('error')
+    })
+  })
+
+  describe('spawn toast', () => {
+    it('should fire an info toast when a delegation starts', async () => {
+      const client = mockClient()
+      const notifySpawn = getNotifySpawn()
+
+      await notifySpawn(client, 'cpl_abc')
+
+      expect(client.toastCalls).toEqual([
+        {
+          message: 'Copilot delegation cpl_abc started',
+          variant: 'info',
+        },
+      ])
+    })
+
+    it('should no-op when client.tui is missing', async () => {
+      const client = mockClient()
+      const notifySpawn = getNotifySpawn()
+      const clientWithoutTui = {
+        ...client,
+        tui: undefined,
+      } as unknown as NotifyClient
+
+      await expect(
+        notifySpawn(clientWithoutTui, 'cpl_abc'),
+      ).resolves.toBeUndefined()
+      expect(client.toastCalls).toHaveLength(0)
+    })
+
+    it('should swallow showToast failures', async () => {
+      const client = mockClient()
+      const notifySpawn = getNotifySpawn()
+
+      client.tui.showToast = () => {
+        throw new Error('toast failed')
+      }
+
+      await expect(notifySpawn(client, 'cpl_abc')).resolves.toBeUndefined()
     })
   })
 

@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
 import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { setTimeout as delay } from 'node:timers/promises'
 import type { PluginInput } from '@opencode-ai/plugin'
 import type { ToolContext } from '@opencode-ai/plugin/tool'
 import plugin from '../src/index'
@@ -29,6 +30,9 @@ type ToolResultObject = Record<string, unknown>
 
 const tempPaths: string[] = []
 const originalPath = process.env.PATH
+const originalHome = process.env.HOME
+const originalXdgCacheHome = process.env.XDG_CACHE_HOME
+const originalSessionId = process.env.OPENCODE_SESSION_ID
 
 beforeEach(() => {
   // Each test loads `plugin(input)` and asserts on the returned tool dispatch.
@@ -36,12 +40,26 @@ beforeEach(() => {
   // first test's MockClient/PATH, breaking per-test isolation. Reset between
   // tests so each `await plugin(input)` runs init for real.
   _resetPluginSingleton()
+
+  const homeDir = mkdtempSync(join(tmpdir(), 'copilot-tools-home-'))
+  const xdgCacheHome = mkdtempSync(join(tmpdir(), 'copilot-tools-cache-'))
+  tempPaths.push(homeDir)
+  tempPaths.push(xdgCacheHome)
+  process.env.HOME = homeDir
+  process.env.XDG_CACHE_HOME = xdgCacheHome
+  process.env.OPENCODE_SESSION_ID = 'tools-test-session'
 })
 
 afterEach(async () => {
+  process.emit('beforeExit', 0)
+  await delay(0)
+
   await cleanupAll()
 
   process.env.PATH = originalPath
+  process.env.HOME = originalHome
+  process.env.XDG_CACHE_HOME = originalXdgCacheHome
+  process.env.OPENCODE_SESSION_ID = originalSessionId
 
   for (const tempPath of tempPaths.splice(0)) {
     rmSync(tempPath, { force: true, recursive: true })
@@ -265,6 +283,36 @@ describe('plugin tools', () => {
     // Then it returns a generated task id
     const output = expectObject(raw)
     expect(output.task_id).toMatch(/^cpl_[0-9a-f-]+$/)
+  })
+
+  it('fires a spawn toast after task creation succeeds', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'copilot-tools-spawn-toast-'))
+    const binDir = makeFakeCopilotBin()
+    tempPaths.push(cwd, binDir)
+
+    process.env.PATH = `${binDir}:${process.env.PATH ?? ''}`
+
+    const input = makePluginInput(cwd)
+    const client = input.client as MockClient
+    const result = await plugin(input)
+    const tools = requireTools(result)
+
+    const raw = await tools.copilot_delegate.execute(
+      {
+        prompt: 'sleep then return',
+      },
+      makeToolContext({ directory: cwd, worktree: cwd }),
+    )
+
+    const output = expectObject(raw)
+
+    expect(output.task_id).toMatch(/^cpl_[0-9a-f-]+$/)
+    expect(client.toastCalls).toEqual([
+      {
+        message: `Copilot delegation ${String(output.task_id)} started`,
+        variant: 'info',
+      },
+    ])
   })
 
   it('returns structured unknown status for missing output tasks', async () => {

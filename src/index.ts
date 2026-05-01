@@ -5,6 +5,7 @@ import { discoverAgents } from './discovery/agents'
 import { buildDescription } from './discovery/description'
 import { killProcessTree } from './lib/kill-tree'
 import { normalizeToolArgSchemas } from './lib/normalize-tool-arg-schemas'
+import { cancelTaskById } from './runtime/cancel-helper'
 import { getPidIdentity, reapOrphans } from './runtime/orphan-reaper'
 import {
   assertOrphansDirNotSymlink,
@@ -12,9 +13,41 @@ import {
   resolveInstancePidFilePath,
 } from './runtime/pid-file'
 import { plugInOnce } from './runtime/plugin-singleton'
+import { startRpcServer } from './runtime/rpc-server'
+import { getAllTasks, getTask } from './runtime/task-registry'
 import { createCancelTool } from './tools/cancel'
 import { createDelegateTool } from './tools/delegate'
 import { createOutputTool } from './tools/output'
+
+function wireRpcServerCleanup(closeRpcServer: () => Promise<void>): void {
+  let closePromise: Promise<void> | undefined
+
+  const closeOnce = (): Promise<void> => {
+    if (!closePromise) {
+      closePromise = closeRpcServer()
+        .catch(() => {})
+        .finally(() => {
+          process.off('beforeExit', onBeforeExit)
+          process.off('SIGTERM', onSigterm)
+        })
+    }
+
+    return closePromise
+  }
+
+  const onBeforeExit = () => {
+    void closeOnce()
+  }
+
+  const onSigterm = () => {
+    void closeOnce().finally(() => {
+      process.kill(process.pid, 'SIGTERM')
+    })
+  }
+
+  process.on('beforeExit', onBeforeExit)
+  process.once('SIGTERM', onSigterm)
+}
 
 function getAgentsDirectories(directory: string): {
   userAgentsDir: string
@@ -49,6 +82,14 @@ async function initializePlugin({ client, directory }: PluginInput) {
   } catch {
     // mkdir or reap failure must not block plugin init.
   }
+
+  // OpenCode awaits the async plugin factory before registering tools, so the
+  // RPC server and port file are ready before any tool can run.
+  const rpcServer = await startRpcServer({
+    taskRegistry: { getAllTasks },
+    cancelTaskById: (taskId) => cancelTaskById({ getTask }, taskId),
+  })
+  wireRpcServerCleanup(rpcServer.close)
 
   return {
     tool: {

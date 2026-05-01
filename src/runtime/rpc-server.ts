@@ -10,6 +10,7 @@ import type { AddressInfo } from 'node:net'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import type { ZodError, ZodType } from 'zod'
+import type { CancelTaskResult } from './cancel-helper'
 import type { ParsedEvent } from './jsonl-parser'
 import {
   HealthResponseSchema,
@@ -31,11 +32,6 @@ type RpcTaskRecord = {
 
 type TaskRegistryLike = {
   getAllTasks(): RpcTaskRecord[]
-}
-
-type CancelTaskResult = {
-  cancelled: boolean
-  error?: string
 }
 
 export type StartRpcServerOptions = {
@@ -78,7 +74,10 @@ function readPackageVersion(): string {
 }
 
 function defaultPortFileBaseDir(): string {
-  return join(homedir(), '.cache', 'opencode', 'copilot-delegate')
+  const cacheHome =
+    process.env.XDG_CACHE_HOME ?? join(process.env.HOME ?? homedir(), '.cache')
+
+  return join(cacheHome, 'opencode', 'copilot-delegate')
 }
 
 function defaultSessionDiscriminator(): string {

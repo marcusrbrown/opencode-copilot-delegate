@@ -1,4 +1,5 @@
 import { tool } from '@opencode-ai/plugin/tool'
+import { cancelTaskById } from '../runtime/cancel-helper'
 import { getTask } from '../runtime/task-registry'
 
 const TOOL_DESCRIPTION = [
@@ -30,14 +31,20 @@ export function createCancelTool() {
         ),
     },
     async execute(args) {
-      const task = getTask(args.task_id)
-      if (!task || task.status !== 'running') {
-        return JSON.stringify({ cancelled: false, was_running: false })
-      }
+      const result = cancelTaskById(
+        {
+          getTask: (taskId) => {
+            const task = getTask(taskId)
+            return task?.status === 'running' ? task : undefined
+          },
+        },
+        args.task_id,
+      )
 
-      task.abortController.abort()
-
-      return JSON.stringify({ cancelled: true, was_running: true })
+      return JSON.stringify({
+        cancelled: result.cancelled,
+        was_running: result.cancelled,
+      })
     },
   })
 }

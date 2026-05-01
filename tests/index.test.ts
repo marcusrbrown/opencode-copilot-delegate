@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
 import {
   chmodSync,
+  existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -12,12 +13,17 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { setTimeout as delay } from 'node:timers/promises'
 import type { PluginInput } from '@opencode-ai/plugin'
 import plugin from '../src/index'
 import { _resetPluginSingleton } from '../src/runtime/plugin-singleton'
+import { PortFileSchema } from '../src/runtime/rpc-contract'
 import { cleanupAll } from '../src/runtime/task-registry'
 
 const tempPaths: string[] = []
+const originalHome = process.env.HOME
+const originalXdgCacheHome = process.env.XDG_CACHE_HOME
+const originalSessionId = process.env.OPENCODE_SESSION_ID
 const originalXdgStateHome = process.env.XDG_STATE_HOME
 
 beforeEach(() => {
@@ -27,11 +33,25 @@ beforeEach(() => {
   // cannot short-circuit init and serve stale cached hooks tied to a different
   // XDG_STATE_HOME.
   _resetPluginSingleton()
+
+  const homeDir = mkdtempSync(join(tmpdir(), 'plugin-init-home-'))
+  const xdgCacheHome = mkdtempSync(join(tmpdir(), 'plugin-init-cache-'))
+  tempPaths.push(homeDir)
+  tempPaths.push(xdgCacheHome)
+  process.env.HOME = homeDir
+  process.env.XDG_CACHE_HOME = xdgCacheHome
+  process.env.OPENCODE_SESSION_ID = 'index-test-session'
 })
 
 afterEach(async () => {
+  process.emit('beforeExit', 0)
+  await delay(0)
+
   await cleanupAll()
 
+  process.env.HOME = originalHome
+  process.env.XDG_CACHE_HOME = originalXdgCacheHome
+  process.env.OPENCODE_SESSION_ID = originalSessionId
   process.env.XDG_STATE_HOME = originalXdgStateHome
 
   for (const tempPath of tempPaths.splice(0)) {
@@ -106,6 +126,42 @@ describe('plugin init lifecycle', () => {
       'copilot_delegate',
       'copilot_output',
     ])
+  })
+
+  it('starts the RPC server during plugin init and cleans it up on beforeExit', async () => {
+    const xdgState = mkdtempSync(join(tmpdir(), 'plugin-init-rpc-xdg-'))
+    tempPaths.push(xdgState)
+    process.env.XDG_STATE_HOME = xdgState
+
+    const input = makePluginInput(process.cwd())
+    const result = await plugin(input)
+
+    const portFilePath = join(
+      process.env.XDG_CACHE_HOME ?? join(process.env.HOME ?? '', '.cache'),
+      'opencode',
+      'copilot-delegate',
+      process.env.OPENCODE_SESSION_ID ?? '',
+      'server-port.json',
+    )
+
+    expect(Object.keys(result.tool ?? {}).sort()).toEqual([
+      'copilot_cancel',
+      'copilot_delegate',
+      'copilot_output',
+    ])
+    expect(existsSync(portFilePath)).toBe(true)
+    expect(
+      PortFileSchema.parse(JSON.parse(readFileSync(portFilePath, 'utf8'))),
+    ).toEqual({
+      port: expect.any(Number),
+      pid: process.pid,
+      token: expect.any(String),
+    })
+
+    process.emit('beforeExit', 0)
+    await delay(20)
+
+    expect(existsSync(portFilePath)).toBe(false)
   })
 
   it('returns tool dispatch when mkdir throws', async () => {

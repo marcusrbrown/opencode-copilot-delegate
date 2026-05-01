@@ -77,6 +77,28 @@ export function resetInFlightCounters(): void {
   inFlightCounters.clear()
 }
 
+export async function notifySpawn(
+  client: NotifyClient,
+  taskId: string,
+): Promise<void> {
+  const tui = (client as { tui?: NotifyClient['tui'] }).tui
+
+  if (!tui) {
+    return
+  }
+
+  try {
+    await tui.showToast({
+      body: {
+        message: `Copilot delegation ${taskId} started`,
+        variant: 'info',
+      },
+    })
+  } catch {
+    // Toast failure is non-critical
+  }
+}
+
 /** Format duration in human-readable form. */
 function formatDuration(ms: number): string {
   if (ms < 1000) return `${ms}ms`
