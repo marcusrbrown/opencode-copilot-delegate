@@ -5,8 +5,27 @@
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./plugin": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./tui": {
+      "types": "./src/tui/index.tsx",
+      "import": "./src/tui/index.tsx"
+    }
+  },
+  "oc-plugin": [
+    "server",
+    "tui"
+  ],
   "files": [
     "dist",
+    "src/tui",
     "README.md",
     "LICENSE",
     "CHANGELOG.md"
@@ -58,7 +77,10 @@
     "publish-changesets": "bun run build && changeset publish"
   },
   "dependencies": {
+    "@opentui/core": "0.1.105",
+    "@opentui/solid": "0.1.105",
     "fkill": "10.0.3",
+    "solid-js": "1.9.11",
     "zod": "^4.3.0"
   },
   "overrides": {
