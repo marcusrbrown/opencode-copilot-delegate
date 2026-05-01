@@ -1,4 +1,7 @@
 import { afterEach, describe, expect, it } from 'bun:test'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import type {
   TuiCommand,
   TuiPluginApi,
@@ -26,9 +29,18 @@ type TestApiControls = {
 }
 
 const originalFetch = globalThis.fetch
+const originalXdgCacheHome = process.env.XDG_CACHE_HOME
+const originalSessionId = process.env.OPENCODE_SESSION_ID
+const tempPaths: string[] = []
 
 afterEach(() => {
   globalThis.fetch = originalFetch
+  process.env.XDG_CACHE_HOME = originalXdgCacheHome
+  process.env.OPENCODE_SESSION_ID = originalSessionId
+
+  for (const tempPath of tempPaths.splice(0)) {
+    rmSync(tempPath, { force: true, recursive: true })
+  }
 })
 
 async function loadTuiPlugin(): Promise<TuiPlugin> {
@@ -100,6 +112,53 @@ function createTestApi(): TestApiControls {
   }
 }
 
+function makeCacheHome(): string {
+  const path = mkdtempSync(join(tmpdir(), 'copilot-status-index-'))
+  tempPaths.push(path)
+  return path
+}
+
+function writePortFile(
+  cacheHome: string,
+  sessionDiscriminator: string,
+  contents: unknown,
+) {
+  const sessionDir = join(
+    cacheHome,
+    'opencode',
+    'copilot-delegate',
+    sessionDiscriminator,
+  )
+
+  mkdirSync(sessionDir, { recursive: true })
+  writeFileSync(join(sessionDir, 'server-port.json'), JSON.stringify(contents))
+}
+
+async function waitForFrame(options: {
+  renderOnce: () => Promise<void>
+  idle: () => Promise<void>
+  captureCharFrame: () => string
+  includes: string
+  attempts?: number
+}): Promise<string> {
+  const attempts = options.attempts ?? 10
+
+  for (let index = 0; index < attempts; index += 1) {
+    await Promise.resolve()
+    await new Promise((resolve) => setTimeout(resolve, 0))
+    await options.renderOnce()
+    await options.idle()
+    await options.renderOnce()
+
+    const frame = options.captureCharFrame()
+    if (frame.includes(options.includes)) {
+      return frame
+    }
+  }
+
+  return options.captureCharFrame()
+}
+
 function makePluginMeta(): TuiPluginMeta {
   return {
     id: 'copilot-status-test',
@@ -141,35 +200,73 @@ describe('tui entrypoint', () => {
     expect(controls.unregisterCalls).toBe(1)
   })
 
-  it('opens a placeholder dialog without making network calls yet', async () => {
+  it('opens the modal list and loads tasks when /copilot-status is selected', async () => {
     const plugin = await loadTuiPlugin()
     const controls = createTestApi()
-    let fetchCalls = 0
-    const unexpectedFetch = Object.assign(
-      async () => {
-        fetchCalls += 1
-        throw new Error('unexpected fetch during placeholder open')
+    const cacheHome = makeCacheHome()
+    const sessionDiscriminator = 'tui-index-open'
+    const fetchCalls: Array<{
+      url: string
+      authorization?: string
+      body?: string
+    }> = []
+
+    process.env.XDG_CACHE_HOME = cacheHome
+    process.env.OPENCODE_SESSION_ID = sessionDiscriminator
+
+    writePortFile(cacheHome, sessionDiscriminator, {
+      port: 43123,
+      pid: process.pid,
+      token: 'token-index-open',
+    })
+
+    const stubFetch = Object.assign(
+      async (input: string | URL | Request, init?: RequestInit) => {
+        const headers = new Headers(init?.headers)
+        fetchCalls.push({
+          url: String(input),
+          authorization: headers.get('Authorization') ?? undefined,
+          body: typeof init?.body === 'string' ? init.body : undefined,
+        })
+
+        return new Response(JSON.stringify({ tasks: [] }), {
+          status: 200,
+          headers: { 'content-type': 'application/json' },
+        })
       },
       { preconnect: originalFetch.preconnect },
     )
 
-    globalThis.fetch = unexpectedFetch as unknown as typeof fetch
+    globalThis.fetch = stubFetch as unknown as typeof fetch
 
     await plugin(controls.api, undefined, makePluginMeta())
 
     const [command] = controls.commandFactories[0]()
     command.onSelect?.()
 
-    expect(fetchCalls).toBe(0)
     expect(controls.dialogReplacements).toHaveLength(1)
 
-    const { renderOnce, captureCharFrame } = await testRender(() =>
-      controls.dialogReplacements[0].render(),
+    const { renderOnce, captureCharFrame, renderer } = await testRender(
+      () => controls.dialogReplacements[0].render(),
+      { useThread: false },
     )
     await renderOnce()
 
-    const frame = captureCharFrame()
-    expect(frame).toContain('Copilot status')
-    expect(frame).toContain('Unit 6')
+    const frame = await waitForFrame({
+      renderOnce,
+      idle: () => renderer.idle(),
+      captureCharFrame,
+      includes: '0 running · 0 recent',
+    })
+    expect(fetchCalls).toEqual([
+      {
+        url: 'http://127.0.0.1:43123/tasks/list',
+        authorization: 'Bearer token-index-open',
+        body: '{}',
+      },
+    ])
+    expect(frame).toContain('0 running · 0 recent')
+    expect(frame).toContain('No Copilot delegations are running.')
+    expect(frame).not.toContain('Unit 6')
   })
 })
