@@ -1,10 +1,16 @@
 /** @jsxImportSource @opentui/solid */
 
 import type { TuiPlugin, TuiPluginModule } from '@opencode-ai/plugin/tui'
-import { ConfirmCard } from './components/confirm-card'
 import { ModalList } from './components/modal-list'
-import type { ModalListTask } from './components/row'
 import { createRpcClient } from './rpc-client'
+
+function errorMessage(error: unknown): string {
+  if (error instanceof Error && error.message.trim().length > 0) {
+    return error.message.trim()
+  }
+
+  return 'Unknown RPC error.'
+}
 
 const tui: TuiPlugin = async (api) => {
   const rpc = createRpcClient()
@@ -12,30 +18,28 @@ const tui: TuiPlugin = async (api) => {
     api.ui.dialog.clear()
   }
 
-  const openList = (initialTaskId?: string) => {
+  const showUnavailableAlert = (error: unknown) => {
+    api.ui.dialog.setSize('medium')
     api.ui.dialog.replace(() => {
       return (
-        <ModalList
-          Dialog={api.ui.Dialog}
-          onClose={closeDialog}
-          onCancelTask={openConfirmCard}
-          initialTaskId={initialTaskId}
-          rpc={rpc}
+        <api.ui.DialogAlert
+          title="Status unavailable."
+          message={errorMessage(error)}
+          onConfirm={closeDialog}
         />
       )
     }, closeDialog)
   }
 
-  const openConfirmCard = (task: ModalListTask) => {
+  const openList = (initialTaskId?: string) => {
+    api.ui.dialog.setSize('large')
     api.ui.dialog.replace(() => {
       return (
-        <ConfirmCard
-          Dialog={api.ui.Dialog}
-          task={task}
+        <ModalList
+          onClose={closeDialog}
+          onLoadError={showUnavailableAlert}
+          initialTaskId={initialTaskId}
           rpc={rpc}
-          onConfirm={() => openList(task.taskId)}
-          onCancel={() => openList(task.taskId)}
-          onDismissAfterError={() => openList(task.taskId)}
         />
       )
     }, closeDialog)

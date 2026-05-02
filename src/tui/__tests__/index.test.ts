@@ -6,6 +6,7 @@ import type {
   TuiCommand,
   TuiPluginApi,
   TuiPluginMeta,
+  TuiToast,
 } from '@opencode-ai/plugin/tui'
 import { type JSX, testRender } from '@opentui/solid'
 
@@ -25,11 +26,19 @@ type DialogReplacement = {
   onClose?: () => void
 }
 
+type ToastCall = {
+  message: string
+  variant?: string
+  duration?: number
+}
+
 type TestApiControls = {
   api: TuiPluginApi
   commandFactories: Array<() => TuiCommand[]>
   dialogReplacements: DialogReplacement[]
+  dialogSizes: Array<'medium' | 'large' | 'xlarge'>
   disposeHandlers: Array<() => void | Promise<void>>
+  toastCalls: ToastCall[]
   unregisterCalls: number
 }
 
@@ -68,7 +77,9 @@ async function loadTuiPlugin(): Promise<TuiPlugin> {
 function createTestApi(): TestApiControls {
   const commandFactories: Array<() => TuiCommand[]> = []
   const dialogReplacements: DialogReplacement[] = []
+  const dialogSizes: Array<'medium' | 'large' | 'xlarge'> = []
   const disposeHandlers: Array<() => void | Promise<void>> = []
+  const toastCalls: ToastCall[] = []
   let unregisterCalls = 0
 
   const api = {
@@ -91,13 +102,21 @@ function createTestApi(): TestApiControls {
       DialogSelect: (() => null) as TuiPluginApi['ui']['DialogSelect'],
       Slot: (() => null) as TuiPluginApi['ui']['Slot'],
       Prompt: (() => null) as TuiPluginApi['ui']['Prompt'],
-      toast: () => {},
+      toast: (input: TuiToast) => {
+        toastCalls.push({
+          message: input.message,
+          variant: input.variant,
+          duration: input.duration,
+        })
+      },
       dialog: {
         replace: (render: () => JSX.Element, onClose?: () => void) => {
           dialogReplacements.push({ render, onClose })
         },
         clear: () => {},
-        setSize: () => {},
+        setSize: (size: 'medium' | 'large' | 'xlarge') => {
+          dialogSizes.push(size)
+        },
         size: 'medium',
         depth: 0,
         open: false,
@@ -116,7 +135,9 @@ function createTestApi(): TestApiControls {
     api,
     commandFactories,
     dialogReplacements,
+    dialogSizes,
     disposeHandlers,
+    toastCalls,
     get unregisterCalls() {
       return unregisterCalls
     },
@@ -256,6 +277,7 @@ describe('tui entrypoint', () => {
     command.onSelect?.()
 
     expect(controls.dialogReplacements).toHaveLength(1)
+    expect(controls.dialogSizes).toEqual(['large'])
 
     const { renderOnce, captureCharFrame, renderer } = await testRender(
       () => controls.dialogReplacements[0].render(),
@@ -281,11 +303,40 @@ describe('tui entrypoint', () => {
     expect(frame).not.toContain('Unit 6')
   })
 
-  it('opens the confirm card for the selected task when c is pressed in the modal list', async () => {
+  it('does not toast when rpc is unavailable', async () => {
     const plugin = await loadTuiPlugin()
     const controls = createTestApi()
     const cacheHome = makeCacheHome()
-    const sessionDiscriminator = 'tui-index-confirm-card'
+    process.env.XDG_CACHE_HOME = cacheHome
+    process.env.OPENCODE_SESSION_ID = 'tui-index-error'
+
+    await plugin(controls.api, undefined, makePluginMeta())
+
+    const [command] = controls.commandFactories[0]()
+    command.onSelect?.()
+
+    expect(controls.dialogReplacements).toHaveLength(1)
+    expect(controls.dialogSizes).toEqual(['large'])
+
+    const { renderOnce, renderer } = await testRender(
+      () => controls.dialogReplacements[0].render(),
+      { useThread: false },
+    )
+
+    await renderOnce()
+    await renderer.idle()
+    await renderOnce()
+
+    expect(controls.dialogReplacements).toHaveLength(1)
+    expect(controls.dialogSizes).toEqual(['large'])
+    expect(controls.toastCalls).toEqual([])
+  })
+
+  it('keeps /copilot-status on a single read-only dialog replacement', async () => {
+    const plugin = await loadTuiPlugin()
+    const controls = createTestApi()
+    const cacheHome = makeCacheHome()
+    const sessionDiscriminator = 'tui-index-read-only'
 
     process.env.XDG_CACHE_HOME = cacheHome
     process.env.OPENCODE_SESSION_ID = sessionDiscriminator
@@ -293,18 +344,11 @@ describe('tui entrypoint', () => {
     writePortFile(cacheHome, sessionDiscriminator, {
       port: 43124,
       pid: process.pid,
-      token: 'token-index-confirm-card',
+      token: 'token-index-read-only',
     })
 
     const stubFetch = Object.assign(
-      async (_input: string | URL | Request, init?: RequestInit) => {
-        if (typeof init?.body === 'string' && init.body.includes('taskId')) {
-          return new Response(JSON.stringify({ cancelled: true }), {
-            status: 200,
-            headers: { 'content-type': 'application/json' },
-          })
-        }
-
+      async (_input: string | URL | Request) => {
         return new Response(
           JSON.stringify({
             tasks: [
@@ -364,44 +408,10 @@ describe('tui entrypoint', () => {
       includes: '2 running · 0 recent',
     })
     expect(listFrame).toContain('cpl_beta')
-
-    listRender.mockInput.pressKey('j')
-    await waitForFrame({
-      renderOnce: listRender.renderOnce,
-      idle: () => listRender.renderer.idle(),
-      captureCharFrame: listRender.captureCharFrame,
-      includes: 'cpl_beta',
-    })
-    listRender.mockInput.pressKey('c')
-    await waitForFrame({
-      renderOnce: listRender.renderOnce,
-      idle: () => listRender.renderer.idle(),
-      captureCharFrame: listRender.captureCharFrame,
-      includes: 'cpl_beta',
-    })
-
-    expect(controls.dialogReplacements).toHaveLength(2)
-
-    const confirmRender = await testRender(
-      () => controls.dialogReplacements[1].render(),
-      {
-        width: 120,
-        height: 20,
-        useThread: false,
-      },
-    )
-
-    await confirmRender.renderOnce()
-
-    const confirmFrame = await waitForFrame({
-      renderOnce: confirmRender.renderOnce,
-      idle: () => confirmRender.renderer.idle(),
-      captureCharFrame: confirmRender.captureCharFrame,
-      includes: 'Cancel Copilot delegation cpl_beta?',
-    })
-
-    expect(confirmFrame).toContain('Cancel Copilot delegation cpl_beta?')
-    expect(confirmFrame).toContain('Cancel Task')
-    expect(confirmFrame).toContain('Keep Running')
+    expect(listFrame).toContain('Esc close')
+    expect(listFrame).not.toContain('navigate')
+    expect(listFrame).not.toContain('c cancel')
+    expect(controls.dialogReplacements).toHaveLength(1)
+    expect(controls.dialogSizes).toEqual(['large'])
   })
 })

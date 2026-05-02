@@ -1,7 +1,6 @@
 /** @jsxImportSource @opentui/solid */
 
 import { describe, expect, it } from 'bun:test'
-import type { TuiDialogProps } from '@opencode-ai/plugin/tui'
 import { type JSX, testRender } from '@opentui/solid'
 import {
   RpcAuthError,
@@ -22,7 +21,6 @@ type TaskRow = {
 }
 
 type ConfirmCardProps = {
-  Dialog: (props: TuiDialogProps) => JSX.Element
   task: TaskRow
   rpc: {
     tasksCancel(taskId: string): Promise<{ cancelled: boolean; error?: string }>
@@ -74,20 +72,6 @@ function createDeferred<T>(): Deferred<T> {
     reject(error: unknown) {
       rejectFn(error)
     },
-  }
-}
-
-function createDialogStub() {
-  let onClose: (() => void) | undefined
-
-  const Dialog = (props: TuiDialogProps) => {
-    onClose = props.onClose
-    return <box flexDirection="column">{props.children}</box>
-  }
-
-  return {
-    Dialog,
-    getOnClose: () => onClose,
   }
 }
 
@@ -143,11 +127,9 @@ describe('confirm card', () => {
     expect(typeof ConfirmCard).toBe('function')
     if (!ConfirmCard) return
 
-    const dialog = createDialogStub()
     const { renderOnce, captureCharFrame, renderer } = await testRender(
       () => (
         <ConfirmCard
-          Dialog={dialog.Dialog}
           task={makeTask('cpl_abc')}
           rpc={{ tasksCancel: async () => ({ cancelled: true }) }}
           onConfirm={() => {}}
@@ -178,7 +160,6 @@ describe('confirm card', () => {
     expect(typeof ConfirmCard).toBe('function')
     if (!ConfirmCard) return
 
-    const dialog = createDialogStub()
     const cancelledTaskIds: string[] = []
     let confirmed = 0
     let keptRunning = 0
@@ -187,7 +168,6 @@ describe('confirm card', () => {
     const { renderOnce, mockInput, renderer } = await testRender(
       () => (
         <ConfirmCard
-          Dialog={dialog.Dialog}
           task={makeTask('cpl_keep_running')}
           rpc={{
             tasksCancel: async (taskId) => {
@@ -229,14 +209,12 @@ describe('confirm card', () => {
     expect(typeof ConfirmCard).toBe('function')
     if (!ConfirmCard) return
 
-    const dialog = createDialogStub()
     const cancelledTaskIds: string[] = []
     let confirmed = 0
 
     const { renderOnce, mockInput, renderer } = await testRender(
       () => (
         <ConfirmCard
-          Dialog={dialog.Dialog}
           task={makeTask('cpl_cancel_success')}
           rpc={{
             tasksCancel: async (taskId) => {
@@ -270,12 +248,10 @@ describe('confirm card', () => {
     expect(typeof ConfirmCard).toBe('function')
     if (!ConfirmCard) return
 
-    const dialog = createDialogStub()
     const { renderOnce, captureCharFrame, mockInput, renderer } =
       await testRender(
         () => (
           <ConfirmCard
-            Dialog={dialog.Dialog}
             task={makeTask('cpl_cancel_error')}
             rpc={{
               tasksCancel: async () => {
@@ -324,14 +300,12 @@ describe('confirm card', () => {
     ]
 
     for (const error of cases) {
-      const dialog = createDialogStub()
       let confirmed = 0
 
       const { renderOnce, captureCharFrame, mockInput, renderer } =
         await testRender(
           () => (
             <ConfirmCard
-              Dialog={dialog.Dialog}
               task={makeTask('cpl_cancel_error')}
               rpc={{
                 tasksCancel: async () => {
@@ -371,7 +345,6 @@ describe('confirm card', () => {
     expect(typeof ConfirmCard).toBe('function')
     if (!ConfirmCard) return
 
-    const dialog = createDialogStub()
     let confirmed = 0
     let keptRunning = 0
 
@@ -379,7 +352,6 @@ describe('confirm card', () => {
       await testRender(
         () => (
           <ConfirmCard
-            Dialog={dialog.Dialog}
             task={makeTask('cpl_finished')}
             rpc={{
               tasksCancel: async () => ({
@@ -410,34 +382,33 @@ describe('confirm card', () => {
     expect(captureCharFrame()).not.toContain('Cancel failed')
   })
 
-  it('dismisses and returns after an inline cancellation error', async () => {
+  it('keeps inline cancellation errors open when escape is pressed', async () => {
     const ConfirmCard = await loadConfirmCard()
 
     expect(typeof ConfirmCard).toBe('function')
     if (!ConfirmCard) return
 
-    const dialog = createDialogStub()
     let dismissedAfterError = 0
 
-    const { renderOnce, mockInput, renderer } = await testRender(
-      () => (
-        <ConfirmCard
-          Dialog={dialog.Dialog}
-          task={makeTask('cpl_dismiss_after_error')}
-          rpc={{
-            tasksCancel: async () => {
-              throw new RpcUnreachableError('rpc offline')
-            },
-          }}
-          onConfirm={() => {}}
-          onCancel={() => {}}
-          onDismissAfterError={() => {
-            dismissedAfterError += 1
-          }}
-        />
-      ),
-      { width: 80, height: 20, useThread: false },
-    )
+    const { renderOnce, captureCharFrame, mockInput, renderer } =
+      await testRender(
+        () => (
+          <ConfirmCard
+            task={makeTask('cpl_dismiss_after_error')}
+            rpc={{
+              tasksCancel: async () => {
+                throw new RpcUnreachableError('rpc offline')
+              },
+            }}
+            onConfirm={() => {}}
+            onCancel={() => {}}
+            onDismissAfterError={() => {
+              dismissedAfterError += 1
+            }}
+          />
+        ),
+        { width: 80, height: 20, useThread: false },
+      )
 
     await renderOnce()
     await settle(renderOnce, () => renderer.idle())
@@ -448,7 +419,8 @@ describe('confirm card', () => {
     await new Promise((resolve) => setTimeout(resolve, 30))
     await settle(renderOnce, () => renderer.idle())
 
-    expect(dismissedAfterError).toBe(1)
+    expect(dismissedAfterError).toBe(0)
+    expect(captureCharFrame()).toContain('Cancel failed: rpc offline')
   })
 
   it('ignores repeated confirm activations while cancellation is in flight', async () => {
@@ -457,7 +429,6 @@ describe('confirm card', () => {
     expect(typeof ConfirmCard).toBe('function')
     if (!ConfirmCard) return
 
-    const dialog = createDialogStub()
     const deferred = createDeferred<{ cancelled: boolean }>()
     const cancelledTaskIds: string[] = []
     let confirmed = 0
@@ -465,7 +436,6 @@ describe('confirm card', () => {
     const { renderOnce, mockInput, renderer } = await testRender(
       () => (
         <ConfirmCard
-          Dialog={dialog.Dialog}
           task={makeTask('cpl_guard')}
           rpc={{
             tasksCancel: async (taskId) => {

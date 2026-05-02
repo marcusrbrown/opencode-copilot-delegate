@@ -1,5 +1,4 @@
 import { describe, expect, it } from 'bun:test'
-import type { TuiDialogProps } from '@opencode-ai/plugin/tui'
 import { type JSX, testRender } from '@opentui/solid'
 
 type TaskStatus = 'running' | 'cancelling' | 'complete' | 'failed' | 'cancelled'
@@ -25,12 +24,11 @@ type ModalListClock = {
 }
 
 type ModalListProps = {
-  Dialog: (props: TuiDialogProps) => JSX.Element
   rpc: {
     tasksList(): Promise<TasksListResponse>
   }
   onClose: () => void
-  onCancelTask?: (task: TaskRow) => void
+  onLoadError?: (error: unknown) => void
   clock?: ModalListClock
 }
 
@@ -159,20 +157,6 @@ function createDeferred<T>(): Deferred<T> {
   }
 }
 
-function createDialogStub() {
-  let onClose: (() => void) | undefined
-
-  const Dialog = (props: TuiDialogProps) => {
-    onClose = props.onClose
-    return <box flexDirection="column">{props.children}</box>
-  }
-
-  return {
-    Dialog,
-    getOnClose: () => onClose,
-  }
-}
-
 function makeTask(taskId: string, overrides: Partial<TaskRow> = {}): TaskRow {
   return {
     taskId,
@@ -243,13 +227,11 @@ describe('modal list', () => {
   it('renders a loading state before tasksList resolves', async () => {
     const ModalList = await loadModalList()
     const deferred = createDeferred<TasksListResponse>()
-    const dialog = createDialogStub()
     let calls = 0
 
     const { renderOnce, captureCharFrame } = await testRender(
       () => (
         <ModalList
-          Dialog={dialog.Dialog}
           rpc={{
             tasksList: () => {
               calls += 1
@@ -272,12 +254,10 @@ describe('modal list', () => {
 
   it('renders an empty state after tasksList returns no tasks', async () => {
     const ModalList = await loadModalList()
-    const dialog = createDialogStub()
 
     const { renderOnce, captureCharFrame, renderer } = await testRender(
       () => (
         <ModalList
-          Dialog={dialog.Dialog}
           rpc={{ tasksList: async () => ({ tasks: [] }) }}
           onClose={() => {}}
         />
@@ -301,20 +281,25 @@ describe('modal list', () => {
     expect(frame).toContain('Esc close')
   })
 
-  it('renders an error state with the rpc rejection message', async () => {
+  it('closes and reports load errors instead of rendering an inline error state', async () => {
     const ModalList = await loadModalList()
-    const dialog = createDialogStub()
+    const loadErrors: unknown[] = []
+    let closeCalls = 0
 
     const { renderOnce, captureCharFrame, renderer } = await testRender(
       () => (
         <ModalList
-          Dialog={dialog.Dialog}
           rpc={{
             tasksList: async () => {
               throw new Error('rpc exploded on localhost')
             },
           }}
-          onClose={() => {}}
+          onClose={() => {
+            closeCalls += 1
+          }}
+          onLoadError={(error: unknown) => {
+            loadErrors.push(error)
+          }}
         />
       ),
       { width: 120, height: 20, useThread: false },
@@ -326,18 +311,19 @@ describe('modal list', () => {
       renderOnce,
       idle: () => renderer.idle(),
       captureCharFrame,
-      includes: 'Status unavailable.',
+      includes: 'Loading delegations…',
     })
-    expect(frame).toContain('Status unavailable.')
-    expect(frame).toContain('rpc exploded on localhost')
+    expect(frame).toContain('Loading delegations…')
     expect(frame).toContain('Esc close')
+    expect(closeCalls).toBe(1)
+    expect(loadErrors).toHaveLength(1)
+    expect(loadErrors[0]).toBeInstanceOf(Error)
+    expect((loadErrors[0] as Error).message).toBe('rpc exploded on localhost')
   })
 
-  it('renders running rows with focused styling, defaults, and key navigation', async () => {
+  it('renders running rows as a read-only status list', async () => {
     const ModalList = await loadModalList()
-    const dialog = createDialogStub()
     const clock = new TestClock(2_000)
-    const cancelled: TaskRow[] = []
     const tasks = [
       makeTask('cpl_alpha', {
         startedAt: 0,
@@ -357,14 +343,12 @@ describe('modal list', () => {
       }),
     ]
 
-    const { renderOnce, captureCharFrame, captureSpans, mockInput, renderer } =
+    const { renderOnce, captureCharFrame, captureSpans, renderer } =
       await testRender(
         () => (
           <ModalList
-            Dialog={dialog.Dialog}
             rpc={{ tasksList: async () => ({ tasks }) }}
             onClose={() => {}}
-            onCancelTask={(task) => cancelled.push(task)}
             clock={clock.adapter()}
           />
         ),
@@ -380,7 +364,9 @@ describe('modal list', () => {
       includes: '3 running · 0 recent',
     })
     expect(frame).toContain('3 running · 0 recent')
-    expect(frame).toContain('↑↓ navigate · c cancel · Esc close')
+    expect(frame).toContain('Esc close')
+    expect(frame).not.toContain('navigate')
+    expect(frame).not.toContain('c cancel')
     expect(frame).toContain('cpl_alpha')
     expect(frame).toContain('cpl_beta')
     expect(frame).toContain('cpl_gamma')
@@ -391,47 +377,18 @@ describe('modal list', () => {
     expect(frame).toContain('5 calls')
     expect(frame).toContain('0s')
 
-    let spans = captureSpans()
+    const spans = captureSpans()
     const firstLine = findLineAttributesContaining(spans, 'cpl_alpha')
     expect(firstLine).toBeDefined()
-    expect(lineHasInverse(firstLine)).toBe(true)
-
-    mockInput.pressKey('j')
-    await settle(renderOnce, () => renderer.idle())
-    expect(captureCharFrame()).toContain('cpl_beta')
-    spans = captureSpans()
-    const secondLine = findLineAttributesContaining(spans, 'cpl_beta')
-    expect(secondLine).toBeDefined()
-    expect(lineHasInverse(secondLine)).toBe(true)
-
-    mockInput.pressArrow('up')
-    await settle(renderOnce, () => renderer.idle())
-    spans = captureSpans()
-    const wrappedLine = findLineAttributesContaining(spans, 'cpl_alpha')
-    expect(wrappedLine).toBeDefined()
-    expect(lineHasInverse(wrappedLine)).toBe(true)
-
-    mockInput.pressKey('k')
-    await settle(renderOnce, () => renderer.idle())
-    spans = captureSpans()
-    const lastLine = findLineAttributesContaining(spans, 'cpl_gamma')
-    expect(lastLine).toBeDefined()
-    expect(lineHasInverse(lastLine)).toBe(true)
-
-    mockInput.pressKey('c')
-    await settle(renderOnce, () => renderer.idle())
-
-    expect(cancelled).toEqual([tasks[2]])
+    expect(lineHasInverse(firstLine)).toBe(false)
   })
 
   it('keeps cancelling tasks visible until runtime removes them', async () => {
     const ModalList = await loadModalList()
-    const dialog = createDialogStub()
 
     const { renderOnce, captureCharFrame, renderer } = await testRender(
       () => (
         <ModalList
-          Dialog={dialog.Dialog}
           rpc={{
             tasksList: async () => ({
               tasks: [makeTask('cpl_cancelling', { status: 'cancelling' })],
@@ -459,13 +416,11 @@ describe('modal list', () => {
 
   it('updates elapsed time from an injected clock without waiting on wall time', async () => {
     const ModalList = await loadModalList()
-    const dialog = createDialogStub()
     const clock = new TestClock(0)
 
     const { renderOnce, captureCharFrame, renderer } = await testRender(
       () => (
         <ModalList
-          Dialog={dialog.Dialog}
           rpc={{
             tasksList: async () => ({
               tasks: [
@@ -499,13 +454,11 @@ describe('modal list', () => {
 
   it('clears its refresh interval on teardown', async () => {
     const ModalList = await loadModalList()
-    const dialog = createDialogStub()
     const clock = new TestClock(0)
 
     const { renderer, renderOnce } = await testRender(
       () => (
         <ModalList
-          Dialog={dialog.Dialog}
           rpc={{
             tasksList: async () => ({
               tasks: [makeTask('cpl_cleanup')],
