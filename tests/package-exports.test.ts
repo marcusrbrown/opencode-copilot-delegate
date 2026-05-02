@@ -37,4 +37,10 @@ describe('package exports', () => {
     expect(existsSync(join(process.cwd(), tuiExport.import))).toBe(true)
     expect(existsSync(join(process.cwd(), tuiExport.types))).toBe(true)
   })
+
+  it('exports an OpenCode TUI plugin module from the built TUI entrypoint', async () => {
+    const builtTui = await import(join(process.cwd(), 'dist/tui/index.js'))
+
+    expect(builtTui.default).toEqual({ tui: expect.any(Function) })
+  })
 })

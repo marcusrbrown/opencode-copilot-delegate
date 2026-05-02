@@ -18,7 +18,11 @@ import {
   TasksCancelResponseSchema,
   TasksListResponseSchema,
 } from '../src/runtime/rpc-contract'
-import { startRpcServer } from '../src/runtime/rpc-server'
+import {
+  getTcpServerPort,
+  isMissingPathError,
+  startRpcServer,
+} from '../src/runtime/rpc-server'
 
 type FakeTask = {
   taskId: string
@@ -454,6 +458,18 @@ describe('rpc server', () => {
     })
   })
 
+  it('extracts TCP server ports only from AddressInfo results', () => {
+    expect(
+      getTcpServerPort({ address: '127.0.0.1', family: 'IPv4', port: 43123 }),
+    ).toBe(43123)
+    expect(() => getTcpServerPort(null)).toThrow(
+      'RPC server did not bind to a TCP address',
+    )
+    expect(() => getTcpServerPort('/tmp/copilot-delegate.sock')).toThrow(
+      'RPC server did not bind to a TCP address',
+    )
+  })
+
   it('supports concurrent servers with distinct discriminators and tokens', async () => {
     const portFileBaseDir = makeCacheDir()
     const first = await startTestServer({
@@ -511,6 +527,25 @@ describe('rpc server', () => {
     expect(existsSync(staleTempFile)).toBe(false)
     expect(readFileSync(unrelatedFile, 'utf8')).toBe('keep me')
     expect(existsSync(server.portFilePath)).toBe(true)
+  })
+
+  it('recognizes only real ENOENT errors as missing path errors', () => {
+    expect(
+      isMissingPathError(
+        Object.assign(new Error('missing'), {
+          code: 'ENOENT',
+        }),
+      ),
+    ).toBe(true)
+    expect(
+      isMissingPathError(
+        Object.assign(new Error('denied'), {
+          code: 'EACCES',
+        }),
+      ),
+    ).toBe(false)
+    expect(isMissingPathError({ code: 'ENOENT' })).toBe(false)
+    expect(isMissingPathError('ENOENT')).toBe(false)
   })
 
   it('closes the server and removes the port file', async () => {

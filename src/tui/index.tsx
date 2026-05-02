@@ -1,12 +1,12 @@
 /** @jsxImportSource @opentui/solid */
 
-import type { TuiPlugin } from '@opencode-ai/plugin/tui'
+import type { TuiPlugin, TuiPluginModule } from '@opencode-ai/plugin/tui'
 import { ConfirmCard } from './components/confirm-card'
 import { ModalList } from './components/modal-list'
 import type { ModalListTask } from './components/row'
 import { createRpcClient } from './rpc-client'
 
-const CopilotStatusTui: TuiPlugin = async (api) => {
+const tui: TuiPlugin = async (api) => {
   const rpc = createRpcClient()
   const closeDialog = () => {
     api.ui.dialog.clear()
@@ -58,4 +58,4 @@ const CopilotStatusTui: TuiPlugin = async (api) => {
   })
 }
 
-export default CopilotStatusTui
+export default { tui } satisfies TuiPluginModule

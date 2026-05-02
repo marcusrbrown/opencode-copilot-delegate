@@ -15,6 +15,10 @@ type TuiPlugin = (
   meta: TuiPluginMeta,
 ) => Promise<void>
 
+type TuiPluginModule = {
+  tui: TuiPlugin
+}
+
 type DialogReplacement = {
   render: () => JSX.Element
   onClose?: () => void
@@ -47,7 +51,10 @@ async function loadTuiPlugin(): Promise<TuiPlugin> {
   await import('@opentui/solid/runtime-plugin-support')
 
   const module = await import('../index')
-  const plugin = Reflect.get(module, 'default')
+  const pluginModule = Reflect.get(module, 'default') as TuiPluginModule
+  const plugin = pluginModule.tui
+
+  expect(pluginModule).toEqual({ tui: expect.any(Function) })
 
   expect(typeof plugin).toBe('function')
 

@@ -10,6 +10,7 @@ import type { AddressInfo } from 'node:net'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import type { ZodError, ZodType } from 'zod'
+import { isErrnoException } from '../lib/errno'
 import type { CancelTaskResult } from './cancel-helper'
 import type { TaskStatus } from './envelope'
 import type { ParsedEvent } from './jsonl-parser'
@@ -184,7 +185,7 @@ async function removeStalePortFiles(portFileDir: string): Promise<void> {
   try {
     entries = await readdir(portFileDir)
   } catch (error) {
-    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+    if (isMissingPathError(error)) {
       return
     }
     throw error
@@ -199,6 +200,18 @@ async function removeStalePortFiles(portFileDir: string): Promise<void> {
       )
       .map((entry) => rm(join(portFileDir, entry), { force: true })),
   )
+}
+
+export function isMissingPathError(error: unknown): boolean {
+  return isErrnoException(error) && error.code === 'ENOENT'
+}
+
+export function getTcpServerPort(address: AddressInfo | string | null): number {
+  if (address === null || typeof address === 'string') {
+    throw new Error('RPC server did not bind to a TCP address')
+  }
+
+  return address.port
 }
 
 type BodyParseResult =
@@ -405,8 +418,7 @@ export async function startRpcServer(
       server.once('error', reject)
       server.listen(0, '127.0.0.1', () => {
         server.off('error', reject)
-        const address = server.address() as AddressInfo
-        resolve(address.port)
+        resolve(getTcpServerPort(server.address()))
       })
     })
 
