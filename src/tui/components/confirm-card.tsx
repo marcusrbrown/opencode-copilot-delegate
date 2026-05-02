@@ -1,6 +1,5 @@
 /** @jsxImportSource @opentui/solid */
 
-import type { TuiPluginApi } from '@opencode-ai/plugin/tui'
 import {
   type KeyEvent,
   TextAttributes,
@@ -12,7 +11,6 @@ import type { RpcClient } from '../rpc-client'
 import type { ModalListTask } from './row'
 
 type ConfirmCardProps = {
-  Dialog: TuiPluginApi['ui']['Dialog']
   task: ModalListTask
   rpc: Pick<RpcClient, 'tasksCancel'>
   onConfirm: () => void
@@ -78,7 +76,6 @@ function updateText(
 }
 
 export function ConfirmCard(props: ConfirmCardProps) {
-  const Dialog = props.Dialog
   const renderer = useRenderer()
   const title = `Cancel Copilot delegation ${props.task.taskId}?`
   const state: { value: ConfirmState } = {
@@ -123,19 +120,6 @@ export function ConfirmCard(props: ConfirmCardProps) {
     updateText(errorText, '')
     updateText(dismissText, '')
     renderer.requestRender()
-  }
-
-  const closeToList = () => {
-    if (state.value.kind === 'error') {
-      props.onDismissAfterError()
-      return
-    }
-
-    if (state.value.busy) {
-      return
-    }
-
-    props.onCancel()
   }
 
   const confirmCancel = async () => {
@@ -202,12 +186,6 @@ export function ConfirmCard(props: ConfirmCardProps) {
   }
 
   const handleKeyPress = (key: KeyEvent) => {
-    if (matchesKey(key, 'escape')) {
-      key.preventDefault()
-      closeToList()
-      return
-    }
-
     if (state.value.kind === 'confirm' && !state.value.busy) {
       if (isLeftKey(key)) {
         key.preventDefault()
@@ -235,41 +213,39 @@ export function ConfirmCard(props: ConfirmCardProps) {
   })
 
   return (
-    <Dialog onClose={closeToList} size="medium">
-      <box flexDirection="column" gap={1} padding={1}>
-        <text>{title}</text>
-        {/* biome-ignore lint/a11y/noStaticElementInteractions: OpenTUI text nodes handle terminal mouse events directly. */}
-        <text
-          ref={confirmText}
-          attributes={TextAttributes.INVERSE}
-          onMouseUp={() => {
-            focusConfirm()
-            void confirmCancel()
-          }}
-        >
-          Cancel Task
-        </text>
-        {/* biome-ignore lint/a11y/noStaticElementInteractions: OpenTUI text nodes handle terminal mouse events directly. */}
-        <text
-          ref={cancelText}
-          onMouseUp={() => {
-            focusCancel()
-            closeToList()
-          }}
-        >
-          Keep Running
-        </text>
-        <text ref={errorText} visible={false} />
-        {/* biome-ignore lint/a11y/noStaticElementInteractions: OpenTUI text nodes handle terminal mouse events directly. */}
-        <text
-          ref={dismissText}
-          visible={false}
-          onMouseUp={() => {
-            props.onDismissAfterError()
-          }}
-        />
-      </box>
-    </Dialog>
+    <box flexDirection="column" gap={1} padding={1} width="100%">
+      <text>{title}</text>
+      {/* biome-ignore lint/a11y/noStaticElementInteractions: OpenTUI text nodes handle terminal mouse events directly. */}
+      <text
+        ref={confirmText}
+        attributes={TextAttributes.INVERSE}
+        onMouseUp={() => {
+          focusConfirm()
+          void confirmCancel()
+        }}
+      >
+        Cancel Task
+      </text>
+      {/* biome-ignore lint/a11y/noStaticElementInteractions: OpenTUI text nodes handle terminal mouse events directly. */}
+      <text
+        ref={cancelText}
+        onMouseUp={() => {
+          focusCancel()
+          props.onCancel()
+        }}
+      >
+        Keep Running
+      </text>
+      <text ref={errorText} visible={false} />
+      {/* biome-ignore lint/a11y/noStaticElementInteractions: OpenTUI text nodes handle terminal mouse events directly. */}
+      <text
+        ref={dismissText}
+        visible={false}
+        onMouseUp={() => {
+          props.onDismissAfterError()
+        }}
+      />
+    </box>
   )
 }
 

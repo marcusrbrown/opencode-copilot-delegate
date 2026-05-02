@@ -91,7 +91,7 @@ Run `bun run lint` to check, `bun run fix` to auto-fix.
 
 - Format: `feat(scope): description`, `fix(scope): description`, `chore(scope): description`
 - Scopes: `runtime`, `tools`, `discovery`, `ci`, `docs`
-- User-visible changes require a `.changeset/*.md` with `minor` bump (unstable `0.x` series)
+- User-visible feature additions and behavior changes require a `.changeset/*.md` with `minor` bump (unstable `0.x` series). Targeted user-visible bug fixes/hotfixes may use `patch` when they do not add new functionality.
 
 ## Security Constraints
 

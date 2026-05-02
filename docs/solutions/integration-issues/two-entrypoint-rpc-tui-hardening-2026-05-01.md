@@ -193,6 +193,7 @@ The fix makes the boundaries explicit:
 ## Related Issues
 
 - Plan: `docs/plans/2026-04-27-001-feat-copilot-status-tui-foundation-plan.md`
+- Follow-up UI lifecycle bug: `docs/solutions/ui-bugs/re-entrant-dialog-close-froze-copilot-status-on-escape-2026-05-02.md`
 - Related runtime lifecycle learning: `docs/solutions/best-practices/centralized-terminal-state-idempotency-task-lifecycle-2026-04-28.md`
 - Related process/session isolation learning: `docs/solutions/best-practices/per-instance-pid-files-spawner-liveness-gating-2026-04-28.md`
 - Related local-state learning: `docs/solutions/best-practices/atomic-file-append-remove-o-excl-temp-file-2026-04-28.md`
