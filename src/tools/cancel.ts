@@ -35,7 +35,9 @@ export function createCancelTool() {
         {
           getTask: (taskId) => {
             const task = getTask(taskId)
-            return task?.status === 'running' ? task : undefined
+            return task?.status === 'running' || task?.status === 'cancelling'
+              ? task
+              : undefined
           },
         },
         args.task_id,

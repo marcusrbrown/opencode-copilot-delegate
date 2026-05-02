@@ -424,6 +424,39 @@ describe('modal list', () => {
     expect(cancelled).toEqual([tasks[2]])
   })
 
+  it('keeps cancelling tasks visible until runtime removes them', async () => {
+    const ModalList = await loadModalList()
+    const dialog = createDialogStub()
+
+    const { renderOnce, captureCharFrame, renderer } = await testRender(
+      () => (
+        <ModalList
+          Dialog={dialog.Dialog}
+          rpc={{
+            tasksList: async () => ({
+              tasks: [makeTask('cpl_cancelling', { status: 'cancelling' })],
+            }),
+          }}
+          onClose={() => {}}
+        />
+      ),
+      { width: 120, height: 20, useThread: false },
+    )
+
+    await renderOnce()
+
+    const frame = await waitForFrame({
+      renderOnce,
+      idle: () => renderer.idle(),
+      captureCharFrame,
+      includes: 'cpl_cancelling',
+    })
+
+    expect(frame).toContain('1 running · 0 recent')
+    expect(frame).toContain('cancelling')
+    expect(frame).toContain('cpl_cancelling')
+  })
+
   it('updates elapsed time from an injected clock without waiting on wall time', async () => {
     const ModalList = await loadModalList()
     const dialog = createDialogStub()

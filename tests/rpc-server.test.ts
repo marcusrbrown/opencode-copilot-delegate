@@ -22,7 +22,7 @@ import { startRpcServer } from '../src/runtime/rpc-server'
 
 type FakeTask = {
   taskId: string
-  status: 'running' | 'complete' | 'failed' | 'cancelled'
+  status: 'running' | 'cancelling' | 'complete' | 'failed' | 'cancelled'
   agentName?: string
   modelName?: string
   startedAt: number
@@ -161,7 +161,7 @@ describe('rpc server', () => {
     expect(await response.json()).toEqual({ error: 'unauthorized' })
   })
 
-  it('returns a validated running task list and filters terminal tasks', async () => {
+  it('returns active running and cancelling tasks while filtering terminal tasks', async () => {
     const startedAt = 1_000
     const server = await startTestServer({
       now: () => 2_500,
@@ -175,8 +175,22 @@ describe('rpc server', () => {
           events: [makeToolUseEvent('tool-1'), makeToolUseEvent('tool-2')],
         },
         {
+          taskId: 'cpl_cancelling',
+          status: 'cancelling',
+          agentName: 'delegate-agent',
+          modelName: 'gpt-5',
+          startedAt,
+          events: [makeToolUseEvent('tool-3')],
+        },
+        {
           taskId: 'cpl_complete',
           status: 'complete',
+          startedAt,
+          endedAt: 2_000,
+        },
+        {
+          taskId: 'cpl_cancelled',
+          status: 'cancelled',
           startedAt,
           endedAt: 2_000,
         },
@@ -196,6 +210,15 @@ describe('rpc server', () => {
           model: 'gpt-5',
           elapsedMs: 1_500,
           toolCallCount: 2,
+          startedAt,
+        },
+        {
+          taskId: 'cpl_cancelling',
+          status: 'cancelling',
+          agent: 'delegate-agent',
+          model: 'gpt-5',
+          elapsedMs: 1_500,
+          toolCallCount: 1,
           startedAt,
         },
       ],

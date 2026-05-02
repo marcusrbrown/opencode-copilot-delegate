@@ -153,6 +153,11 @@ export function ConfirmCard(props: ConfirmCardProps) {
         return
       }
 
+      if (response.error === 'no such task') {
+        props.onConfirm()
+        return
+      }
+
       state.value = {
         kind: 'error',
         message: response.error ?? 'Unknown RPC error.',

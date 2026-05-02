@@ -105,7 +105,7 @@ export function createDelegateTool(options: DelegateToolOptions) {
     },
     async execute(args, ctx) {
       const runningCount = getAllTasks().filter(
-        (task) => task.status === 'running',
+        (task) => task.status === 'running' || task.status === 'cancelling',
       ).length
 
       if (runningCount >= MAX_CONCURRENT) {

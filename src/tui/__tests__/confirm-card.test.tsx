@@ -365,6 +365,51 @@ describe('confirm card', () => {
     }
   })
 
+  it('treats no such task as a stale selection and returns to the list', async () => {
+    const ConfirmCard = await loadConfirmCard()
+
+    expect(typeof ConfirmCard).toBe('function')
+    if (!ConfirmCard) return
+
+    const dialog = createDialogStub()
+    let confirmed = 0
+    let keptRunning = 0
+
+    const { renderOnce, captureCharFrame, mockInput, renderer } =
+      await testRender(
+        () => (
+          <ConfirmCard
+            Dialog={dialog.Dialog}
+            task={makeTask('cpl_finished')}
+            rpc={{
+              tasksCancel: async () => ({
+                cancelled: false,
+                error: 'no such task',
+              }),
+            }}
+            onConfirm={() => {
+              confirmed += 1
+            }}
+            onCancel={() => {
+              keptRunning += 1
+            }}
+            onDismissAfterError={() => {}}
+          />
+        ),
+        { width: 80, height: 20, useThread: false },
+      )
+
+    await renderOnce()
+    await settle(renderOnce, () => renderer.idle())
+
+    mockInput.pressEnter()
+    await settle(renderOnce, () => renderer.idle())
+
+    expect(confirmed).toBe(1)
+    expect(keptRunning).toBe(0)
+    expect(captureCharFrame()).not.toContain('Cancel failed')
+  })
+
   it('dismisses and returns after an inline cancellation error', async () => {
     const ConfirmCard = await loadConfirmCard()
 

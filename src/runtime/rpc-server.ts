@@ -11,6 +11,7 @@ import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import type { ZodError, ZodType } from 'zod'
 import type { CancelTaskResult } from './cancel-helper'
+import type { TaskStatus } from './envelope'
 import type { ParsedEvent } from './jsonl-parser'
 import {
   HealthResponseSchema,
@@ -23,7 +24,7 @@ import {
 
 type RpcTaskRecord = {
   taskId: string
-  status: string
+  status: TaskStatus
   agentName?: string
   modelName?: string
   startedAt: number
@@ -144,7 +145,7 @@ function mapTask(
 
   return {
     taskId: task.taskId,
-    status: task.status === 'running' ? 'running' : 'complete',
+    status: task.status,
     agent: task.agentName ?? '',
     model: task.modelName ?? '',
     elapsedMs: Math.max(0, Math.trunc(elapsedEnd - task.startedAt)),
@@ -281,7 +282,9 @@ function handleTasksList(
   const body = TasksListResponseSchema.parse({
     tasks: taskRegistry
       .getAllTasks()
-      .filter((task) => task.status === 'running')
+      .filter(
+        (task) => task.status === 'running' || task.status === 'cancelling',
+      )
       .map((task) => mapTask(task, now)),
   })
 
