@@ -1,5 +1,11 @@
 # opencode-copilot-delegate
 
+## 0.10.1
+
+### Patch Changes
+
+- 98a827e: Fix the `/copilot-status` TUI freeze caused by re-entrant dialog close handling when pressing Escape.
+
 ## 0.10.0
 
 ### Minor Changes
