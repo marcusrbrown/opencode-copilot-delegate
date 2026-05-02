@@ -281,7 +281,7 @@ describe('modal list', () => {
     expect(frame).toContain('Esc close')
   })
 
-  it('closes and reports load errors instead of rendering an inline error state', async () => {
+  it('reports load errors instead of rendering an inline error state', async () => {
     const ModalList = await loadModalList()
     const loadErrors: unknown[] = []
     let closeCalls = 0
@@ -315,10 +315,39 @@ describe('modal list', () => {
     })
     expect(frame).toContain('Loading delegations…')
     expect(frame).toContain('Esc close')
-    expect(closeCalls).toBe(1)
+    expect(closeCalls).toBe(0)
     expect(loadErrors).toHaveLength(1)
     expect(loadErrors[0]).toBeInstanceOf(Error)
     expect((loadErrors[0] as Error).message).toBe('rpc exploded on localhost')
+  })
+
+  it('reports load errors without closing first when an alert handler is present', async () => {
+    const ModalList = await loadModalList()
+    const callOrder: string[] = []
+
+    const { renderOnce, renderer } = await testRender(
+      () => (
+        <ModalList
+          rpc={{
+            tasksList: async () => {
+              throw new Error('rpc exploded on localhost')
+            },
+          }}
+          onClose={() => {
+            callOrder.push('close')
+          }}
+          onLoadError={() => {
+            callOrder.push('error')
+          }}
+        />
+      ),
+      { width: 120, height: 20, useThread: false },
+    )
+
+    await renderOnce()
+    await settle(renderOnce, () => renderer.idle())
+
+    expect(callOrder).toEqual(['error'])
   })
 
   it('renders running rows as a read-only status list', async () => {

@@ -37,6 +37,7 @@ type TestApiControls = {
   commandFactories: Array<() => TuiCommand[]>
   dialogReplacements: DialogReplacement[]
   dialogSizes: Array<'medium' | 'large' | 'xlarge'>
+  clearCalls: number
   disposeHandlers: Array<() => void | Promise<void>>
   toastCalls: ToastCall[]
   unregisterCalls: number
@@ -80,6 +81,7 @@ function createTestApi(): TestApiControls {
   const dialogSizes: Array<'medium' | 'large' | 'xlarge'> = []
   const disposeHandlers: Array<() => void | Promise<void>> = []
   const toastCalls: ToastCall[] = []
+  let clearCalls = 0
   let unregisterCalls = 0
 
   const api = {
@@ -113,7 +115,9 @@ function createTestApi(): TestApiControls {
         replace: (render: () => JSX.Element, onClose?: () => void) => {
           dialogReplacements.push({ render, onClose })
         },
-        clear: () => {},
+        clear: () => {
+          clearCalls += 1
+        },
         setSize: (size: 'medium' | 'large' | 'xlarge') => {
           dialogSizes.push(size)
         },
@@ -136,6 +140,9 @@ function createTestApi(): TestApiControls {
     commandFactories,
     dialogReplacements,
     dialogSizes,
+    get clearCalls() {
+      return clearCalls
+    },
     disposeHandlers,
     toastCalls,
     get unregisterCalls() {
@@ -301,6 +308,20 @@ describe('tui entrypoint', () => {
     expect(frame).toContain('0 running · 0 recent')
     expect(frame).toContain('No Copilot delegations are running.')
     expect(frame).not.toContain('Unit 6')
+  })
+
+  it('does not pass a re-entrant host onClose callback to the custom status dialog', async () => {
+    const plugin = await loadTuiPlugin()
+    const controls = createTestApi()
+
+    await plugin(controls.api, undefined, makePluginMeta())
+
+    const [command] = controls.commandFactories[0]()
+    command.onSelect?.()
+
+    expect(controls.dialogReplacements).toHaveLength(1)
+    expect(controls.dialogReplacements[0].onClose).toBeUndefined()
+    expect(controls.clearCalls).toBe(0)
   })
 
   it('does not toast when rpc is unavailable', async () => {

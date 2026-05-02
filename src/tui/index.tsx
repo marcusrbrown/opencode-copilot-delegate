@@ -28,7 +28,7 @@ const tui: TuiPlugin = async (api) => {
           onConfirm={closeDialog}
         />
       )
-    }, closeDialog)
+    })
   }
 
   const openList = (initialTaskId?: string) => {
@@ -42,7 +42,7 @@ const tui: TuiPlugin = async (api) => {
           rpc={rpc}
         />
       )
-    }, closeDialog)
+    })
   }
 
   const unregister = api.command.register(() => [

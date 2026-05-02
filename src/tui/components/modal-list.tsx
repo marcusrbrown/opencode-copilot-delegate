@@ -188,7 +188,6 @@ export function ModalList(props: ModalListProps) {
       return
     }
 
-    props.onClose()
     props.onLoadError?.(error)
   })
 
