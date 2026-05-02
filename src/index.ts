@@ -5,6 +5,7 @@ import { discoverAgents } from './discovery/agents'
 import { buildDescription } from './discovery/description'
 import { killProcessTree } from './lib/kill-tree'
 import { normalizeToolArgSchemas } from './lib/normalize-tool-arg-schemas'
+import { cancelTaskById } from './runtime/cancel-helper'
 import { getPidIdentity, reapOrphans } from './runtime/orphan-reaper'
 import {
   assertOrphansDirNotSymlink,
@@ -12,9 +13,49 @@ import {
   resolveInstancePidFilePath,
 } from './runtime/pid-file'
 import { plugInOnce } from './runtime/plugin-singleton'
+import { startRpcServer } from './runtime/rpc-server'
+import { getAllTasks, getTask } from './runtime/task-registry'
 import { createCancelTool } from './tools/cancel'
 import { createDelegateTool } from './tools/delegate'
 import { createOutputTool } from './tools/output'
+
+type PluginInputWithTestHooks = PluginInput & {
+  __captureRpcCleanup?: (cleanup: () => Promise<void>) => void
+}
+
+export function wireRpcServerCleanup(
+  closeRpcServer: () => Promise<void>,
+): () => Promise<void> {
+  let closePromise: Promise<void> | undefined
+
+  const closeOnce = (): Promise<void> => {
+    if (!closePromise) {
+      closePromise = closeRpcServer()
+        .catch(() => {})
+        .finally(() => {
+          process.off('beforeExit', onBeforeExit)
+          process.off('SIGTERM', onSigterm)
+        })
+    }
+
+    return closePromise
+  }
+
+  const onBeforeExit = () => {
+    void closeOnce()
+  }
+
+  const onSigterm = () => {
+    void closeOnce().finally(() => {
+      process.kill(process.pid, 'SIGTERM')
+    })
+  }
+
+  process.on('beforeExit', onBeforeExit)
+  process.once('SIGTERM', onSigterm)
+
+  return closeOnce
+}
 
 function getAgentsDirectories(directory: string): {
   userAgentsDir: string
@@ -26,7 +67,8 @@ function getAgentsDirectories(directory: string): {
   }
 }
 
-async function initializePlugin({ client, directory }: PluginInput) {
+async function initializePlugin(input: PluginInputWithTestHooks) {
+  const { client, directory } = input
   const agents = discoverAgents(getAgentsDirectories(directory))
   const delegateDescription = buildDescription(agents)
 
@@ -48,6 +90,33 @@ async function initializePlugin({ client, directory }: PluginInput) {
     })
   } catch {
     // mkdir or reap failure must not block plugin init.
+  }
+
+  // RPC/TUI status is additive. If localhost startup fails, the server plugin
+  // must still register its existing tools.
+  try {
+    const rpcServer = await startRpcServer({
+      taskRegistry: { getAllTasks },
+      cancelTaskById: (taskId) => cancelTaskById({ getTask }, taskId),
+    })
+    const closeRpcServer = wireRpcServerCleanup(rpcServer.close)
+    input.__captureRpcCleanup?.(closeRpcServer)
+  } catch (error) {
+    const message = `[copilot-delegate] failed to start RPC server: ${error}`
+    console.warn(message)
+    try {
+      client.app
+        .log({
+          body: {
+            service: 'copilot-delegate',
+            level: 'warn',
+            message,
+          },
+        })
+        .catch(() => {})
+    } catch {
+      // Logging is best-effort; RPC startup failure must not block tools.
+    }
   }
 
   return {

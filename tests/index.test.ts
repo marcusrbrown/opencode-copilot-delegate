@@ -1,6 +1,7 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
 import {
   chmodSync,
+  existsSync,
   lstatSync,
   mkdirSync,
   mkdtempSync,
@@ -15,10 +16,15 @@ import { join } from 'node:path'
 import type { PluginInput } from '@opencode-ai/plugin'
 import plugin from '../src/index'
 import { _resetPluginSingleton } from '../src/runtime/plugin-singleton'
+import { PortFileSchema } from '../src/runtime/rpc-contract'
 import { cleanupAll } from '../src/runtime/task-registry'
 
 const tempPaths: string[] = []
+const originalHome = process.env.HOME
+const originalXdgCacheHome = process.env.XDG_CACHE_HOME
+const originalSessionId = process.env.OPENCODE_SESSION_ID
 const originalXdgStateHome = process.env.XDG_STATE_HOME
+let closeRpcServer: (() => Promise<void>) | undefined
 
 beforeEach(() => {
   // Each lifecycle test asserts side effects of a fresh `await plugin(input)`
@@ -27,11 +33,25 @@ beforeEach(() => {
   // cannot short-circuit init and serve stale cached hooks tied to a different
   // XDG_STATE_HOME.
   _resetPluginSingleton()
+
+  const homeDir = mkdtempSync(join(tmpdir(), 'plugin-init-home-'))
+  const xdgCacheHome = mkdtempSync(join(tmpdir(), 'plugin-init-cache-'))
+  tempPaths.push(homeDir)
+  tempPaths.push(xdgCacheHome)
+  process.env.HOME = homeDir
+  process.env.XDG_CACHE_HOME = xdgCacheHome
+  process.env.OPENCODE_SESSION_ID = 'index-test-session'
+  closeRpcServer = undefined
 })
 
 afterEach(async () => {
+  await closeRpcServer?.()
+
   await cleanupAll()
 
+  process.env.HOME = originalHome
+  process.env.XDG_CACHE_HOME = originalXdgCacheHome
+  process.env.OPENCODE_SESSION_ID = originalSessionId
   process.env.XDG_STATE_HOME = originalXdgStateHome
 
   for (const tempPath of tempPaths.splice(0)) {
@@ -47,7 +67,7 @@ afterEach(async () => {
 })
 
 function makePluginInput(directory: string): PluginInput {
-  return {
+  const input = {
     client: {
       session: {
         prompt: async () => {},
@@ -77,6 +97,14 @@ function makePluginInput(directory: string): PluginInput {
     serverUrl: new URL('http://localhost:3000'),
     $: {} as PluginInput['$'],
   }
+
+  Object.defineProperty(input, '__captureRpcCleanup', {
+    value: (cleanup: () => Promise<void>) => {
+      closeRpcServer = cleanup
+    },
+  })
+
+  return input
 }
 
 describe('plugin init lifecycle', () => {
@@ -101,6 +129,59 @@ describe('plugin init lifecycle', () => {
     expect(stat.mode & 0o777).toBe(0o700)
 
     // And tools dispatch happened after reap (proves init ran to completion)
+    expect(Object.keys(result.tool ?? {}).sort()).toEqual([
+      'copilot_cancel',
+      'copilot_delegate',
+      'copilot_output',
+    ])
+  })
+
+  it('starts the RPC server during plugin init and cleans it up on beforeExit', async () => {
+    const xdgState = mkdtempSync(join(tmpdir(), 'plugin-init-rpc-xdg-'))
+    tempPaths.push(xdgState)
+    process.env.XDG_STATE_HOME = xdgState
+
+    const input = makePluginInput(process.cwd())
+    const result = await plugin(input)
+
+    const portFilePath = join(
+      process.env.XDG_CACHE_HOME ?? join(process.env.HOME ?? '', '.cache'),
+      'opencode',
+      'copilot-delegate',
+      process.env.OPENCODE_SESSION_ID ?? '',
+      'server-port.json',
+    )
+
+    expect(Object.keys(result.tool ?? {}).sort()).toEqual([
+      'copilot_cancel',
+      'copilot_delegate',
+      'copilot_output',
+    ])
+    expect(existsSync(portFilePath)).toBe(true)
+    expect(
+      PortFileSchema.parse(JSON.parse(readFileSync(portFilePath, 'utf8'))),
+    ).toEqual({
+      port: expect.any(Number),
+      pid: process.pid,
+      token: expect.any(String),
+    })
+
+    await closeRpcServer?.()
+
+    expect(existsSync(portFilePath)).toBe(false)
+  })
+
+  it('returns tools when RPC startup fails', async () => {
+    const xdgCacheFile = join(
+      process.env.XDG_CACHE_HOME ?? process.env.HOME ?? tmpdir(),
+      'cache-file',
+    )
+    writeFileSync(xdgCacheFile, 'not a directory')
+    process.env.XDG_CACHE_HOME = xdgCacheFile
+
+    const input = makePluginInput(process.cwd())
+    const result = await plugin(input)
+
     expect(Object.keys(result.tool ?? {}).sort()).toEqual([
       'copilot_cancel',
       'copilot_delegate',

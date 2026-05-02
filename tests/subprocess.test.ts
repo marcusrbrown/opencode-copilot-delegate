@@ -299,6 +299,10 @@ describe('subprocess runtime', () => {
 
       // When cancellation is requested
       task.abortController.abort()
+
+      // Then the task remains visible as cancelling until the child exits
+      expect(task.status).toBe('cancelling')
+
       await task.completionPromise
 
       // Then the process tree is gone and the task is marked cancelled

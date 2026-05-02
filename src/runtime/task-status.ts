@@ -10,9 +10,17 @@ const TERMINAL_STATUSES = new Set<TaskStatus>([
   'failed',
   'cancelled',
 ])
+const CANCELLING_STATUS: TaskStatus = 'cancelling'
 
 function isTerminal(s: TaskStatus): boolean {
   return TERMINAL_STATUSES.has(s)
+}
+
+function isCancellationFinalization(
+  currentStatus: TaskStatus,
+  newStatus: TaskStatus,
+): boolean {
+  return currentStatus === CANCELLING_STATUS && newStatus === 'cancelled'
 }
 
 /**
@@ -30,6 +38,13 @@ export function setStatus(
   options?: SetStatusOptions,
 ): void {
   if (isTerminal(task.status)) {
+    return
+  }
+
+  if (
+    task.status === CANCELLING_STATUS &&
+    !isCancellationFinalization(task.status, newStatus)
+  ) {
     return
   }
 

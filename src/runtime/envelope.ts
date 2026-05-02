@@ -9,7 +9,12 @@
 import type { ParsedEvent } from './jsonl-parser'
 
 /** Status of a delegated Copilot task. */
-export type TaskStatus = 'running' | 'complete' | 'failed' | 'cancelled'
+export type TaskStatus =
+  | 'running'
+  | 'cancelling'
+  | 'complete'
+  | 'failed'
+  | 'cancelled'
 
 /** Summary of a single tool call made during the Copilot session. */
 export type ToolCallSummary = {
@@ -54,6 +59,10 @@ export type OutputEnvelope = {
   error?: string
   timed_out?: boolean
   events_count: number
+}
+
+function outputStatus(status: TaskStatus): OutputEnvelope['status'] {
+  return status === 'cancelling' ? 'cancelled' : status
 }
 
 /** Extract the last non-empty assistant message content from events. */
@@ -130,7 +139,7 @@ export function buildEnvelope(input: EnvelopeInput): OutputEnvelope {
 
   const envelope: OutputEnvelope = {
     task_id: taskId,
-    status,
+    status: outputStatus(status),
     duration_ms: durationMs,
     events_count: events.length,
   }

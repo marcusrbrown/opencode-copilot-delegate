@@ -150,7 +150,7 @@ export function spawnCopilot(
         return
       }
 
-      setStatus(task, 'cancelled', { pidFilePath: opts.pidFilePath })
+      setStatus(task, 'cancelling', { pidFilePath: opts.pidFilePath })
       killProcessTree(task.pid).catch(() => {
         // Kill failure after abort is non-fatal — process may already be dead
       })
@@ -166,7 +166,14 @@ export function spawnCopilot(
     })
 
     child.once('close', (code) => {
-      finalizeTask(task, code, stderrText, opts.pidFilePath)
+      if (task.status === 'cancelling') {
+        setStatus(task, 'cancelled', { pidFilePath: opts.pidFilePath })
+        task.endedAt = Date.now()
+        task.exitCode = code ?? undefined
+        assignFinalMessage(task)
+      } else {
+        finalizeTask(task, code, stderrText, opts.pidFilePath)
+      }
       resolve()
     })
   })

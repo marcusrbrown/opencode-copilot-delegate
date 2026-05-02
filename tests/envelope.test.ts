@@ -339,6 +339,17 @@ describe('buildEnvelope', () => {
       expect(envelope.status).toBe('cancelled')
     })
 
+    it('should expose cancelling tasks as cancelled in public output envelopes', () => {
+      // Given a task in the internal cancellation transition state
+      const input = makeInput({ status: 'cancelling' })
+
+      // When the public output envelope is built
+      const envelope = buildEnvelope(input)
+
+      // Then copilot_output keeps the existing cancelled public contract
+      expect(envelope.status).toBe('cancelled')
+    })
+
     it('should set timed_out when specified', () => {
       // Given a timed out input
       const input = makeInput({ status: 'failed', timedOut: true })

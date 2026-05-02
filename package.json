@@ -5,8 +5,27 @@
   "type": "module",
   "main": "dist/index.js",
   "types": "dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./plugin": {
+      "types": "./dist/index.d.ts",
+      "import": "./dist/index.js"
+    },
+    "./tui": {
+      "types": "./dist/tui/index.d.ts",
+      "import": "./dist/tui/index.js"
+    }
+  },
+  "oc-plugin": [
+    "server",
+    "tui"
+  ],
   "files": [
     "dist",
+    "src/tui",
     "README.md",
     "LICENSE",
     "CHANGELOG.md"
@@ -46,10 +65,11 @@
   },
   "scripts": {
     "clean": "rimraf dist",
-    "build": "bun run clean && bun build src/index.ts --outdir dist --target bun --external @opencode-ai/plugin && tsc --emitDeclarationOnly --noEmit false",
+    "build": "bun run clean && bun scripts/build.ts && tsc --emitDeclarationOnly --noEmit false",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "test:unit": "bun test tests/*.test.ts",
+    "test:tui": "bun test --preload @opentui/solid/preload src/tui/__tests__/*.test.ts src/tui/__tests__/*.test.tsx",
     "test:integration": "bun test tests/integration/",
     "lint": "biome check .",
     "fix": "biome check . --write",
@@ -58,7 +78,10 @@
     "publish-changesets": "bun run build && changeset publish"
   },
   "dependencies": {
+    "@opentui/core": "0.1.105",
+    "@opentui/solid": "0.1.105",
     "fkill": "10.0.3",
+    "solid-js": "1.9.11",
     "zod": "^4.3.0"
   },
   "overrides": {

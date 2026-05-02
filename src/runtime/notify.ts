@@ -23,7 +23,7 @@ export type NotifyClient = {
       }
     }) => Promise<unknown>
   }
-  tui: {
+  tui?: {
     showToast: (opts: {
       body: {
         message: string
@@ -75,6 +75,26 @@ function decrementInFlight(parentSessionID: string): number {
 /** Reset all counters (for testing only). */
 export function resetInFlightCounters(): void {
   inFlightCounters.clear()
+}
+
+export async function notifySpawn(
+  client: NotifyClient,
+  taskId: string,
+): Promise<void> {
+  if (!client.tui) {
+    return
+  }
+
+  try {
+    await client.tui.showToast({
+      body: {
+        message: `Copilot delegation ${taskId} started`,
+        variant: 'info',
+      },
+    })
+  } catch {
+    // Toast failure is non-critical
+  }
 }
 
 /** Format duration in human-readable form. */
@@ -168,7 +188,7 @@ export async function notifyCompletion(
         ? `Copilot delegation ${task.taskId} completed`
         : `Copilot delegation ${task.taskId} ${task.status}`
 
-    client.tui.showToast({
+    client.tui?.showToast({
       body: { message: toastMessage, variant },
     })
   } catch {
