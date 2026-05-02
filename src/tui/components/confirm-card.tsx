@@ -249,7 +249,7 @@ export function ConfirmCard(props: ConfirmCardProps) {
           ref={cancelText}
           onMouseUp={() => {
             focusCancel()
-            props.onCancel()
+            closeToList()
           }}
         >
           Keep Running

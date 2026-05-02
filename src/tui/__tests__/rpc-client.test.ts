@@ -23,6 +23,7 @@ type RpcClientModule = {
     baseDir?: string
     sessionDiscriminator?: string
     fetchImpl?: typeof fetch
+    requestTimeoutMs?: number
   }): RpcClient
   RpcUnreachableError: ErrorClass
   RpcServerError: ErrorClass
@@ -465,5 +466,42 @@ describe('tui rpc client', () => {
     expect(capturedSignal?.aborted).toBe(true)
     expect(error).toBeInstanceOf(rpcClientModule.RpcUnreachableError)
     expect((error as Error).message).toContain('aborted')
+  })
+
+  it('times out in-flight requests that never resolve', async () => {
+    const rpcClientModule = await loadRpcClientModule()
+    const baseDir = makeCacheDir()
+    let capturedSignal: AbortSignal | undefined
+
+    writePortFile(baseDir, 'timeout-session', {
+      port: 43123,
+      pid: process.pid,
+      token: 'token-timeout',
+    })
+
+    const client = rpcClientModule.createRpcClient({
+      baseDir,
+      sessionDiscriminator: 'timeout-session',
+      requestTimeoutMs: 1,
+      fetchImpl: ((_input, init) => {
+        capturedSignal = init?.signal as AbortSignal | undefined
+
+        return new Promise<Response>((_resolve, reject) => {
+          capturedSignal?.addEventListener(
+            'abort',
+            () => {
+              reject(new Error('aborted by timeout'))
+            },
+            { once: true },
+          )
+        })
+      }) as typeof fetch,
+    })
+
+    const error = await captureError(client.tasksList())
+
+    expect(capturedSignal?.aborted).toBe(true)
+    expect(error).toBeInstanceOf(rpcClientModule.RpcUnreachableError)
+    expect((error as Error).message).toContain('aborted by timeout')
   })
 })

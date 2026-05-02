@@ -9,7 +9,8 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, dirname, join } from 'node:path'
+import { cancelTaskById } from '../src/runtime/cancel-helper'
 import type { ParsedEvent } from '../src/runtime/jsonl-parser'
 import {
   HealthResponseSchema,
@@ -201,6 +202,40 @@ describe('rpc server', () => {
     })
   })
 
+  it('returns a structured 500 when task listing throws', async () => {
+    const portFileBaseDir = makeCacheDir()
+    const throwingServer = await startRpcServer({
+      taskRegistry: {
+        getAllTasks: () => {
+          throw new Error('registry failed')
+        },
+      },
+      cancelTaskById: () => ({ cancelled: true }),
+      portFileBaseDir,
+      sessionDiscriminator: 'session-throwing',
+    })
+    const wrapped: StartedTestServer = {
+      ...throwingServer,
+      portFilePath: join(
+        portFileBaseDir,
+        'session-throwing',
+        'server-port.json',
+      ),
+      closed: false,
+      close: async () => {
+        if (wrapped.closed) return
+        wrapped.closed = true
+        await throwingServer.close()
+      },
+    }
+    startedServers.push(wrapped)
+
+    const response = await postJson(wrapped.port, '/tasks/list', wrapped.token)
+
+    expect(response.status).toBe(500)
+    expect(await response.json()).toEqual({ error: 'internal server error' })
+  })
+
   it('cancels a task through the injected cancel function idempotently', async () => {
     const cancelledTaskIds: string[] = []
     const server = await startTestServer({
@@ -228,6 +263,44 @@ describe('rpc server', () => {
     expect(cancelledTaskIds).toEqual(['cpl_task-1', 'cpl_task-1'])
   })
 
+  it('cancels a running task through the real cancel helper', async () => {
+    const abortController = new AbortController()
+    let abortCount = 0
+    abortController.signal.addEventListener('abort', () => {
+      abortCount += 1
+    })
+
+    const server = await startTestServer({
+      cancelTaskById: (taskId) =>
+        cancelTaskById(
+          {
+            getTask: (requestedTaskId) => {
+              expect(requestedTaskId).toBe(taskId)
+              return {
+                abortController,
+                status: 'running',
+              }
+            },
+          },
+          taskId,
+        ),
+    })
+
+    const response = await postJson(
+      server.port,
+      '/tasks/cancel',
+      server.token,
+      {
+        taskId: 'cpl_real-helper',
+      },
+    )
+
+    expect(response.status).toBe(200)
+    expect(await response.json()).toEqual({ cancelled: true })
+    expect(abortController.signal.aborted).toBe(true)
+    expect(abortCount).toBe(1)
+  })
+
   it('returns 404 when canceling an unknown task', async () => {
     const server = await startTestServer({
       cancelTaskById: () => ({ cancelled: false, error: 'no such task' }),
@@ -247,6 +320,26 @@ describe('rpc server', () => {
       cancelled: false,
       error: 'no such task',
     })
+  })
+
+  it('returns a structured 500 when cancellation throws', async () => {
+    const server = await startTestServer({
+      cancelTaskById: () => {
+        throw new Error('cancel failed')
+      },
+    })
+
+    const response = await postJson(
+      server.port,
+      '/tasks/cancel',
+      server.token,
+      {
+        taskId: 'cpl_task-1',
+      },
+    )
+
+    expect(response.status).toBe(500)
+    expect(await response.json()).toEqual({ error: 'internal server error' })
   })
 
   it('rejects malformed JSON and invalid cancel request bodies', async () => {
@@ -358,19 +451,42 @@ describe('rpc server', () => {
     expect(crossToken.status).toBe(401)
   })
 
-  it('removes stale files from the discriminator directory on startup', async () => {
+  it('rejects unsafe session discriminators before writing a port file', async () => {
+    const portFileBaseDir = makeCacheDir()
+    const unsafeSegment = `escape-${basename(portFileBaseDir)}`
+
+    await expect(
+      startRpcServer({
+        taskRegistry: { getAllTasks: () => [] },
+        cancelTaskById: () => ({ cancelled: true }),
+        portFileBaseDir,
+        sessionDiscriminator: `../${unsafeSegment}`,
+      }),
+    ).rejects.toThrow('invalid session discriminator')
+
+    expect(existsSync(join(dirname(portFileBaseDir), unsafeSegment))).toBe(
+      false,
+    )
+  })
+
+  it('removes stale port files but preserves unrelated files in the discriminator directory', async () => {
     const portFileBaseDir = makeCacheDir()
     const staleDir = join(portFileBaseDir, 'session-stale')
-    const staleFile = join(staleDir, 'old-server-port.json')
+    const stalePortFile = join(staleDir, 'server-port.json')
+    const staleTempFile = join(staleDir, 'server-port.json.tmp.abc123')
+    const unrelatedFile = join(staleDir, 'notes.txt')
     mkdirSync(staleDir, { recursive: true })
-    writeFileSync(staleFile, '{}')
+    writeFileSync(stalePortFile, '{}')
+    writeFileSync(staleTempFile, '{}')
+    writeFileSync(unrelatedFile, 'keep me')
 
     const server = await startTestServer({
       portFileBaseDir,
       sessionDiscriminator: 'session-stale',
     })
 
-    expect(existsSync(staleFile)).toBe(false)
+    expect(existsSync(staleTempFile)).toBe(false)
+    expect(readFileSync(unrelatedFile, 'utf8')).toBe('keep me')
     expect(existsSync(server.portFilePath)).toBe(true)
   })
 

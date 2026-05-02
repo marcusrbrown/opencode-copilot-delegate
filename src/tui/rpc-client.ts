@@ -18,6 +18,7 @@ type CreateRpcClientOptions = {
   baseDir?: string
   sessionDiscriminator?: string
   fetchImpl?: typeof fetch
+  requestTimeoutMs?: number
 }
 
 type RequestOptions<T> = {
@@ -246,10 +247,35 @@ function validateCancelTaskId(taskId: string): { taskId: string } {
   return validated.data
 }
 
+function createRequestSignal(
+  parentSignal: AbortSignal,
+  timeoutMs: number,
+): { cleanup: () => void; signal: AbortSignal } {
+  const requestAbortController = new AbortController()
+  const timeoutHandle = globalThis.setTimeout(() => {
+    requestAbortController.abort()
+  }, timeoutMs)
+  const abortRequest = () => requestAbortController.abort()
+  parentSignal.addEventListener('abort', abortRequest, { once: true })
+
+  if (parentSignal.aborted) {
+    requestAbortController.abort()
+  }
+
+  return {
+    cleanup() {
+      globalThis.clearTimeout(timeoutHandle)
+      parentSignal.removeEventListener('abort', abortRequest)
+    },
+    signal: requestAbortController.signal,
+  }
+}
+
 export function createRpcClient(options: CreateRpcClientOptions = {}) {
   const portFilePath = resolvePortFilePath(options)
   const fetchImpl = options.fetchImpl ?? fetch
   const abortController = new AbortController()
+  const requestTimeoutMs = options.requestTimeoutMs ?? 5_000
 
   async function request<T>(requestOptions: RequestOptions<T>): Promise<T> {
     const portFile = await readPortFile(portFilePath)
@@ -267,6 +293,11 @@ export function createRpcClient(options: CreateRpcClientOptions = {}) {
 
     let response: Response
 
+    const requestSignal = createRequestSignal(
+      abortController.signal,
+      requestTimeoutMs,
+    )
+
     try {
       response = await fetchImpl(url, {
         method: requestOptions.method,
@@ -275,13 +306,15 @@ export function createRpcClient(options: CreateRpcClientOptions = {}) {
           requestOptions.method === 'POST'
             ? JSON.stringify(requestOptions.body ?? {})
             : undefined,
-        signal: abortController.signal,
+        signal: requestSignal.signal,
       })
     } catch (error) {
       throw new RpcUnreachableError(
         `Failed to reach Copilot delegate RPC at ${url}: ${errorMessage(error)}`,
         { cause: error },
       )
+    } finally {
+      requestSignal.cleanup()
     }
 
     if (!response.ok) {

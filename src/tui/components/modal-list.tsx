@@ -186,6 +186,7 @@ export function ModalList(props: ModalListProps) {
   const now = { value: clock.now() }
   const state: { value: ViewState } = { value: { kind: 'loading' } }
   const focusedIndex = { value: 0 }
+  let disposed = false
 
   let headerText: TextRenderable | undefined
   let footerText: TextRenderable | undefined
@@ -214,6 +215,10 @@ export function ModalList(props: ModalListProps) {
   })
 
   const renderView = () => {
+    if (disposed) {
+      return
+    }
+
     const currentState = state.value
     const currentRefs = refs()
 
@@ -245,6 +250,11 @@ export function ModalList(props: ModalListProps) {
   const loadTasks = async () => {
     try {
       const response = await props.rpc.tasksList()
+
+      if (disposed) {
+        return
+      }
+
       const initialIndex = props.initialTaskId
         ? response.tasks.findIndex(
             (task) => task.taskId === props.initialTaskId,
@@ -264,6 +274,10 @@ export function ModalList(props: ModalListProps) {
 
       state.value = { kind: 'ready', tasks: response.tasks }
     } catch (error) {
+      if (disposed) {
+        return
+      }
+
       state.value = { kind: 'error', message: errorMessage(error) }
     }
 
@@ -320,6 +334,7 @@ export function ModalList(props: ModalListProps) {
   renderer.keyInput.on('keypress', handleKeyPress)
 
   onCleanup(() => {
+    disposed = true
     renderer.keyInput.off('keypress', handleKeyPress)
     clock.clearInterval(intervalHandle)
   })

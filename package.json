@@ -15,8 +15,8 @@
       "import": "./dist/index.js"
     },
     "./tui": {
-      "types": "./src/tui/index.tsx",
-      "import": "./src/tui/index.tsx"
+      "types": "./dist/tui/index.d.ts",
+      "import": "./dist/tui/index.js"
     }
   },
   "oc-plugin": [
@@ -65,10 +65,11 @@
   },
   "scripts": {
     "clean": "rimraf dist",
-    "build": "bun run clean && bun build src/index.ts --outdir dist --target bun --external @opencode-ai/plugin && tsc --emitDeclarationOnly --noEmit false",
+    "build": "bun run clean && bun build src/index.ts --outdir dist --target bun --external @opencode-ai/plugin && bun build src/tui/index.tsx --outdir dist/tui --target bun --external @opencode-ai/plugin --external @opencode-ai/plugin/tui --external @opentui/core --external @opentui/solid --external solid-js && tsc --emitDeclarationOnly --noEmit false",
     "typecheck": "tsc --noEmit",
     "test": "bun test",
     "test:unit": "bun test tests/*.test.ts",
+    "test:tui": "bun test --preload @opentui/solid/preload src/tui/__tests__/*.test.ts src/tui/__tests__/*.test.tsx",
     "test:integration": "bun test tests/integration/",
     "lint": "biome check .",
     "fix": "biome check . --write",

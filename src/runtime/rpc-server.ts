@@ -1,6 +1,6 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { readFileSync } from 'node:fs'
-import { chmod, mkdir, rename, rm, writeFile } from 'node:fs/promises'
+import { chmod, mkdir, readdir, rename, rm, writeFile } from 'node:fs/promises'
 import {
   createServer,
   type IncomingMessage,
@@ -85,6 +85,18 @@ function defaultSessionDiscriminator(): string {
   return process.env.OPENCODE_SESSION_ID ?? String(process.pid)
 }
 
+function assertSafeSessionDiscriminator(discriminator: string): void {
+  if (
+    discriminator.length === 0 ||
+    discriminator === '.' ||
+    discriminator === '..' ||
+    discriminator.includes('/') ||
+    discriminator.includes('\\')
+  ) {
+    throw new Error('invalid session discriminator')
+  }
+}
+
 function jsonResponse(
   response: ServerResponse,
   body: unknown,
@@ -164,6 +176,28 @@ async function writePortFile(
 
 async function removePortFile(portFilePath: string): Promise<void> {
   await rm(portFilePath, { force: true })
+}
+
+async function removeStalePortFiles(portFileDir: string): Promise<void> {
+  let entries: string[]
+  try {
+    entries = await readdir(portFileDir)
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return
+    }
+    throw error
+  }
+
+  await Promise.all(
+    entries
+      .filter(
+        (entry) =>
+          entry === 'server-port.json' ||
+          entry.startsWith('server-port.json.tmp.'),
+      )
+      .map((entry) => rm(join(portFileDir, entry), { force: true })),
+  )
 }
 
 type BodyParseResult =
@@ -281,12 +315,45 @@ async function handleTasksCancel(
   jsonResponse(response, result)
 }
 
+async function handleRpcRequest(
+  request: IncomingMessage,
+  response: ServerResponse,
+  token: string,
+  options: StartRpcServerOptions,
+  now: () => number,
+) {
+  const url = new URL(request.url ?? '/', 'http://127.0.0.1')
+
+  if (url.pathname === '/health' && request.method === 'GET') {
+    handleHealth(response)
+    return
+  }
+
+  if (!isAuthorized(request, token)) {
+    jsonResponse(response, { error: 'unauthorized' }, 401)
+    return
+  }
+
+  if (url.pathname === '/tasks/list' && request.method === 'POST') {
+    handleTasksList(response, options.taskRegistry, now)
+    return
+  }
+
+  if (url.pathname === '/tasks/cancel' && request.method === 'POST') {
+    await handleTasksCancel(request, response, options.cancelTaskById)
+    return
+  }
+
+  jsonResponse(response, { error: 'not found' }, 404)
+}
+
 export async function startRpcServer(
   options: StartRpcServerOptions,
 ): Promise<StartedRpcServer> {
   const portFileBaseDir = options.portFileBaseDir ?? defaultPortFileBaseDir()
   const sessionDiscriminator =
     options.sessionDiscriminator ?? defaultSessionDiscriminator()
+  assertSafeSessionDiscriminator(sessionDiscriminator)
   const portFilePath = join(
     portFileBaseDir,
     sessionDiscriminator,
@@ -297,30 +364,14 @@ export async function startRpcServer(
   const now = options.now ?? Date.now
   let portFileWritten = false
 
-  const server = createServer(async (request, response) => {
-    const url = new URL(request.url ?? '/', 'http://127.0.0.1')
-
-    if (url.pathname === '/health' && request.method === 'GET') {
-      handleHealth(response)
-      return
-    }
-
-    if (!isAuthorized(request, token)) {
-      jsonResponse(response, { error: 'unauthorized' }, 401)
-      return
-    }
-
-    if (url.pathname === '/tasks/list' && request.method === 'POST') {
-      handleTasksList(response, options.taskRegistry, now)
-      return
-    }
-
-    if (url.pathname === '/tasks/cancel' && request.method === 'POST') {
-      await handleTasksCancel(request, response, options.cancelTaskById)
-      return
-    }
-
-    jsonResponse(response, { error: 'not found' }, 404)
+  const server = createServer((request, response) => {
+    void handleRpcRequest(request, response, token, options, now).catch(() => {
+      if (!response.headersSent) {
+        jsonResponse(response, { error: 'internal server error' }, 500)
+      } else {
+        response.destroy()
+      }
+    })
   })
 
   const close = async (): Promise<void> => {
@@ -343,7 +394,9 @@ export async function startRpcServer(
   }
 
   try {
-    await rm(portFileDir, { force: true, recursive: true })
+    await mkdir(portFileDir, { recursive: true, mode: 0o700 })
+    await chmod(portFileDir, 0o700)
+    await removeStalePortFiles(portFileDir)
 
     const port = await new Promise<number>((resolve, reject) => {
       server.once('error', reject)

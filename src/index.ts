@@ -19,7 +19,13 @@ import { createCancelTool } from './tools/cancel'
 import { createDelegateTool } from './tools/delegate'
 import { createOutputTool } from './tools/output'
 
-function wireRpcServerCleanup(closeRpcServer: () => Promise<void>): void {
+type PluginInputWithTestHooks = PluginInput & {
+  __captureRpcCleanup?: (cleanup: () => Promise<void>) => void
+}
+
+export function wireRpcServerCleanup(
+  closeRpcServer: () => Promise<void>,
+): () => Promise<void> {
   let closePromise: Promise<void> | undefined
 
   const closeOnce = (): Promise<void> => {
@@ -47,6 +53,8 @@ function wireRpcServerCleanup(closeRpcServer: () => Promise<void>): void {
 
   process.on('beforeExit', onBeforeExit)
   process.once('SIGTERM', onSigterm)
+
+  return closeOnce
 }
 
 function getAgentsDirectories(directory: string): {
@@ -59,7 +67,8 @@ function getAgentsDirectories(directory: string): {
   }
 }
 
-async function initializePlugin({ client, directory }: PluginInput) {
+async function initializePlugin(input: PluginInputWithTestHooks) {
+  const { client, directory } = input
   const agents = discoverAgents(getAgentsDirectories(directory))
   const delegateDescription = buildDescription(agents)
 
@@ -83,13 +92,32 @@ async function initializePlugin({ client, directory }: PluginInput) {
     // mkdir or reap failure must not block plugin init.
   }
 
-  // OpenCode awaits the async plugin factory before registering tools, so the
-  // RPC server and port file are ready before any tool can run.
-  const rpcServer = await startRpcServer({
-    taskRegistry: { getAllTasks },
-    cancelTaskById: (taskId) => cancelTaskById({ getTask }, taskId),
-  })
-  wireRpcServerCleanup(rpcServer.close)
+  // RPC/TUI status is additive. If localhost startup fails, the server plugin
+  // must still register its existing tools.
+  try {
+    const rpcServer = await startRpcServer({
+      taskRegistry: { getAllTasks },
+      cancelTaskById: (taskId) => cancelTaskById({ getTask }, taskId),
+    })
+    const closeRpcServer = wireRpcServerCleanup(rpcServer.close)
+    input.__captureRpcCleanup?.(closeRpcServer)
+  } catch (error) {
+    const message = `[copilot-delegate] failed to start RPC server: ${error}`
+    console.warn(message)
+    try {
+      client.app
+        .log({
+          body: {
+            service: 'copilot-delegate',
+            level: 'warn',
+            message,
+          },
+        })
+        .catch(() => {})
+    } catch {
+      // Logging is best-effort; RPC startup failure must not block tools.
+    }
+  }
 
   return {
     tool: {

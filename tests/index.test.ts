@@ -13,7 +13,6 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { setTimeout as delay } from 'node:timers/promises'
 import type { PluginInput } from '@opencode-ai/plugin'
 import plugin from '../src/index'
 import { _resetPluginSingleton } from '../src/runtime/plugin-singleton'
@@ -25,6 +24,7 @@ const originalHome = process.env.HOME
 const originalXdgCacheHome = process.env.XDG_CACHE_HOME
 const originalSessionId = process.env.OPENCODE_SESSION_ID
 const originalXdgStateHome = process.env.XDG_STATE_HOME
+let closeRpcServer: (() => Promise<void>) | undefined
 
 beforeEach(() => {
   // Each lifecycle test asserts side effects of a fresh `await plugin(input)`
@@ -41,11 +41,11 @@ beforeEach(() => {
   process.env.HOME = homeDir
   process.env.XDG_CACHE_HOME = xdgCacheHome
   process.env.OPENCODE_SESSION_ID = 'index-test-session'
+  closeRpcServer = undefined
 })
 
 afterEach(async () => {
-  process.emit('beforeExit', 0)
-  await delay(0)
+  await closeRpcServer?.()
 
   await cleanupAll()
 
@@ -67,7 +67,7 @@ afterEach(async () => {
 })
 
 function makePluginInput(directory: string): PluginInput {
-  return {
+  const input = {
     client: {
       session: {
         prompt: async () => {},
@@ -97,6 +97,14 @@ function makePluginInput(directory: string): PluginInput {
     serverUrl: new URL('http://localhost:3000'),
     $: {} as PluginInput['$'],
   }
+
+  Object.defineProperty(input, '__captureRpcCleanup', {
+    value: (cleanup: () => Promise<void>) => {
+      closeRpcServer = cleanup
+    },
+  })
+
+  return input
 }
 
 describe('plugin init lifecycle', () => {
@@ -158,10 +166,27 @@ describe('plugin init lifecycle', () => {
       token: expect.any(String),
     })
 
-    process.emit('beforeExit', 0)
-    await delay(20)
+    await closeRpcServer?.()
 
     expect(existsSync(portFilePath)).toBe(false)
+  })
+
+  it('returns tools when RPC startup fails', async () => {
+    const xdgCacheFile = join(
+      process.env.XDG_CACHE_HOME ?? process.env.HOME ?? tmpdir(),
+      'cache-file',
+    )
+    writeFileSync(xdgCacheFile, 'not a directory')
+    process.env.XDG_CACHE_HOME = xdgCacheFile
+
+    const input = makePluginInput(process.cwd())
+    const result = await plugin(input)
+
+    expect(Object.keys(result.tool ?? {}).sort()).toEqual([
+      'copilot_cancel',
+      'copilot_delegate',
+      'copilot_output',
+    ])
   })
 
   it('returns tool dispatch when mkdir throws', async () => {
