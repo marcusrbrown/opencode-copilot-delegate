@@ -41,6 +41,9 @@ describe('package exports', () => {
   it('exports an OpenCode TUI plugin module from the built TUI entrypoint', async () => {
     const builtTui = await import(join(process.cwd(), 'dist/tui/index.js'))
 
-    expect(builtTui.default).toEqual({ tui: expect.any(Function) })
+    expect(builtTui.default).toEqual({
+      id: 'opencode-copilot-delegate',
+      tui: expect.any(Function),
+    })
   })
 })

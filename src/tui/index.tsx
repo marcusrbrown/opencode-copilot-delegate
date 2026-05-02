@@ -58,4 +58,6 @@ const tui: TuiPlugin = async (api) => {
   })
 }
 
-export default { tui } satisfies TuiPluginModule
+const id = 'opencode-copilot-delegate'
+
+export default { id, tui } satisfies TuiPluginModule

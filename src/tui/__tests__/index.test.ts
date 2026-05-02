@@ -16,6 +16,7 @@ type TuiPlugin = (
 ) => Promise<void>
 
 type TuiPluginModule = {
+  id: string
   tui: TuiPlugin
 }
 
@@ -54,7 +55,10 @@ async function loadTuiPlugin(): Promise<TuiPlugin> {
   const pluginModule = Reflect.get(module, 'default') as TuiPluginModule
   const plugin = pluginModule.tui
 
-  expect(pluginModule).toEqual({ tui: expect.any(Function) })
+  expect(pluginModule).toEqual({
+    id: 'opencode-copilot-delegate',
+    tui: expect.any(Function),
+  })
 
   expect(typeof plugin).toBe('function')
 
