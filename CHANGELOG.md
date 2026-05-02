@@ -1,5 +1,11 @@
 # opencode-copilot-delegate
 
+## 0.10.0
+
+### Minor Changes
+
+- e84f127: Prepare the package for an optional Copilot status TUI by adding server and TUI plugin metadata plus dedicated package exports.
+
 ## 0.9.0
 
 ### Minor Changes
