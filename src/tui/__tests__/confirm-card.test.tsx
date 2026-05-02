@@ -423,6 +423,52 @@ describe('confirm card', () => {
     expect(captureCharFrame()).toContain('Cancel failed: rpc offline')
   })
 
+  it('does not intercept escape while still in the confirm state', async () => {
+    const ConfirmCard = await loadConfirmCard()
+
+    expect(typeof ConfirmCard).toBe('function')
+    if (!ConfirmCard) return
+
+    let confirmed = 0
+    let keptRunning = 0
+    let dismissedAfterError = 0
+
+    const { renderOnce, captureCharFrame, mockInput, renderer } =
+      await testRender(
+        () => (
+          <ConfirmCard
+            task={makeTask('cpl_escape_confirm')}
+            rpc={{
+              tasksCancel: async () => ({ cancelled: true }),
+            }}
+            onConfirm={() => {
+              confirmed += 1
+            }}
+            onCancel={() => {
+              keptRunning += 1
+            }}
+            onDismissAfterError={() => {
+              dismissedAfterError += 1
+            }}
+          />
+        ),
+        { width: 80, height: 20, useThread: false },
+      )
+
+    await renderOnce()
+    await settle(renderOnce, () => renderer.idle())
+
+    mockInput.pressEscape()
+    await new Promise((resolve) => setTimeout(resolve, 30))
+    await settle(renderOnce, () => renderer.idle())
+
+    expect(confirmed).toBe(0)
+    expect(keptRunning).toBe(0)
+    expect(dismissedAfterError).toBe(0)
+    expect(captureCharFrame()).toContain('Cancel Task')
+    expect(captureCharFrame()).toContain('Keep Running')
+  })
+
   it('ignores repeated confirm activations while cancellation is in flight', async () => {
     const ConfirmCard = await loadConfirmCard()
 
