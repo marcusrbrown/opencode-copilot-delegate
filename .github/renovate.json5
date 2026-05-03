@@ -18,14 +18,5 @@
       matchPackageNames: ['@opencode-ai/{/,}**'],
       semanticCommitType: 'build',
     },
-    {
-      description: 'Skip bun artifact updates due to containerbase permission conflict',
-      matchManagers: ['bun'],
-      skipArtifactsUpdate: true,
-    },
   ],
-  postUpgradeTasks: {
-    commands: ['bun install', 'bun run fix', 'bun run build'],
-    executionMode: 'branch',
-  },
 }
