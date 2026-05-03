@@ -305,6 +305,44 @@ Pattern matrix, each tuned for spawning from inside another agent (e.g. OpenCode
 ### 10.12 Resume / fork pattern
 *When:* prior `cpl_*` task was promising but interrupted. New delegation with `--resume=<sessionId>` + new prompt. Or `--connect=<sessionId>` to attach to a still-running task elsewhere. Useful for "continue what failed CI started."
 
+#### 10.12a Empirical capture against CLI 1.0.40 (continuity research, 2026-05-02)
+
+Captured for the v0.2.x continuity feature. Fixtures live at `tests/fixtures/connect-mismatch.jsonl` and `tests/fixtures/resume-mismatch.jsonl`.
+
+**`--resume=<uuid>` behavior — surprising, by design.**
+
+Per CLI help: *"Start a new session with a specific UUID."* Confirmed empirically:
+
+| Target | Result | `result.sessionId` |
+|---|---|---|
+| Known local UUID | True continuation of prior session | Matches requested |
+| **Unknown UUID** | **New session created using requested UUID as its ID** | **Matches requested (exactly)** |
+| Bare `--resume` (no value) | Fresh continuation with new UUID; does NOT pick up the most-recent session in our test | New UUID |
+
+Implication: `--resume=<unknown-uuid>` is NOT a "silent fallback" — it's an undocumented session-creation pathway that lets callers seed a session with a chosen UUID. A pre-flight `stat ~/.copilot/session-state/<uuid>/session.db` distinguishes "this is true continuity" from "this is a new session at the user-supplied UUID" — both succeed at the CLI level, but only the former is what users typically mean.
+
+**`--connect=<uuid>` behavior with `--no-remote` — degenerate.**
+
+`--connect` is a remote-session feature (per CLI help: *"Connect directly to a remote session"*). Combined with `--no-remote`:
+
+| Target | Result | `result.sessionId` |
+|---|---|---|
+| Unknown UUID, `--no-remote` | Silent fallback — fresh local session, no error | New UUID (≠ requested) |
+| Real local UUID, `--no-remote` | Same silent fallback — the connect target is ignored | New UUID (≠ requested) |
+
+The connect target is silently ignored under `--no-remote`. There is no error, no stderr, no JSONL event indicating the mismatch — only `result.sessionId` at session end reveals the divergence. **17 events fire before `result`** in both cases, including a full `assistant.message` round-trip with whatever the prompt requested.
+
+Implication for plugin design: `--connect` cannot be safely used in the `--no-remote` posture (which the plugin defaults to for security against third-party control). Either (a) drop `--no-remote` from connect's argv and accept the third-party-steerable risk, (b) defer `--connect` from the first slice and ship `--resume`-only, or (c) pre-flight-check that the target session is known to be remote/shared before launching. A real `--remote` connect against an active cloud session was not tested; behavior with `--remote` may differ.
+
+**No early session-identity event during connect handshake.**
+
+Across all 5 captures (5 different connect/resume permutations), checked every non-`result` event for `sessionId` at top level OR inside `.data`. **None present.** The `result` event is the only carrier of `sessionId`. This means there is no attach-time validation signal a plugin could use to detect a connect mismatch before tool calls or model output have already fired.
+
+**Other surface deltas vs 1.0.34:**
+
+- `session.mcp_servers_loaded` fires **3×** in 1.0.40 (was 1× in 1.0.34). Triplicate emission appears to be the new MCP-init pattern; treat as ephemeral and idempotent in any consumer that listens for it.
+- `user.message.data.transformedContent` is **multi-line** with literal `\n` characters embedded in the JSON string value, breaking one-JSON-object-per-line parsing on that line. The parser correctly returns `{ type: 'unknown' }` for the malformed line. Real-world repro on disk in both new fixtures (line 8). This is the same upstream bug warned about for older fixtures, now reliably reproducible.
+
 ---
 
 ## 11. Limitations and gotchas the plugin should document
