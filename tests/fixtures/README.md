@@ -4,10 +4,14 @@ Captured from live `copilot` CLI output for testing the JSONL parser.
 
 ## Provenance
 
-- **CLI version:** GitHub Copilot CLI 1.0.34
-- **Capture date:** 2026-04-23
-- **Model:** `claude-haiku-4.5` (happy-path, multi-tool); `nonexistent-model-xyz-404` (model-error)
-- **Command pattern:** `copilot -p "<prompt>" --output-format json -s --allow-all-tools --no-ask-user --model <model>`
+| Fixture | CLI version | Capture date | Notes |
+|---|---|---|---|
+| `happy-path.jsonl`, `multi-tool.jsonl`, `model-error.jsonl` | 1.0.34 | 2026-04-23 | Original parser-test set; `--model` switching variants |
+| `connect-mismatch.jsonl`, `resume-mismatch.jsonl` | 1.0.40 | 2026-05-02 | Continuity-feature research captures (Unit 3a) |
+
+**Command patterns:**
+- Original (1.0.34): `copilot -p "<prompt>" --output-format json -s --allow-all-tools --no-ask-user --model <model>`
+- Continuity (1.0.40): `copilot --connect=<id>` or `--resume=<id>` plus the same flags, with `--no-remote` added.
 
 ## Fixtures
 
@@ -23,7 +27,15 @@ Invalid model name triggers immediate exit. Only a single `session.mcp_server_st
 
 Prompt: "List all files in the src/ directory, then read package.json and tell me the package name". Multiple tool calls (`glob`, `view`), successful completion.
 
-**Note:** All lines are valid JSON. Copilot CLI may in some scenarios emit unescaped newlines inside JSON string values, which would break the one-JSON-object-per-line contract. If encountered at runtime, the parser returns `{ type: 'unknown' }` for malformed lines. Stream-level recovery (bracket-counting accumulation) is planned for the subprocess wrapper.
+**Note:** All lines are valid JSON. Copilot CLI may in some scenarios emit unescaped newlines inside JSON string values, which would break the one-JSON-object-per-line contract. If encountered at runtime, the parser returns `{ type: 'unknown' }` for malformed lines. Stream-level recovery (bracket-counting accumulation) is planned for the subprocess wrapper. The continuity captures (`connect-mismatch.jsonl`, `resume-mismatch.jsonl`) contain a real-world repro of this on line 8 (the `user.message` event's `transformedContent` field carries literal `\n` characters as actual newlines).
+
+### `connect-mismatch.jsonl` (18 lines, line 8 invalid by design)
+
+Command: `copilot --connect=00000000-... --no-remote -p "noop" --output-format json -s --allow-all-tools --no-ask-user`. Demonstrates the **silent-fallback** behavior of `--connect` when combined with `--no-remote`: the requested session ID is ignored and a fresh local session is created with a new UUID. Used by the continuity tools to motivate why connect requires careful tool-description warning rather than pre-launch validation. Exit code 0; empty stderr; `result.sessionId` does NOT match the requested `00000000-...` ID. 17 events fire before `result`.
+
+### `resume-mismatch.jsonl` (18 lines, line 8 invalid by design)
+
+Command: `copilot --resume=00000000-... --no-remote -p "noop" --output-format json -s --allow-all-tools --no-ask-user`. Demonstrates the **UUID-as-session-ID** behavior of `--resume`: when given a previously-unknown UUID, the CLI creates a new session that uses the requested UUID as its session ID (per CLI help: "Start a new session with a specific UUID"). Exit code 0; empty stderr; `result.sessionId` matches the requested ID exactly. The pre-flight `hasLocalCopilotSession` check distinguishes "resume continuation" (existing UUID) from "new session at user-supplied UUID" (unknown UUID) — both succeed at the CLI level, but only the former is true continuity.
 
 ## Sanitization
 
