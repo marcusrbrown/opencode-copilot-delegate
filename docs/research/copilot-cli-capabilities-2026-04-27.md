@@ -343,6 +343,23 @@ Across all 5 captures (5 different connect/resume permutations), checked every n
 - `session.mcp_servers_loaded` fires **3×** in 1.0.40 (was 1× in 1.0.34). Triplicate emission appears to be the new MCP-init pattern; treat as ephemeral and idempotent in any consumer that listens for it.
 - `user.message.data.transformedContent` is **multi-line** with literal `\n` characters embedded in the JSON string value, breaking one-JSON-object-per-line parsing on that line. The parser correctly returns `{ type: 'unknown' }` for the malformed line. Real-world repro on disk in both new fixtures (line 8). This is the same upstream bug warned about for older fixtures, now reliably reproducible.
 
+#### 10.12b Follow-up: `--connect` without `--no-remote` (CLI 1.0.40, captured 2026-05-02)
+
+Tested whether dropping `--no-remote` from connect's argv surfaces a clean attach signal at any layer:
+
+| Target | Argv | Result | `result.sessionId` | Stderr | Exit |
+|---|---|---|---|---|---|
+| Recently-completed local session | no `--no-remote` | Silent fallback, new UUID assigned | New UUID (≠ requested) | empty | 0 |
+| Unknown UUID `00000000-...` | no `--no-remote` | Silent fallback, new UUID assigned | New UUID (≠ requested) | empty | 0 |
+
+Dropping `--no-remote` does **nothing observable**. In both captures the CLI silently allocates a fresh UUID and completes a normal session at exit 0 with empty stderr. No error event in the JSONL stream, no early signal, no diagnostic. When asked the prompt *"Did this attach work? Reply with only the word YES or NO."*, the model itself replied "NO" — contextual inference, not a protocol-level signal, and not reliable as a programmatic guard.
+
+The remote-control mechanism behind `--connect` appears to require a session that is **actively running and listening** (two concurrent processes, one providing a connection-ready session). This cannot be replicated in the plugin's one-shot `-p` execution model.
+
+**Side finding:** `--share[=path]` is a **local markdown transcript export**, not a cloud-sharing primitive. CLI 1.0.40 has no `--share`-style remote-share flag. Any earlier assumption that `--share` produces a remotely-attachable session artifact was wrong.
+
+**Plan implication for the v0.2.x continuity slice:** `--connect` cannot be safely shipped as a first-slice tool. There is no flag combination, argv shape, or post-launch detection mechanism (other than `result.sessionId ≠ requested` after a full run has completed) that surfaces a connect mismatch. Defer `--connect` entirely; ship `--resume`-only. If a future CLI version introduces an early attach-failure event or a protocol-level signal for "this session is not connectable," reconsider.
+
 ---
 
 ## 11. Limitations and gotchas the plugin should document
