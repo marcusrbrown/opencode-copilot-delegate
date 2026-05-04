@@ -160,9 +160,80 @@ The CLI provides no readback path for stored memories from a `-p` run. Verificat
 - **Effect of `--no-custom-instructions` on memory use.** When Copilot loads `AGENTS.md` and `copilot-instructions.md`, do stored memories layer on top of those instructions or compete with them? Untested in this experiment.
 - **Citation format strictness.** The freeform `citations` field accepted comma-separated `path:line-range` entries. Whether Copilot's validation parses ranges, single lines, or whole-file references with equal fidelity is unknown.
 
+## 2026-05-04 follow-up — stale-citation behavior and memory-reuse signal
+
+> **Cleanup required:** This validation run created 3 intentional-pollution entries in the repo's Memory page with subjects `memtest-stale-file`, `memtest-bad-range`, and `memtest-mismatch`. They will auto-expire in 28 days. For earlier removal, delete them manually at `https://github.com/marcusrbrown/opencode-copilot-delegate/settings` → Copilot → Memory. Each polluted entry costs context budget in every future Copilot session on this repo until removed.
+
+A second `copilot_delegate` (claude-sonnet-4.6, 71.7s, 1 premium request, 892 events) was run to resolve two questions left open after the original experiment.
+
+### Q1 — Stale-citation behavior
+
+Three `store_memory` calls were made with intentionally-broken citations:
+
+| # | Subject | Citation defect | Response |
+|---|---|---|---|
+| 1 | `memtest-stale-file` | File does not exist (`src/runtime/totally-nonexistent-fake-file.ts:1-10`) | `"Memory stored successfully."` |
+| 2 | `memtest-bad-range` | Real file, lines past EOF (`src/index.ts:99999-100000`) | `"Memory stored successfully."` |
+| 3 | `memtest-mismatch` | Real file/lines, fact is fabricated (claim about `processOrders` against the import block at `src/index.ts:1-5`) | `"Memory stored successfully."` |
+
+**Verdict:** `store_memory` performs **zero write-time validation**. File existence, line range validity, and content/citation alignment are all unverified. The API is a pure write-through that accepts anything well-formed.
+
+Upstream docs claim that memories with stale citations are "silently dropped" on read; this experiment did not measure read-side behavior, but the write path is no defense against garbage-in.
+
+**Implication for the memory-seeding directive (`.github/copilot-instructions.md` from PR #97):** the directive must explicitly require agents to verify citations before calling `store_memory`. The platform won't catch errors, and polluted memories consume context budget on every subsequent session.
+
+### Q2 — Memory reuse signal
+
+The same delegation asked itself: *"What are the two reaping safety gates in the orphan reaper, and where in source are they implemented?"* The accurate answer is recorded in the `orphan reaper` memory from §"Memory 3" above.
+
+**Result:** The model produced an answer with citations matching the stored memory **exactly** — `src/runtime/orphan-reaper.ts:48-55`, `:377`, `:171-178`, `:219-231` — without making any tool call related to memory retrieval.
+
+**Mechanism (per the model's own observation):** memories arrive as a `<memories>` block injected into the session's system prompt at startup. Recall happens via natural attention over prompt context, not via on-demand tool invocation. No `get_memories` / `recall_memory` / `list_memories` tool exists in the CLI tool inventory.
+
+**Verdict:** Memory recall is **invisible** to the parent session reading JSONL output.
+
+**Implications:**
+
+- **Token cost is fixed.** Each stored memory consumes prompt tokens at every session startup regardless of whether the model actually attends to it.
+- **Pollution is durable.** A bad memory will appear in every future session's system prompt and consume context budget until 28-day expiry or manual UI deletion. Garbage scales with experiment frequency.
+- **Audit is impossible.** A parent agent reading JSONL cannot distinguish a memory-influenced answer from a pure model answer. Workflows that depend on detecting memory use cannot be built.
+- **Recall is best-effort, not contractual.** Even when a memory is in-prompt, the model may ignore it or compose around it — there's no enforcement.
+
+### No deletion API
+
+No `delete_memory`, `update_memory`, or `list_memories` tool is exposed in the CLI tool inventory. Only `store_memory` exists on the curation surface. An agent that pollutes the memory namespace has no in-process remediation path. Curation lives entirely in the GitHub web UI.
+
+### Resolved open questions
+
+From the original §"Open questions and follow-ups":
+
+- ~~Memory layer error surface~~ — none observed across 6+ calls (3 valid in PR #95, 3 intentionally invalid here). Error surface, if any, fires only on auth/quota issues outside this experiment's scope.
+- ~~Citation format strictness~~ — empirically permissive: accepted comma-separated `path:line-range` entries with no parsing or validation.
+
+Still untested:
+
+- Behavior on truly-missing required fields (the experiment supplied present-but-invalid values).
+- Behavior on storing the exact same fact twice (deduplication, both kept, or error).
+- `--no-custom-instructions` interaction with stored memories.
+
+### Additional recommendations (extends §"Recommendations for future `copilot_delegate` runs")
+
+8. **Verify citations before storing.** The system rechecks citations on use, but the write path does not. Always confirm file existence and line range coverage before calling `store_memory`. A simple `read` of the cited range with a content-match check is sufficient.
+
+9. **Treat memory recall as invisible.** Don't design workflows that depend on detecting "memory was used" — there's no signal. Build on the assumption that memory ENRICHES context at session startup but does not TRIGGER actions.
+
+10. **Avoid memory pollution on production repos.** Every stored memory costs context budget on every future session for up to 28 days. Don't run write-side experiments on a real repo — use a sandbox. The 3 `memtest-*` entries from this run are a warning example.
+
+11. **Pair every `store_memory` call with verification logic in the same delegated session.** Pattern:
+    1. Read the cited file and lines via `read`.
+    2. Confirm the fact is grounded in that exact range (e.g., a substring check or an LLM cross-check).
+    3. Only then call `store_memory`.
+    4. Report verification outcome alongside the success string.
+
 ## Cross-references
 
 - [GitHub docs: About agentic memory for GitHub Copilot](https://docs.github.com/en/copilot/concepts/agents/copilot-memory)
 - [GitHub docs: Managing and curating Copilot Memory](https://docs.github.com/en/copilot/how-tos/use-copilot-agents/copilot-memory)
 - [`docs/research/copilot-cli-capabilities-2026-04-27.md`](./copilot-cli-capabilities-2026-04-27.md) §1 (table line 37: `memory` as `--allow-tool` kind), §11 (note that `--allow-tool=memory` is documented but not in `copilot help permissions`)
 - [`AGENTS.md`](../../AGENTS.md) (project conventions; load-bearing files referenced by Memory 1–3)
+- [`.github/copilot-instructions.md`](../../.github/copilot-instructions.md) §"Persisting Architectural Memory" — the seeding directive that this follow-up's Q1 finding strengthens (verify-before-storing).
