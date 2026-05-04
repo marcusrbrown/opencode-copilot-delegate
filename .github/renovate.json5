@@ -19,4 +19,8 @@
       semanticCommitType: 'build',
     },
   ],
+  postUpgradeTasks: {
+    commands: ['bun install', 'bun run fix', 'bun run build'],
+    executionMode: 'branch',
+  },
 }
