@@ -43,6 +43,21 @@ bun run build     # Bundle + declaration emit
 | `src/discovery/` | Agent file discovery, description builder | Depend on runtime or tools |
 | `src/index.ts` | Plugin entrypoint, wiring | Contain business logic |
 
+## Persisting Architectural Memory
+
+This repo has [Copilot Memory](https://docs.github.com/en/copilot/concepts/agents/copilot-memory) enabled (Preview). When you modify load-bearing invariants, call `store_memory` to refresh the corresponding entry so future Copilot sessions inherit the current architecture rather than rediscover it. Memories auto-expire after 28 days unless re-derived from current code.
+
+Trigger files (non-exhaustive):
+
+- `src/lib/normalize-tool-arg-schemas.ts` and `src/runtime/plugin-singleton.ts` — the DUAL pattern (cross-instance Zod metadata + duplicate factory invocation)
+- `src/runtime/task-status.ts`, `src/runtime/task-registry.ts`, `src/runtime/subprocess.ts` — task lifecycle (`setStatus` contract, terminal-state idempotency)
+- `src/runtime/orphan-reaper.ts`, `src/runtime/pid-file.ts`, `src/runtime/kill-tree.ts` — orphan reaper (per-instance PID files, spawner-liveness + identity gates)
+- `src/index.ts` — plugin wiring; any change to factory invocation or singleton key
+
+API shape (`{subject, fact <200 chars, citations, reason}`), recommended subjects, citation format, and the full seeding pattern: see `docs/research/copilot-memory-experiment-2026-05-03.md`.
+
+Verify a memory before storing: re-read the cited code in this session and only commit facts that hold. The system rechecks citations on use; memories with stale citations are silently dropped.
+
 ## Changeset Policy
 
 This package uses `0.x` unstable versioning. User-visible changes require a `.changeset/*.md` entry with a `minor` bump (not `patch`).
