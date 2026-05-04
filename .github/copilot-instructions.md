@@ -51,8 +51,10 @@ Trigger files (non-exhaustive):
 
 - `src/lib/normalize-tool-arg-schemas.ts` and `src/runtime/plugin-singleton.ts` — the DUAL pattern (cross-instance Zod metadata + duplicate factory invocation)
 - `src/runtime/task-status.ts`, `src/runtime/task-registry.ts`, `src/runtime/subprocess.ts` — task lifecycle (`setStatus` contract, terminal-state idempotency)
-- `src/runtime/orphan-reaper.ts`, `src/runtime/pid-file.ts`, `src/runtime/kill-tree.ts` — orphan reaper (per-instance PID files, spawner-liveness + identity gates)
+- `src/runtime/orphan-reaper.ts`, `src/runtime/pid-file.ts`, `src/lib/kill-tree.ts` — orphan reaper (per-instance PID files, spawner-liveness + identity gates)
 - `src/index.ts` — plugin wiring; any change to factory invocation or singleton key
+
+For files outside this list, "load-bearing" means any change that could alter subprocess lifecycle, tool schema shape, or plugin initialization order.
 
 API shape (`{subject, fact <200 chars, citations, reason}`), recommended subjects, citation format, and the full seeding pattern: see `docs/research/copilot-memory-experiment-2026-05-03.md`.
 
