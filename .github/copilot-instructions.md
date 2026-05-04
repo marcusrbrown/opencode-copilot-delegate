@@ -58,7 +58,7 @@ For files outside this list, "load-bearing" means any change that could alter su
 
 API shape (`{subject, fact <200 chars, citations, reason}`), recommended subjects, citation format, and the full seeding pattern: see `docs/research/copilot-memory-experiment-2026-05-03.md`.
 
-Verify a memory before storing: re-read the cited code in this session and only commit facts that hold. The system rechecks citations on use; memories with stale citations are silently dropped.
+Verify before storing. `store_memory` performs zero write-time validation — non-existent files, out-of-range lines, and fabricated facts all return `"Memory stored successfully."` (verified 2026-05-04 against CLI 1.0.40). Re-read the cited code in this session and only commit facts that hold. Polluted memories consume context budget in every future Copilot session on this repo until manual UI deletion or 28-day expiry; treat each `store_memory` call as a durable cost. Upstream docs claim stale memories may be silently dropped on read — unmeasured here, treat write-time verification as the only enforced safeguard.
 
 ## Changeset Policy
 
