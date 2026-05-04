@@ -135,7 +135,31 @@ async function waitForFile(filePath: string): Promise<void> {
   throw new Error(`Timed out waiting for file: ${filePath}`)
 }
 
-function expectProcessToBeGone(pid: number): void {
+// Polls `process.kill(pid, 0)` (signal 0 probes liveness without delivery)
+// until it throws ESRCH/EPERM (process gone) or the deadline expires. Use
+// instead of a synchronous assertion when the test cancels a process tree
+// and immediately checks for liveness — the kernel may not have fully reaped
+// the grandchild by the time the assertion runs on a loaded CI runner.
+async function expectProcessToBeGone(
+  pid: number,
+  {
+    timeoutMs = 2000,
+    intervalMs = 50,
+  }: { timeoutMs?: number; intervalMs?: number } = {},
+): Promise<void> {
+  const deadline = Date.now() + timeoutMs
+
+  while (Date.now() < deadline) {
+    try {
+      process.kill(pid, 0)
+    } catch {
+      return
+    }
+
+    await delay(intervalMs)
+  }
+
+  // Final attempt — let the assertion failure surface the live PID for diagnosis.
   expect(() => process.kill(pid, 0)).toThrow()
 }
 
@@ -308,7 +332,7 @@ describe('subprocess runtime', () => {
       // Then the process tree is gone and the task is marked cancelled
       expect(task.status).toBe('cancelled')
       expect(Date.now() - startedAt).toBeLessThan(3000)
-      expectProcessToBeGone(grandchildPid)
+      await expectProcessToBeGone(grandchildPid)
     })
 
     it('does not append events after cancellation (cancel-race guard)', async () => {
