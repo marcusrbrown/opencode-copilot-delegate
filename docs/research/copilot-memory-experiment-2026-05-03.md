@@ -230,6 +230,78 @@ Still untested:
     3. Only then call `store_memory`.
     4. Report verification outcome alongside the success string.
 
+## 2026-05-04 follow-up part 2 — duplicate handling, subject collision, `--no-custom-instructions` effect
+
+A third `copilot_delegate` (claude-sonnet-4.6, 6m 8s, 1 premium request, 1440 events) ran three additional tests to resolve the remaining open questions about `store_memory` behavior and the memory-loading pipeline. **The most consequential finding is Test E:** memories share the custom-instructions loading bus.
+
+### Test C — Duplicate write handling
+
+Called `store_memory` with arguments byte-for-byte identical to the existing `orphan reaper` memory.
+
+**Result:** `"Memory stored successfully."` returned with no dedup signal, no rejection, no warning.
+
+**Verdict:** From the caller's perspective, `store_memory` performs no write-time duplicate detection. Whether the backend deduplicates, appends, or replaces is unobservable at write time and only resolves when a subsequent session inspects its `<memories>` block.
+
+### Test D — Subject collision
+
+Called `store_memory` with subject `memtest-stale-file` (matching an existing pollution entry) but a clearly different fact (`"Subject collision test marker — different fact, same subject..."`).
+
+**Result:** `"Memory stored successfully."` — same string, no collision warning.
+
+**Verdict:** Subject is not enforced as a uniqueness or lookup key at write time. The API is purely append-oriented from the caller's view: any `(subject, fact, citations, reason)` tuple is accepted regardless of subject reuse. The backend's actual storage model (key-value with subject as key, vs. independent records) remains unobservable at write.
+
+### Test E — `--no-custom-instructions` effect on memory loading
+
+Two parallel `copilot -p` calls asked the same question, both with `--deny-tool=read --deny-tool=shell` to block source inspection. The accurate answer requires recalling the `orphan reaper` memory's exact line ranges (`:48-55`, `:171-178`, `:377`, `:219-231`).
+
+| Mode | Custom instructions | Wall-clock | `:48-55`? | `:171-178`? | `:377`? | `:219-231`? | Notable |
+|---|---|---|---|---|---|---|---|
+| **E1** baseline | ON (default) | ~26s | ✅ | ✅ | ✅ | ✅ | Model explicitly stated *"falling back to the verified repo memory"* |
+| **E2** stripped | OFF (`--no-custom-instructions`) | 115s | ❌ (`45-52`) | ❌ (`169-175`) | ⚠ (`375-377`) | ❌ (`216-228`) | Model escalated to GitHub MCP `get_file_contents` to fetch source; produced independently-derived ranges |
+
+**Verdict:** Memories load as part of the custom-instructions injection path, not as an independent always-on system. `--no-custom-instructions` strips memories alongside `AGENTS.md` and `copilot-instructions.md`. E2's 4.4× slowdown plus citation divergence — combined with the absence of a `<memories>` block in its system prompt — confirm the loading bus is shared.
+
+**Architectural implication:** Any agent or workflow that runs Copilot CLI with `--no-custom-instructions` will see no stored memories regardless of repo settings. This is the operational signature of the loading-path coupling, and it constrains how memory-bearing delegations can be parameterized.
+
+### Updated open-questions list
+
+The original "Still untested" list resolves further:
+
+- ~~Behavior on storing the exact same fact twice~~ — resolved (Test C): no observable dedup signal at write time.
+- ~~`--no-custom-instructions` interaction with stored memories~~ — resolved (Test E): memories share the custom-instructions loading bus.
+
+Newly resolved:
+
+- Subject is not enforced as a uniqueness key at write time (Test D).
+
+Still untested:
+
+- Behavior on truly-missing required fields (every test so far supplied present-but-invalid values).
+- Whether the backend dedups identical writes (Test C only proves the write-time signal is invariant, not the backend behavior).
+- Whether subject collision results in old replaced, new appended, or both retained (Test D's outcome is unobservable until a future session reads its `<memories>` block).
+
+### Additional recommendations (extends list above)
+
+12. **`--no-custom-instructions` strips memories.** When delegating to a Copilot CLI subprocess, omit this flag if you want stored architectural memories to be part of the child's context. Use it deliberately when you need a "clean slate" baseline for comparison, but understand that the child will not benefit from the repo's memory layer.
+
+13. **Subject reuse is permitted but unmodelled at write.** Don't treat subject as a stable key. If you want to refresh a memory, expect that a previous entry with the same subject may persist alongside the new one — verify in the GitHub UI.
+
+### Updated pollution status (cumulative across both follow-up runs)
+
+| Subject | Source | Status |
+|---|---|---|
+| `memtest-stale-file` | Q1 (Test A1) | Pollution — delete from UI |
+| `memtest-bad-range` | Q1 (Test A2) | Pollution — delete from UI |
+| `memtest-mismatch` | Q1 (Test A3) | Pollution — delete from UI |
+| `memtest-stale-file` (collision) | Test D | Either replaced original or coexists with it — delete on inspection |
+| `orphan reaper` (duplicate) | Test C | Either dedup'd by backend or coexists with original real memory — keep one canonical entry |
+
+**Manual cleanup actions for the repo Memory page** (`https://github.com/marcusrbrown/opencode-copilot-delegate/settings` → Copilot → Memory):
+
+- Delete every `memtest-*` entry visible (3 unique subjects, possibly 4 entries if the Test D collision created a duplicate).
+- Inspect `orphan reaper` — keep ONE entry. If the backend retained both Test C's duplicate write, delete the redundant copy.
+- Retain the three real architectural memories: `orphan reaper` (one canonical copy), `task lifecycle`, `DUAL pattern`.
+
 ## Cross-references
 
 - [GitHub docs: About agentic memory for GitHub Copilot](https://docs.github.com/en/copilot/concepts/agents/copilot-memory)
