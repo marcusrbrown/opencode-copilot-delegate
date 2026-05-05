@@ -1,35 +1,49 @@
 /**
- * Per-process singleton guard for the plugin factory.
+ * Per-process register-once guard for the plugin factory.
  *
  * OpenCode invokes the plugin factory more than once per process when the
  * same plugin is referenced by multiple config sources (for example a
  * user-level `~/.config/opencode/opencode.json` AND a project-level
  * `opencode.json`). Each invocation evaluates the plugin module fresh —
- * module-local variables reset between calls — so the singleton state
- * must live on `globalThis` to persist across module instances within
- * the same process.
+ * module-local variables reset between calls — so the guard state must
+ * live on `globalThis` to persist across module instances within the
+ * same process.
  *
- * On the first invocation the init runs normally and the resulting hooks
- * promise is cached on `globalThis`. On subsequent invocations within
- * the same PID the cached promise is returned and `onDuplicate` is
- * invoked exactly once (subsequent duplicates are silent so logs do not
- * spam). Across PIDs the singleton is treated as absent and init runs
- * fresh — `globalThis` is per-process, but the explicit PID guard adds
- * defensive belt-and-suspenders against any state-leakage edge case.
+ * On the first invocation `doInit` runs and the resulting hooks promise
+ * is cached on `globalThis`; the caller receives `{ isFirst: true, hooks }`.
+ * On every subsequent invocation in the same PID `doInit` is skipped, the
+ * cached promise is awaited (so sticky rejections still propagate),
+ * `onDuplicate` fires exactly once, and the caller receives
+ * `{ isFirst: false, hooks: {} as T }`. Across PIDs the guard is treated
+ * as absent and init runs fresh — `globalThis` is per-process, but the
+ * explicit PID check adds defensive belt-and-suspenders against any
+ * state-leakage edge case.
+ *
+ * **Why empty hooks on duplicate invocations.** A whole-hooks singleton
+ * that returns the same hooks reference to both invocations does not
+ * deduplicate host-side tool registration: OpenCode iterates each plugin
+ * source's returned hook surface and registers every tool entry it finds,
+ * even when two sources return the same JS reference. Returning `{}` from
+ * the duplicate path is the only shape that prevents host-side double
+ * registration of `copilot_delegate`, `copilot_output`, and
+ * `copilot_cancel`. Verified empirically against
+ * `client.tool.list({...})`: under whole-hooks reuse a dual-source config
+ * lists each tool twice; under empty-hooks-on-duplicate it lists each
+ * tool once.
  *
  * The cached value is the init Promise rather than the resolved value so
  * a second invocation that arrives while the first is still awaiting
  * `mkdir` / `reapOrphans` converges on the same init result instead of
  * starting a parallel init.
  *
- * **Known limitation — rejected init is cached.** If `doInit()` rejects,
+ * **Known limitation — rejected init is sticky.** If `doInit()` rejects,
  * the rejected promise is stored on `globalThis` and every subsequent
- * invocation in the same PID returns the same rejection without
+ * invocation in the same PID surfaces the same rejection without
  * retrying init. This is intentional: re-running heavy init on every
- * call would defeat the singleton's purpose. Recovery requires a
- * process restart. OpenCode currently surfaces a failed plugin factory
- * as a startup error rather than retrying within the process, so this
- * matches the upstream contract.
+ * call would defeat the guard's purpose. Recovery requires a process
+ * restart. OpenCode currently surfaces a failed plugin factory as a
+ * startup error rather than retrying within the process, so this matches
+ * the upstream contract.
  */
 
 const SINGLETON_KEY: unique symbol = Symbol.for(
@@ -74,14 +88,32 @@ export interface PlugInOnceOptions<T> {
 }
 
 /**
- * Run `doInit` at most once per process, returning the cached hooks
- * promise on subsequent invocations within the same PID.
+ * Result envelope for `plugInOnce(...)`.
+ *
+ * - `isFirst: true` — caller should return `hooks` (the real hooks from
+ *   `doInit`) to OpenCode.
+ * - `isFirst: false` — caller MUST return `hooks` (which is an empty `{}`)
+ *   so the host loader does not register tools or hooks twice.
+ *
+ * Callers that just `return result.hooks` do the right thing in both
+ * cases without needing to inspect `isFirst` — the empty object is what
+ * the host should register on the duplicate source.
+ */
+export interface PlugInOnceResult<T> {
+  isFirst: boolean
+  hooks: T
+}
+
+/**
+ * Run `doInit` at most once per process; on duplicate invocations resolve
+ * to empty hooks so the OpenCode host does not double-register tools and
+ * hooks under dual-source configurations.
  */
 export async function plugInOnce<T>({
   doInit,
   onDuplicate,
   pid,
-}: PlugInOnceOptions<T>): Promise<T> {
+}: PlugInOnceOptions<T>): Promise<PlugInOnceResult<T>> {
   const currentPid = pid ?? process.pid
   const g = globalThis as unknown as GlobalWithSingleton<T>
   const existing = g[SINGLETON_KEY]
@@ -95,7 +127,12 @@ export async function plugInOnce<T>({
         // onDuplicate must not block plugin init.
       }
     }
-    return existing.hooksPromise
+    // Await the cached init so sticky rejections still propagate to the
+    // duplicate caller. The resolved value is intentionally discarded —
+    // duplicate callers receive empty hooks so the host registers nothing
+    // for this source.
+    await existing.hooksPromise
+    return { isFirst: false, hooks: {} as T }
   }
 
   const hooksPromise = doInit()
@@ -105,7 +142,8 @@ export async function plugInOnce<T>({
     hooksPromise,
     warned: false,
   }
-  return hooksPromise
+  const hooks = await hooksPromise
+  return { isFirst: true, hooks }
 }
 
 /**

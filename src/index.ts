@@ -135,11 +135,11 @@ async function initializePlugin(input: PluginInputWithTestHooks) {
   }
 }
 
-const CopilotDelegate: Plugin = async (input) =>
-  plugInOnce({
+const CopilotDelegate: Plugin = async (input) => {
+  const result = await plugInOnce({
     doInit: () => initializePlugin(input),
     onDuplicate: (pid) => {
-      const message = `[copilot-delegate] duplicate factory invocation in same process (pid=${pid}); reusing existing hooks. Multiple opencode.json sources may list this plugin.`
+      const message = `[copilot-delegate] duplicate factory invocation in same process (pid=${pid}); returning empty hooks so the host does not double-register tools. Multiple opencode.json sources may list this plugin.`
       console.warn(message)
       // Fire-and-forget so the log call never blocks plugin init.
       input.client.app
@@ -153,5 +153,11 @@ const CopilotDelegate: Plugin = async (input) =>
         .catch(() => {})
     },
   })
+  // Return the envelope's hooks. On the first invocation this is the real
+  // hooks object built by `initializePlugin`. On duplicate invocations
+  // this is `{}` so the host registers nothing for the duplicate source —
+  // see plugin-singleton.ts for the empirical justification.
+  return result.hooks
+}
 
 export default CopilotDelegate
