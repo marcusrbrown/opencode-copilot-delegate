@@ -257,6 +257,50 @@ describe('plugin init lifecycle', () => {
     expect(typeof result.tool?.copilot_delegate.execute).toBe('function')
   })
 
+  it('returns empty hooks on duplicate factory invocations in the same process', async () => {
+    // Regression for the dual-source registration bug: when OpenCode
+    // invokes the plugin factory twice in the same PID (because the same
+    // plugin is listed in BOTH a user-level and a project-level
+    // opencode.json), the host iterates each invocation's returned hook
+    // surface and registers every tool entry it finds — even when both
+    // calls return the same JS reference. Returning the cached real hooks
+    // on the duplicate path causes copilot_delegate / copilot_output /
+    // copilot_cancel to appear twice in the LLM-visible tool catalog.
+    //
+    // The fix: the duplicate caller receives `{}` from `plugInOnce`, the
+    // factory unwraps `result.hooks`, and the host registers nothing for
+    // the duplicate source. This test asserts that exact contract at the
+    // factory boundary so a future refactor cannot silently regress to
+    // whole-hooks reuse.
+    const xdgState = mkdtempSync(join(tmpdir(), 'plugin-init-dup-'))
+    tempPaths.push(xdgState)
+    process.env.XDG_STATE_HOME = xdgState
+
+    const input = makePluginInput(process.cwd())
+    const first = await plugin(input)
+    const second = await plugin(input)
+    const third = await plugin(input)
+
+    // First invocation gets the real hooks with all three tools.
+    expect(Object.keys(first.tool ?? {}).sort()).toEqual([
+      'copilot_cancel',
+      'copilot_delegate',
+      'copilot_output',
+    ])
+
+    // Duplicate invocations get an empty hooks object — `tool` is absent
+    // entirely, not just empty. The host has nothing to register.
+    expect(second).toEqual({})
+    expect(second.tool).toBeUndefined()
+    expect(third).toEqual({})
+    expect(third.tool).toBeUndefined()
+
+    // The first hooks reference is NOT shared with the duplicates: the
+    // real hooks object stays attached to its first registration only.
+    expect(second).not.toBe(first)
+    expect(third).not.toBe(first)
+  })
+
   it('returns tools without following a symlinked pid state parent into orphans', async () => {
     const xdgState = mkdtempSync(join(tmpdir(), 'plugin-init-symlink-'))
     tempPaths.push(xdgState)
