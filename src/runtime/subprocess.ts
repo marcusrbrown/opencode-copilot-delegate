@@ -25,6 +25,14 @@ export type SpawnCopilotResult = {
   stdoutLineBuffer: string
   finalMessage?: string
   errorText?: string
+  /**
+   * Upstream Copilot session UUID captured from the terminal `result`
+   * JSONL event. Populated alongside `assignFinalMessage` in both the
+   * happy-path (`finalizeTask`) and cancelled-close branches; left
+   * undefined when no `result` event arrived (process killed early or
+   * crashed before emitting one).
+   */
+  copilotSessionId?: string
 }
 
 function flushBufferedStdout(task: SpawnCopilotResult): void {
@@ -56,6 +64,22 @@ function assignFinalMessage(task: SpawnCopilotResult): void {
   }
 }
 
+function assignCopilotSessionId(task: SpawnCopilotResult): void {
+  // The Copilot CLI's `result` JSONL event is the terminal usage event
+  // (see jsonl-parser.ts: `case 'result'` returns type `'usage'`). Walk
+  // events from the end — for typical sessions the result event is last,
+  // but if a future CLI version emits trailing events the most recent
+  // usage event is still the source of truth.
+  const lastUsage = [...task.events]
+    .reverse()
+    .find((event) => event.type === 'usage')
+  const sessionId = lastUsage?.data?.sessionId
+
+  if (typeof sessionId === 'string' && sessionId.length > 0) {
+    task.copilotSessionId = sessionId
+  }
+}
+
 function finalizeTask(
   task: SpawnCopilotResult,
   exitCode: number | null,
@@ -73,6 +97,7 @@ function finalizeTask(
   }
 
   assignFinalMessage(task)
+  assignCopilotSessionId(task)
 }
 
 function resolveAuthEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
@@ -171,6 +196,7 @@ export function spawnCopilot(
         task.endedAt = Date.now()
         task.exitCode = code ?? undefined
         assignFinalMessage(task)
+        assignCopilotSessionId(task)
       } else {
         finalizeTask(task, code, stderrText, opts.pidFilePath)
       }

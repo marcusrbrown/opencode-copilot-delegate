@@ -211,6 +211,105 @@ describe('subprocess runtime', () => {
       expect(task.stdoutLineBuffer).toBe('')
     })
 
+    it('captures copilotSessionId from the result event when sessionId is present', async () => {
+      // Given a fake copilot binary that emits a result event carrying a sessionId.
+      // The result-event capture is the registry's source of truth for the
+      // upstream Copilot session ID — downstream resume/connect units use it
+      // to enable lookup-by-known-task without re-asking the user for the ID.
+      const { spawnCopilot } = await loadModules()
+      const cwd = mkdtempSync(join(tmpdir(), 'copilot-cwd-'))
+      const binDir = makeFakeCopilotBin()
+      tempPaths.push(cwd, binDir)
+
+      const targetSessionId = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+      const task = spawnCopilot(
+        [
+          '-c',
+          [
+            `printf '%s\\n' '{"type":"result","sessionId":"${targetSessionId}","exitCode":0,"usage":{}}'`,
+            'exit 0',
+          ].join('; '),
+        ],
+        { cwd, env: makeSpawnEnv(binDir) },
+      )
+
+      await task.completionPromise
+
+      expect(task.status).toBe('complete')
+      expect(task.copilotSessionId).toBe(targetSessionId)
+    })
+
+    it('leaves copilotSessionId undefined when result event has no sessionId', async () => {
+      // Given a fake copilot binary that emits a result event without a sessionId
+      // (defensive: real CLI 1.0.40 always includes one, but the capture path
+      // must not throw when the field is missing).
+      const { spawnCopilot } = await loadModules()
+      const cwd = mkdtempSync(join(tmpdir(), 'copilot-cwd-'))
+      const binDir = makeFakeCopilotBin()
+      tempPaths.push(cwd, binDir)
+
+      const task = spawnCopilot(
+        [
+          '-c',
+          [
+            'printf \'%s\\n\' \'{"type":"result","exitCode":0,"usage":{}}\'',
+            'exit 0',
+          ].join('; '),
+        ],
+        { cwd, env: makeSpawnEnv(binDir) },
+      )
+
+      await task.completionPromise
+
+      expect(task.status).toBe('complete')
+      expect(task.copilotSessionId).toBeUndefined()
+    })
+
+    it('captures copilotSessionId on cancelled tasks when the result event arrived before cancellation', async () => {
+      // The cancelled-close branch in spawnCopilot also calls the
+      // session-id capture path; if the result event arrived before the
+      // user pressed cancel, the captured ID must still survive.
+      //
+      // The bash subprocess's stdout is fully buffered against the parent
+      // pipe, so printf alone may not flush before the long-running sleep
+      // begins. The script writes a sentinel file to a temp path AFTER
+      // the printf line, and the test polls that file before aborting —
+      // a flush happens implicitly because the printf output is followed
+      // by another shell command (write).
+      const { spawnCopilot } = await loadModules()
+      const cwd = mkdtempSync(join(tmpdir(), 'copilot-cwd-'))
+      const binDir = makeFakeCopilotBin()
+      tempPaths.push(cwd, binDir)
+
+      const targetSessionId = '11111111-2222-3333-4444-555555555555'
+      const sentinel = join(cwd, 'result-emitted')
+      const task = spawnCopilot(
+        [
+          '-c',
+          [
+            `printf '%s\\n' '{"type":"result","sessionId":"${targetSessionId}","exitCode":0,"usage":{}}'`,
+            // Force the parent's pipe buffer to flush by ending stdout
+            // explicitly; then signal readiness via a sentinel file before
+            // the long-lived sleep that keeps the process alive until abort.
+            'exec 1>&-',
+            `touch '${sentinel}'`,
+            'sleep 30',
+          ].join('; '),
+        ],
+        { cwd, env: makeSpawnEnv(binDir) },
+      )
+
+      // Wait until the sentinel exists — proves the result line was
+      // written and the subprocess is now in the long-lived sleep phase.
+      await waitForFile(sentinel)
+
+      task.abortController.abort()
+      await task.completionPromise
+
+      expect(task.status).toBe('cancelled')
+      expect(task.copilotSessionId).toBe(targetSessionId)
+    })
+
     it('marks non-zero exits as failed', async () => {
       // Given a fake copilot binary that exits with a non-zero status
       const { spawnCopilot } = await loadModules()

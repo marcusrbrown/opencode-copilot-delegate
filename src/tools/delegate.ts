@@ -158,6 +158,10 @@ export function createDelegateTool(options: DelegateToolOptions) {
             agentName: args.agent,
             modelName: args.model,
             pidFilePath: options.pidFilePath,
+            // S2 Unit 1: discriminator is mandatory at the registry layer.
+            // Delegate always spawns a fresh `copilot -p` subprocess.
+            origin: 'spawn',
+            addDirs: args.add_dir,
           },
           spawnTaskId,
         )
