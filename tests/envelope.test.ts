@@ -387,4 +387,56 @@ describe('buildEnvelope', () => {
       expect(envelope.tool_calls_summary?.length).toBeGreaterThanOrEqual(1)
     })
   })
+
+  describe('origin discriminator pass-through (S2 Unit 1)', () => {
+    // Each task carries an `origin` field on the registry; the envelope
+    // mirrors it so consumers can branch on the source of the work
+    // (delegate vs resume vs connect) without re-reading the registry.
+    // Tests cover the three legal values plus the back-compat default.
+
+    it("includes origin: 'spawn' when input.origin is 'spawn'", () => {
+      const envelope = buildEnvelope(makeInput({ origin: 'spawn' }))
+      expect(envelope.origin).toBe('spawn')
+    })
+
+    it("includes origin: 'resume' when input.origin is 'resume'", () => {
+      const envelope = buildEnvelope(makeInput({ origin: 'resume' }))
+      expect(envelope.origin).toBe('resume')
+    })
+
+    it("includes origin: 'connect' when input.origin is 'connect'", () => {
+      const envelope = buildEnvelope(makeInput({ origin: 'connect' }))
+      expect(envelope.origin).toBe('connect')
+    })
+
+    it("defaults envelope.origin to 'spawn' when input.origin is omitted", () => {
+      // Back-compat for fixtures and call sites that predate Unit 1: an
+      // input without origin must still produce a valid envelope, and the
+      // implicit value matches the default the registry assigns.
+      const envelope = buildEnvelope(makeInput({}))
+      expect(envelope.origin).toBe('spawn')
+    })
+  })
+
+  describe('copilot_session_id pass-through (S2 Unit 1)', () => {
+    // copilotSessionId is captured from the JSONL `result` event during
+    // task lifecycle (see subprocess tests). The envelope mirrors it so
+    // consumers can recover the upstream session ID without scanning
+    // events themselves.
+    it('includes copilot_session_id when input.copilotSessionId is present', () => {
+      const envelope = buildEnvelope(
+        makeInput({
+          copilotSessionId: 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+        }),
+      )
+      expect(envelope.copilot_session_id).toBe(
+        'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee',
+      )
+    })
+
+    it('omits copilot_session_id when input.copilotSessionId is undefined', () => {
+      const envelope = buildEnvelope(makeInput({}))
+      expect(envelope.copilot_session_id).toBeUndefined()
+    })
+  })
 })

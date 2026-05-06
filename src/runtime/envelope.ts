@@ -7,6 +7,7 @@
  */
 
 import type { ParsedEvent } from './jsonl-parser'
+import type { TaskOrigin } from './task-registry'
 
 /** Status of a delegated Copilot task. */
 export type TaskStatus =
@@ -43,6 +44,10 @@ export type EnvelopeInput = {
   modelName?: string
   errorText?: string
   timedOut?: boolean
+  /** Source of the task — pass-through from `TaskState.origin`. */
+  origin?: TaskOrigin
+  /** Upstream Copilot session UUID — pass-through from `TaskState`. */
+  copilotSessionId?: string
 }
 
 /** The structured result envelope returned by `copilot_output`. */
@@ -59,6 +64,19 @@ export type OutputEnvelope = {
   error?: string
   timed_out?: boolean
   events_count: number
+  /**
+   * Source of the task. Always populated; defaults to `'spawn'` for inputs
+   * that predate the discriminator (back-compat). Consumers branch on this
+   * to distinguish a fresh delegation from a resumed/connected session
+   * without re-reading the registry.
+   */
+  origin: TaskOrigin
+  /**
+   * Upstream Copilot session UUID, when known. Captured from the JSONL
+   * `result` event during the task lifecycle. Omitted when the subprocess
+   * never emitted a `result` event (e.g., killed early or crashed).
+   */
+  copilot_session_id?: string
 }
 
 function outputStatus(status: TaskStatus): OutputEnvelope['status'] {
@@ -130,6 +148,8 @@ export function buildEnvelope(input: EnvelopeInput): OutputEnvelope {
     modelName,
     errorText,
     timedOut,
+    origin,
+    copilotSessionId,
   } = input
 
   const durationMs = (endedAt ?? Date.now()) - startedAt
@@ -142,6 +162,9 @@ export function buildEnvelope(input: EnvelopeInput): OutputEnvelope {
     status: outputStatus(status),
     duration_ms: durationMs,
     events_count: events.length,
+    // Default to 'spawn' for inputs that predate the discriminator so
+    // existing call sites keep working without explicit origin (S2 Unit 1).
+    origin: origin ?? 'spawn',
   }
 
   if (exitCode !== undefined) envelope.exit_code = exitCode
@@ -152,6 +175,7 @@ export function buildEnvelope(input: EnvelopeInput): OutputEnvelope {
   if (tokens) envelope.tokens = tokens
   if (errorText) envelope.error = errorText
   if (timedOut) envelope.timed_out = timedOut
+  if (copilotSessionId) envelope.copilot_session_id = copilotSessionId
 
   return envelope
 }

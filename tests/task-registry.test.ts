@@ -47,6 +47,107 @@ afterEach(async () => {
   }
 })
 
+describe('task registry origin discriminator (S2 Unit 1)', () => {
+  it("defaults TaskState.origin to 'spawn' when omitted from input", async () => {
+    // Behaviour contract for back-compat: existing call sites that pass
+    // CreateTaskInput without an `origin` field must keep working unchanged
+    // — every such task is a fresh `copilot -p` spawn from this plugin.
+    const child = Bun.spawn({ cmd: ['sleep', '30'] })
+    childHandles.push(child)
+    const abortController = new AbortController()
+
+    const task = createTask(
+      {
+        parentSessionID: 'session-origin-default',
+        pid: child.pid,
+        startedAt: Date.now(),
+        status: 'running',
+        args: ['-c', 'sleep 30'],
+        cwd: process.cwd(),
+        stdoutLineBuffer: '',
+        events: [],
+        child,
+        completionPromise: child.exited.then(() => undefined),
+        abortController,
+      },
+      undefined,
+    )
+
+    expect(task.origin).toBe('spawn')
+  })
+
+  it("stores TaskState.origin verbatim for 'spawn' | 'resume' | 'connect'", async () => {
+    // Forward-compat: the discriminator carries all three values today even
+    // though the resume and connect tools land in later units. Unit 1 lays
+    // the type seam so downstream units only add producers/consumers.
+    const origins = ['spawn', 'resume', 'connect'] as const
+
+    for (const origin of origins) {
+      const child = Bun.spawn({ cmd: ['sleep', '30'] })
+      childHandles.push(child)
+      const abortController = new AbortController()
+
+      const task = createTask(
+        {
+          parentSessionID: `session-origin-${origin}`,
+          pid: child.pid,
+          startedAt: Date.now(),
+          status: 'running',
+          args: ['-c', 'sleep 30'],
+          cwd: process.cwd(),
+          stdoutLineBuffer: '',
+          events: [],
+          child,
+          completionPromise: child.exited.then(() => undefined),
+          abortController,
+          origin,
+        },
+        undefined,
+      )
+
+      expect(task.origin).toBe(origin)
+    }
+  })
+
+  it('passes copilotSessionId, addDirs, and psIdentity through to TaskState', async () => {
+    // The remaining Unit 1 fields — captured on different paths in later
+    // units (copilotSessionId from the result event, addDirs from launcher
+    // input, psIdentity from spawn-time getPidIdentity) — must be storable
+    // on TaskState today so downstream units only have to wire producers.
+    const child = Bun.spawn({ cmd: ['sleep', '30'] })
+    childHandles.push(child)
+    const abortController = new AbortController()
+
+    const task = createTask(
+      {
+        parentSessionID: 'session-extras',
+        pid: child.pid,
+        startedAt: Date.now(),
+        status: 'running',
+        args: ['-c', 'sleep 30'],
+        cwd: process.cwd(),
+        stdoutLineBuffer: '',
+        events: [],
+        child,
+        completionPromise: child.exited.then(() => undefined),
+        abortController,
+        origin: 'connect',
+        copilotSessionId: '11111111-2222-3333-4444-555555555555',
+        addDirs: ['/workspace/sub'],
+        psIdentity: { comm: 'copilot', lstart: 'Tue Apr 28 23:45:30 2026' },
+      },
+      undefined,
+    )
+
+    expect(task.copilotSessionId).toBe('11111111-2222-3333-4444-555555555555')
+    expect(task.addDirs).toEqual(['/workspace/sub'])
+    expect(task.psIdentity).toEqual({
+      comm: 'copilot',
+      lstart: 'Tue Apr 28 23:45:30 2026',
+    })
+  })
+})
+
 describe('task registry PID-file hooks', () => {
   it('appends to PID file on spawn', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'task-registry-'))
