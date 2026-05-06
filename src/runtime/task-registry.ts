@@ -4,6 +4,17 @@ import { getPidIdentity } from './orphan-reaper'
 import { appendPidEntry } from './pid-file'
 import type { SpawnCopilotResult } from './subprocess'
 
+/**
+ * Source of a TaskState.
+ *
+ * - `spawn` — fresh `copilot -p` subprocess started by `copilot_delegate`.
+ * - `resume` — `copilot --resume=<id>` continuation of a prior session.
+ * - `connect` — `copilot --connect=<id>` attach to a running session
+ *   (deferred from the v0.x first slice; the type seam is in place for
+ *   forward compatibility per the S2 plan amendment).
+ */
+export type TaskOrigin = 'spawn' | 'resume' | 'connect'
+
 export type TaskState = SpawnCopilotResult & {
   parentSessionID: string
   startedAt: number
@@ -11,6 +22,11 @@ export type TaskState = SpawnCopilotResult & {
   cwd: string
   agentName?: string
   modelName?: string
+  origin: TaskOrigin
+  /** Workspace paths passed via `--add-dir` (captured for resume reuse). */
+  addDirs?: string[]
+  /** ps comm + lstart captured at spawn time for connect identity gating. */
+  psIdentity?: { comm: string; lstart: string }
 }
 
 export type CreateTaskInput = Omit<SpawnCopilotResult, 'taskId'> & {
@@ -20,6 +36,13 @@ export type CreateTaskInput = Omit<SpawnCopilotResult, 'taskId'> & {
   cwd: string
   agentName?: string
   modelName?: string
+  /**
+   * Source of the task. Optional on input — defaults to `'spawn'` so
+   * existing call sites that predate the discriminator keep working.
+   */
+  origin?: TaskOrigin
+  addDirs?: string[]
+  psIdentity?: { comm: string; lstart: string }
   pidFilePath?: string
 }
 
@@ -33,6 +56,11 @@ export function createTask(
   const task: TaskState = {
     ...rest,
     taskId,
+    // Existing call sites (delegate.ts) predate the discriminator; default
+    // to 'spawn' so they keep working without explicit `origin` until
+    // Unit 3c lands the resume tool. Explicit values from the input are
+    // preserved by the spread above.
+    origin: rest.origin ?? 'spawn',
   }
 
   if (task.pid > 0 && pidFilePath) {

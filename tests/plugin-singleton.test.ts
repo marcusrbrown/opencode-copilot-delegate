@@ -9,30 +9,47 @@ describe('plugInOnce', () => {
     _resetPluginSingleton()
   })
 
-  it('runs doInit once and returns its result on first invocation', async () => {
+  it('returns isFirst:true with real hooks on first invocation', async () => {
     let calls = 0
+    const realHooks = { tool: { example: 'tool' } }
     const doInit = async () => {
       calls += 1
-      return { tool: 'one' }
+      return realHooks
     }
     const result = await plugInOnce({ doInit, pid: 1 })
-    expect(result).toEqual({ tool: 'one' })
+    expect(result.isFirst).toBe(true)
+    expect(result.hooks).toBe(realHooks)
     expect(calls).toBe(1)
   })
 
-  it('returns the same hooks reference on subsequent calls in the same PID', async () => {
+  it('returns isFirst:false with empty hooks on duplicate invocations in the same PID', async () => {
+    // The empty-hooks contract is the entire point of Option-2: the OpenCode
+    // host iterates each plugin source's returned hook surface and registers
+    // every tool entry it finds, even when two sources return the same JS
+    // reference. Returning the cached real hooks from the duplicate path
+    // would cause the host to register tools twice. Returning {} is the only
+    // shape that prevents host-side double registration.
     let calls = 0
-    const hooks = { tool: 'cached' }
+    const realHooks = { tool: { example: 'tool' } }
     const doInit = async () => {
       calls += 1
-      return hooks
+      return realHooks
     }
     const r1 = await plugInOnce({ doInit, pid: 1 })
     const r2 = await plugInOnce({ doInit, pid: 1 })
     const r3 = await plugInOnce({ doInit, pid: 1 })
-    expect(r1).toBe(hooks)
-    expect(r2).toBe(hooks)
-    expect(r3).toBe(hooks)
+
+    expect(r1.isFirst).toBe(true)
+    expect(r1.hooks).toBe(realHooks)
+
+    expect(r2.isFirst).toBe(false)
+    expect(r2.hooks).not.toBe(realHooks)
+    expect(Object.keys(r2.hooks)).toEqual([])
+
+    expect(r3.isFirst).toBe(false)
+    expect(r3.hooks).not.toBe(realHooks)
+    expect(Object.keys(r3.hooks)).toEqual([])
+
     expect(calls).toBe(1)
   })
 
@@ -45,8 +62,10 @@ describe('plugInOnce', () => {
     const r1 = await plugInOnce({ doInit, pid: 1 })
     _resetPluginSingleton() // simulate "new process" globalThis fresh
     const r2 = await plugInOnce({ doInit, pid: 2 })
-    expect(r1.call).toBe(1)
-    expect(r2.call).toBe(2)
+    expect(r1.isFirst).toBe(true)
+    expect(r1.hooks.call).toBe(1)
+    expect(r2.isFirst).toBe(true)
+    expect(r2.hooks.call).toBe(2)
     expect(calls).toBe(2)
   })
 
@@ -64,8 +83,10 @@ describe('plugInOnce', () => {
     }
     const r1 = await plugInOnce({ doInit, pid: 1 })
     const r2 = await plugInOnce({ doInit, pid: 2 })
-    expect(r1.call).toBe(1)
-    expect(r2.call).toBe(2)
+    expect(r1.isFirst).toBe(true)
+    expect(r1.hooks.call).toBe(1)
+    expect(r2.isFirst).toBe(true)
+    expect(r2.hooks.call).toBe(2)
     expect(calls).toBe(2)
   })
 
@@ -109,11 +130,13 @@ describe('plugInOnce', () => {
     expect(receivedPid).toBe(9001)
   })
 
-  it('caches a rejected doInit promise on subsequent calls', async () => {
+  it('propagates a rejected doInit to first and duplicate callers', async () => {
     // Documents the known limitation in the JSDoc as test-form: when
     // `doInit()` rejects, the rejected promise is cached and every
-    // subsequent invocation in the same PID returns the same rejection
-    // without retrying init. Recovery requires a process restart.
+    // subsequent invocation in the same PID surfaces the same rejection
+    // without retrying init. Recovery requires a process restart. The
+    // duplicate path awaits the cached promise so sticky rejections
+    // propagate to all callers, not just the first.
     const error = new Error('init failed')
     let calls = 0
     const doInit = async () => {
@@ -126,8 +149,9 @@ describe('plugInOnce', () => {
     expect(calls).toBe(1)
   })
 
-  it('converges concurrent invocations on the same hooks promise', async () => {
+  it('runs doInit exactly once across concurrent invocations', async () => {
     let started = 0
+    const realHooks = { tool: 'concurrent' }
     const doInit = async () => {
       started += 1
       // The 20ms delay is intentionally larger than the time it takes for
@@ -139,33 +163,53 @@ describe('plugInOnce', () => {
       // microtask preemption between awaits, this test would need to
       // pivot to an explicit deferred-resolve fixture.
       await new Promise((r) => setTimeout(r, 20))
-      return { tool: 'concurrent' }
+      return realHooks
     }
     const [r1, r2, r3] = await Promise.all([
       plugInOnce({ doInit, pid: 1 }),
       plugInOnce({ doInit, pid: 1 }),
       plugInOnce({ doInit, pid: 1 }),
     ])
-    expect(r1).toBe(r2)
-    expect(r2).toBe(r3)
+    // Only one call ran init.
     expect(started).toBe(1)
+
+    // The first call to claim the singleton slot resolves with isFirst:true
+    // and the real hooks. Promise.all preserves array order matching the
+    // input array, so r1 is the call that arrived first.
+    expect(r1.isFirst).toBe(true)
+    expect(r1.hooks).toBe(realHooks)
+
+    // Subsequent concurrent callers resolve with isFirst:false and {} so
+    // the host does not double-register tools.
+    expect(r2.isFirst).toBe(false)
+    expect(Object.keys(r2.hooks)).toEqual([])
+    expect(r3.isFirst).toBe(false)
+    expect(Object.keys(r3.hooks)).toEqual([])
   })
 
-  it('swallows onDuplicate exceptions', async () => {
+  it('swallows onDuplicate exceptions without affecting init result', async () => {
     let initCalls = 0
     let duplicateCalls = 0
+    const realHooks = { ok: true }
     const doInit = async () => {
       initCalls += 1
-      return { ok: true }
+      return realHooks
     }
     const onDuplicate = () => {
       duplicateCalls += 1
       throw new Error('boom')
     }
-    await plugInOnce({ doInit, onDuplicate, pid: 1 })
-    // The throwing onDuplicate must not propagate to plugin init.
-    const result = await plugInOnce({ doInit, onDuplicate, pid: 1 })
-    expect(result).toEqual({ ok: true })
+    const r1 = await plugInOnce({ doInit, onDuplicate, pid: 1 })
+    // The throwing onDuplicate must not propagate into the duplicate
+    // result; the duplicate call still resolves with empty hooks.
+    const r2 = await plugInOnce({ doInit, onDuplicate, pid: 1 })
+
+    expect(r1.isFirst).toBe(true)
+    expect(r1.hooks).toBe(realHooks)
+
+    expect(r2.isFirst).toBe(false)
+    expect(Object.keys(r2.hooks)).toEqual([])
+
     expect(duplicateCalls).toBe(1)
     expect(initCalls).toBe(1)
   })

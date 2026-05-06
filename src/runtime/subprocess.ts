@@ -25,6 +25,14 @@ export type SpawnCopilotResult = {
   stdoutLineBuffer: string
   finalMessage?: string
   errorText?: string
+  /**
+   * Upstream Copilot session UUID captured from the terminal `result`
+   * JSONL event. Populated alongside `assignFinalMessage` in both the
+   * happy-path (`finalizeTask`) and cancelled-close branches; left
+   * undefined when no `result` event arrived (process killed early or
+   * crashed before emitting one).
+   */
+  copilotSessionId?: string
 }
 
 function flushBufferedStdout(task: SpawnCopilotResult): void {
@@ -45,14 +53,44 @@ function flushBufferedStdout(task: SpawnCopilotResult): void {
   task.stdoutLineBuffer = ''
 }
 
+/**
+ * Walk `task.events` backwards and return the first event matching the
+ * predicate. Avoids the allocation cost of `[...arr].reverse().find()`,
+ * which is meaningful for tasks with thousands of events. Mirrors the
+ * pattern used in `envelope.ts:extractFinalMessage`.
+ */
+function findLastEvent(
+  task: SpawnCopilotResult,
+  predicate: (event: ParsedEvent) => boolean,
+): ParsedEvent | undefined {
+  const events = task.events
+  for (let i = events.length - 1; i >= 0; i--) {
+    const event = events[i]
+    if (event && predicate(event)) return event
+  }
+  return undefined
+}
+
 function assignFinalMessage(task: SpawnCopilotResult): void {
-  const lastMessage = [...task.events]
-    .reverse()
-    .find((event) => event.type === 'message')
+  const lastMessage = findLastEvent(task, (event) => event.type === 'message')
   const content = lastMessage?.data?.content
 
   if (typeof content === 'string' && content.length > 0) {
     task.finalMessage = stripAnsi(content)
+  }
+}
+
+function assignCopilotSessionId(task: SpawnCopilotResult): void {
+  // The Copilot CLI's `result` JSONL event is the terminal usage event
+  // (see jsonl-parser.ts: `case 'result'` returns type `'usage'`). Walk
+  // events from the end — for typical sessions the result event is last,
+  // but if a future CLI version emits trailing events the most recent
+  // usage event is still the source of truth.
+  const lastUsage = findLastEvent(task, (event) => event.type === 'usage')
+  const sessionId = lastUsage?.data?.sessionId
+
+  if (typeof sessionId === 'string' && sessionId.length > 0) {
+    task.copilotSessionId = sessionId
   }
 }
 
@@ -73,6 +111,7 @@ function finalizeTask(
   }
 
   assignFinalMessage(task)
+  assignCopilotSessionId(task)
 }
 
 function resolveAuthEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
@@ -171,6 +210,7 @@ export function spawnCopilot(
         task.endedAt = Date.now()
         task.exitCode = code ?? undefined
         assignFinalMessage(task)
+        assignCopilotSessionId(task)
       } else {
         finalizeTask(task, code, stderrText, opts.pidFilePath)
       }

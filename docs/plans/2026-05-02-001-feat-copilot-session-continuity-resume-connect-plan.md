@@ -14,6 +14,42 @@ Add `copilot_resume` and `copilot_connect` tools that wrap the Copilot CLI's `--
 
 This is the first slice of S2. Fork is explicitly deferred to a follow-up slice; ACP, persistent plugin-side session storage, transcript replay, and watchdog behavior remain out of scope.
 
+## Amendment: Connect deferred (post-empirical, 2026-05-02)
+
+After this plan landed, Unit 3a was executed per the empirical-first design. Findings — captured in PR #94 ([docs(research): empirical Copilot CLI 1.0.40 continuity capture](https://github.com/marcusrbrown/opencode-copilot-delegate/pull/94)), committed to `tests/fixtures/{connect-mismatch,resume-mismatch}.jsonl`, and documented in [docs/research/copilot-cli-capabilities-2026-04-27.md](../research/copilot-cli-capabilities-2026-04-27.md) §10.12a/§10.12b — are decisive: **`copilot --connect` cannot be safely shipped as a first-slice tool against CLI 1.0.40.**
+
+Both `--connect=<id> --no-remote` (the original plan argv) and `--connect=<id>` without `--no-remote` silent-fallback to a fresh local session for every tested target — known recent IDs and unknown all-zeros placeholders alike — at exit 0 with empty stderr and no detectable signal in the JSONL stream until the terminal `result` event reveals `result.sessionId !== requested`. The remote-control mechanism behind `--connect` requires an actively-running, listening session that the plugin's one-shot `-p` execution model cannot provide. Side finding: `--share[=path]` is a local markdown transcript export, not a cloud-share primitive — CLI 1.0.40 has no remote-share flag at all.
+
+**Effective scope of this slice (post-amendment):**
+
+- Tools shipped: `copilot_resume` only (catalog grows 3 → 4, not 3 → 5).
+- RPC routes: `/tasks/resume` + `/tasks/recent-sessions` only (no `/tasks/connect`).
+- Origin discriminator stays `'spawn' | 'resume' | 'connect'` in the type for forward compatibility, but no `'connect'`-origin tasks are constructed in this slice.
+- TUI: Recent Sessions view + raw-ID input form for resume; no connect mode in the form; no connect-specific confirm-card variant.
+- AGENTS.md / README document resume only; connect listed as deferred with link to PR #94.
+
+**Read each subsequent section with this lens:**
+
+| Section | Treatment under the amendment |
+|---|---|
+| Requirements R1, R2, R6, R8, R10, R11, R12, R13, R14 | Where they say "and connect", read as "(connect deferred)". R9 connect-specific clauses become moot (no validation strategy needed for a tool we don't ship). |
+| Key Technical Decisions: "Two dedicated tools, not one parameterized" | Read as "one new tool (`copilot_resume`); `copilot_connect` deferred to follow-up slice once an upstream signal exists". |
+| Key Technical Decisions: "`--connect` validation timing is empirical-first" | Empirically determined: no validation strategy works; connect deferred. The decision itself was correct (empirical-first), the outcome was deferral. |
+| Key Technical Decisions: "Borrowed sessions are un-reapable" | Type-level discriminator stays for forward compat; no connect-origin tasks are constructed, so the rule has no current consumer. |
+| Unit 1 | Implement as written: `origin` discriminator includes `'connect'` for forward compatibility. `psIdentity` field stays in `TaskState` for the same reason. |
+| Unit 2 | Implement resume + spawn paths as written. Connect-specific branches (identity gate in cancel, confirm-card connect variant, `notifySpawn` connect warning, `disconnected` cancel response) are NOT implemented in this slice. |
+| Unit 3a | Already complete (PR #94). No further capture work needed. Skip in `ce:work`. |
+| Unit 3b | Implement as written; pre-flight helpers serve resume only. |
+| Unit 3c | Implement `copilot_resume` only; do NOT create `src/tools/connect.ts` or `tests/connect.test.ts`. Tool catalog assertion in `tests/tools.test.ts` extends from 3 to 4, not 5. |
+| Unit 4 | Implement `/tasks/resume` + `/tasks/recent-sessions` only; do NOT add `/tasks/connect` route or `TasksConnectRequestSchema`. |
+| Unit 5 | Implement modal-list focus model + Recent Sessions view + raw-ID input form for resume only. Drop the `C` keyboard hint and the connect-mode form variant; confirm-card stays at one variant (existing cancel copy). |
+| Unit 6 | Document resume only. Update tool catalog count to 4. Add a brief "Connect deferred" subsection in the AGENTS.md `Borrowed sessions` block linking to PR #94 and this amendment. |
+| System-Wide Impact / Risks / Security & Input Validation | Drop connect-specific rows; the validation framework applies to resume identically. The borrowed-process risk row becomes vestigial (no borrowed processes constructed). |
+
+When `ce:work` starts a unit, the implementing subagent brings the per-section corrections inline as part of that unit's PR (rename `connect`-specific test scenarios to `resume`, drop connect.ts file references in Unit 3c, etc.). This amendment serves as the interpretive layer; per-unit surgical updates land alongside the matching implementation.
+
+Connect remains a future slice. Reconsider if either: (a) Copilot CLI introduces an early attach-failure event or a protocol-level signal for "session not connectable", or (b) a real cloud-shared-session test surface emerges. PR #94's evidence chain is the trigger condition documentation.
+
 ## Problem Frame
 
 The plugin is strong at spawning fresh delegations and weak at picking useful work back up once it leaves the happy path. A delegation that times out, loses its parent OpenCode session, or needs to continue elsewhere forces the user back into raw `copilot` CLI usage. The CLI already exposes `--resume` and `--connect` primitives; the gap is productizing them safely — session targeting, workspace re-application, and structured failure handling are not yet exposed through plugin tools or the TUI.

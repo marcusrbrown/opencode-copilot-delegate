@@ -158,6 +158,10 @@ export function createDelegateTool(options: DelegateToolOptions) {
             agentName: args.agent,
             modelName: args.model,
             pidFilePath: options.pidFilePath,
+            // S2 Unit 1: discriminator is mandatory at the registry layer.
+            // Delegate always spawns a fresh `copilot -p` subprocess.
+            origin: 'spawn',
+            addDirs: args.add_dir,
           },
           spawnTaskId,
         )
@@ -176,6 +180,12 @@ export function createDelegateTool(options: DelegateToolOptions) {
 
       void task.completionPromise
         .then(async () => {
+          // The registry's TaskState was created up-front from a snapshot
+          // of `spawnFields`, so post-spawn fields populated by the
+          // subprocess wrapper (status, finalMessage, copilotSessionId, etc)
+          // must be synced back here. Any field assigned after `createTask`
+          // returned needs to appear in this list — otherwise it is invisible
+          // to `copilot_output` even when present on `spawnResult`.
           Object.assign(task, {
             status: spawnResult.status,
             exitCode: spawnResult.exitCode,
@@ -183,6 +193,7 @@ export function createDelegateTool(options: DelegateToolOptions) {
             stdoutLineBuffer: spawnResult.stdoutLineBuffer,
             finalMessage: spawnResult.finalMessage,
             errorText: spawnResult.errorText,
+            copilotSessionId: spawnResult.copilotSessionId,
           })
 
           try {
