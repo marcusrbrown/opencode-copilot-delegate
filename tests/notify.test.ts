@@ -339,6 +339,64 @@ describe('notification injection', () => {
     })
   })
 
+  describe('origin-aware notification (S2 Unit 2)', () => {
+    it('uses the spawn header for tasks without an explicit origin (back-compat)', async () => {
+      // Existing call sites (and most existing tests) omit `origin`. The
+      // formatter must keep producing the COPILOT DELEGATION COMPLETED
+      // header for back-compat — origin defaults to spawn.
+      const client = mockClient()
+      incrementInFlight('session-A')
+
+      await notifyCompletion(client, makeTaskInfo())
+
+      expect(client.promptCalls[0].text).toContain(
+        '[COPILOT DELEGATION COMPLETED]',
+      )
+    })
+
+    it('uses the spawn header when origin is explicitly spawn', async () => {
+      const client = mockClient()
+      incrementInFlight('session-A')
+
+      await notifyCompletion(client, makeTaskInfo({ origin: 'spawn' }))
+
+      expect(client.promptCalls[0].text).toContain(
+        '[COPILOT DELEGATION COMPLETED]',
+      )
+    })
+
+    it('uses the resume header when origin is resume', async () => {
+      // Per the High-Level Technical Design table:
+      // resume → "COPILOT RESUME COMPLETED"
+      const client = mockClient()
+      incrementInFlight('session-A')
+
+      await notifyCompletion(client, makeTaskInfo({ origin: 'resume' }))
+
+      expect(client.promptCalls[0].text).toContain('[COPILOT RESUME COMPLETED]')
+      expect(client.promptCalls[0].text).not.toContain(
+        '[COPILOT DELEGATION COMPLETED]',
+      )
+    })
+
+    it('preserves ACTION REQUIRED behavior on failed resume tasks', async () => {
+      // The failed-status branch must still fire regardless of origin —
+      // resume failures need the same operator-attention signal as spawn.
+      const client = mockClient()
+      incrementInFlight('session-A')
+
+      await notifyCompletion(
+        client,
+        makeTaskInfo({ origin: 'resume', status: 'failed', exitCode: 2 }),
+      )
+
+      const text = client.promptCalls[0].text
+      expect(text).toContain('[COPILOT RESUME COMPLETED]')
+      expect(text).toContain('ACTION REQUIRED')
+      expect(text).toContain('2')
+    })
+  })
+
   describe('cancelled status', () => {
     it('should set noReply false for cancelled tasks', async () => {
       const client = mockClient()

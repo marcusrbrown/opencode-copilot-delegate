@@ -11,6 +11,8 @@
  */
 
 import type { TaskStatus } from './envelope'
+import type { SpawnCopilotResult } from './subprocess'
+import type { TaskOrigin, TaskState } from './task-registry'
 
 /** Minimal client interface for notification injection. */
 export type NotifyClient = {
@@ -47,6 +49,12 @@ export type NotifyTaskInfo = {
   modelName?: string
   startedAt: number
   exitCode?: number
+  /**
+   * Source of the task. Optional for back-compat with callers that
+   * predate the discriminator (S2 Unit 1); existing call sites and
+   * tests omit it and the formatter falls back to the spawn variant.
+   */
+  origin?: TaskOrigin
 }
 
 /** Per-parent-session in-flight task counters. */
@@ -107,14 +115,37 @@ function formatDuration(ms: number): string {
   return `${minutes}m ${remainingSeconds}s`
 }
 
+/**
+ * Section header for the system-reminder text. Defaults to the spawn
+ * header for back-compat with callers that predate the discriminator.
+ *
+ * Per the High-Level Technical Design table in
+ * `docs/plans/2026-05-02-001-feat-copilot-session-continuity-resume-connect-plan.md`:
+ *   spawn   → "COPILOT DELEGATION COMPLETED"
+ *   resume  → "COPILOT RESUME COMPLETED"
+ *   connect → "COPILOT CONNECTOR DISCONNECTED"  (deferred — no connect-origin
+ *             tasks are constructed in this slice; included for forward compat)
+ */
+function notificationHeader(origin: TaskOrigin | undefined): string {
+  switch (origin) {
+    case 'resume':
+      return '[COPILOT RESUME COMPLETED]'
+    case 'connect':
+      return '[COPILOT CONNECTOR DISCONNECTED]'
+    default:
+      return '[COPILOT DELEGATION COMPLETED]'
+  }
+}
+
 /** Build the `<system-reminder>` notification text. */
 function buildNotificationText(task: NotifyTaskInfo): string {
   const agent = task.agentName ?? 'default'
   const model = task.modelName ?? 'default'
   const duration = formatDuration(Date.now() - task.startedAt)
+  const header = notificationHeader(task.origin)
 
   let text = `<system-reminder>
-[COPILOT DELEGATION COMPLETED]
+${header}
 **Task ID:** \`${task.taskId}\`
 **Agent:** ${agent}
 **Model:** ${model}
@@ -194,4 +225,59 @@ export async function notifyCompletion(
   } catch {
     // Toast failure is non-critical
   }
+}
+
+/**
+ * Attach the post-completion pipeline to a task and its underlying spawn
+ * result. Encapsulates the back-patch of late-arriving fields from
+ * `SpawnCopilotResult` to the registry `TaskState`, then dispatches the
+ * completion notification.
+ *
+ * The back-patch is load-bearing: `task` is created up-front from a
+ * snapshot of `spawnFields`, so post-spawn fields populated by the
+ * subprocess wrapper (status, finalMessage, copilotSessionId, etc) live
+ * on `spawnResult` until they are explicitly synced. Any field assigned
+ * after `createTask` returned needs to appear in the assign list —
+ * otherwise it is invisible to `copilot_output` even when present on
+ * `spawnResult`.
+ *
+ * Origin-aware notification text is delegated to `buildNotificationText`
+ * via `task.origin`, so this helper itself is origin-agnostic — the same
+ * pipeline drives spawn-, resume-, and (eventually) connect-origin tasks.
+ */
+export function attachCompletionPipeline(
+  task: TaskState,
+  spawnResult: SpawnCopilotResult,
+  client: NotifyClient,
+): void {
+  void task.completionPromise
+    .then(async () => {
+      Object.assign(task, {
+        status: spawnResult.status,
+        exitCode: spawnResult.exitCode,
+        endedAt: spawnResult.endedAt,
+        stdoutLineBuffer: spawnResult.stdoutLineBuffer,
+        finalMessage: spawnResult.finalMessage,
+        errorText: spawnResult.errorText,
+        copilotSessionId: spawnResult.copilotSessionId,
+      })
+
+      try {
+        await notifyCompletion(client, {
+          taskId: task.taskId,
+          parentSessionID: task.parentSessionID,
+          status: task.status,
+          agentName: task.agentName,
+          modelName: task.modelName,
+          startedAt: task.startedAt,
+          exitCode: task.exitCode,
+          origin: task.origin,
+        })
+      } catch {
+        // Notification failures are non-fatal for the tool call.
+      }
+    })
+    .catch(() => {
+      // completionPromise should resolve, but ignore unexpected rejections
+    })
 }
