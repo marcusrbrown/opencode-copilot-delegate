@@ -285,6 +285,44 @@ describe('plugin tools', () => {
     expect(output.task_id).toMatch(/^cpl_[0-9a-f-]+$/)
   })
 
+  it('surfaces copilot_session_id and origin on the output envelope after end-to-end completion (S2 Unit 1 pipeline regression)', async () => {
+    // This is the integration-style guard for the Unit 1 sync gap:
+    // assignCopilotSessionId() writes copilotSessionId on SpawnCopilotResult,
+    // but the registry's TaskState is a separate object, populated up-front
+    // via createTask({...spawnFields, ...}). The completion handler in
+    // delegate.ts uses Object.assign to sync select fields back. If
+    // copilotSessionId is omitted from that sync, copilot_output sees
+    // task.copilotSessionId === undefined and the envelope's
+    // copilot_session_id is missing — even though all unit tests pass.
+    //
+    // Prompt: 'Return JSONL' — fake copilot bin emits result with
+    // sessionId:"session-1" and exits 0 (see makeFakeCopilotBin above).
+    const cwd = mkdtempSync(join(tmpdir(), 'copilot-tools-session-id-'))
+    const binDir = makeFakeCopilotBin()
+    tempPaths.push(cwd, binDir)
+
+    process.env.PATH = `${binDir}:${process.env.PATH ?? ''}`
+
+    const result = await plugin(makePluginInput(cwd))
+    const tools = requireTools(result)
+
+    const delegateRaw = await tools.copilot_delegate.execute(
+      { prompt: 'Return JSONL' },
+      makeToolContext({ directory: cwd, worktree: cwd }),
+    )
+    const taskId = String(expectObject(delegateRaw).task_id)
+
+    const outputRaw = await tools.copilot_output.execute(
+      { task_id: taskId, block: true, timeout_ms: 5000 },
+      makeToolContext(),
+    )
+    const output = expectObject(outputRaw)
+
+    expect(output.status).toBe('complete')
+    expect(output.origin).toBe('spawn')
+    expect(output.copilot_session_id).toBe('session-1')
+  })
+
   it('fires a spawn toast after task creation succeeds', async () => {
     const cwd = mkdtempSync(join(tmpdir(), 'copilot-tools-spawn-toast-'))
     const binDir = makeFakeCopilotBin()

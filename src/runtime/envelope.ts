@@ -7,6 +7,7 @@
  */
 
 import type { ParsedEvent } from './jsonl-parser'
+import type { TaskOrigin } from './task-registry'
 
 /** Status of a delegated Copilot task. */
 export type TaskStatus =
@@ -44,7 +45,7 @@ export type EnvelopeInput = {
   errorText?: string
   timedOut?: boolean
   /** Source of the task — pass-through from `TaskState.origin`. */
-  origin?: 'spawn' | 'resume' | 'connect'
+  origin?: TaskOrigin
   /** Upstream Copilot session UUID — pass-through from `TaskState`. */
   copilotSessionId?: string
 }
@@ -69,7 +70,7 @@ export type OutputEnvelope = {
    * to distinguish a fresh delegation from a resumed/connected session
    * without re-reading the registry.
    */
-  origin: 'spawn' | 'resume' | 'connect'
+  origin: TaskOrigin
   /**
    * Upstream Copilot session UUID, when known. Captured from the JSONL
    * `result` event during the task lifecycle. Omitted when the subprocess
