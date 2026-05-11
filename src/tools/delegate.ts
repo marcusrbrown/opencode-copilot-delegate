@@ -2,8 +2,8 @@ import type { PluginInput } from '@opencode-ai/plugin'
 import { tool } from '@opencode-ai/plugin/tool'
 import type { NotifyClient } from '../runtime/notify'
 import {
+  attachCompletionPipeline,
   incrementInFlight,
-  notifyCompletion,
   notifySpawn,
 } from '../runtime/notify'
 import type { SpawnCopilotResult } from '../runtime/subprocess'
@@ -178,41 +178,11 @@ export function createDelegateTool(options: DelegateToolOptions) {
         },
       )
 
-      void task.completionPromise
-        .then(async () => {
-          // The registry's TaskState was created up-front from a snapshot
-          // of `spawnFields`, so post-spawn fields populated by the
-          // subprocess wrapper (status, finalMessage, copilotSessionId, etc)
-          // must be synced back here. Any field assigned after `createTask`
-          // returned needs to appear in this list — otherwise it is invisible
-          // to `copilot_output` even when present on `spawnResult`.
-          Object.assign(task, {
-            status: spawnResult.status,
-            exitCode: spawnResult.exitCode,
-            endedAt: spawnResult.endedAt,
-            stdoutLineBuffer: spawnResult.stdoutLineBuffer,
-            finalMessage: spawnResult.finalMessage,
-            errorText: spawnResult.errorText,
-            copilotSessionId: spawnResult.copilotSessionId,
-          })
-
-          try {
-            await notifyCompletion(options.client as NotifyClient, {
-              taskId: task.taskId,
-              parentSessionID: task.parentSessionID,
-              status: task.status,
-              agentName: task.agentName,
-              modelName: task.modelName,
-              startedAt: task.startedAt,
-              exitCode: task.exitCode,
-            })
-          } catch {
-            // Notification failures are non-fatal for the tool call.
-          }
-        })
-        .catch(() => {
-          // completionPromise should resolve, but ignore unexpected rejections
-        })
+      attachCompletionPipeline(
+        task,
+        spawnResult,
+        options.client as NotifyClient,
+      )
 
       return JSON.stringify({ task_id: task.taskId })
     },
