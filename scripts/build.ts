@@ -12,10 +12,11 @@ async function build(options: Parameters<typeof Bun.build>[0]): Promise<void> {
   throw new Error(`Failed to build ${options.entrypoints.join(', ')}`)
 }
 
+// Plugin entry must be Node-loadable so `node --input-type=module -e "import(...)"` can assert export shape in CI.
 await build({
   entrypoints: ['src/index.ts'],
   outdir: 'dist',
-  target: 'bun',
+  target: 'node',
   external: ['@opencode-ai/plugin'],
 })
 
