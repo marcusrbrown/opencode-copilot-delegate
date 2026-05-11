@@ -353,7 +353,7 @@ The plugin is strong at spawning fresh delegations and weak at picking useful wo
 
 ---
 
-- [ ] **Unit 3b: Pre-flight check helpers and security/input-validation primitives**
+- [x] **Unit 3b: Pre-flight check helpers and security/input-validation primitives**
 
 **Goal:** Pure functions for stderr normalization, config-dir resolution, UUID detection, filesystem pre-flight checks, and the input-validation primitives the new tool/RPC schemas will depend on.
 
@@ -405,9 +405,9 @@ The plugin is strong at spawning fresh delegations and weak at picking useful wo
 
 ---
 
-- [ ] **Unit 3c: `copilot_resume` and `copilot_connect` tool factories**
+- [x] **Unit 3c: `copilot_resume` tool factory**
 
-**Goal:** Two new tool factories with full argv assembly, validated inputs, pre-flight checks (config-dir aware), origin-aware completion pipeline, and structured error normalization. Both register through `normalizeToolArgSchemas` and `plugInOnce`. `launchResume` and `launchConnect` are exported directly from these files for RPC re-use (Unit 4).
+**Goal:** A new resume tool factory with full argv assembly, validated inputs, pre-flight checks (config-dir aware), origin-aware completion pipeline, and structured error normalization. It registers through `normalizeToolArgSchemas` and `plugInOnce`. `launchResume` is exported directly for RPC re-use (Unit 4). `copilot_connect` is deferred by the amendment above.
 
 **Requirements:** R1, R2, R3, R6, R7, R8, R9, R10
 
@@ -415,21 +415,17 @@ The plugin is strong at spawning fresh delegations and weak at picking useful wo
 
 **Files:**
 - Create: `src/tools/resume.ts` (also exports `launchResume`)
-- Create: `src/tools/connect.ts` (also exports `launchConnect`)
-- Modify: `src/index.ts` (register both new tools through the existing normalization + plugInOnce pipeline; add startup canary that logs warning when `copilot --version` differs from tested 1.0.40)
-- Test: `tests/tools.test.ts` (extend tool-catalog assertion to 5 tools; extend schema-walk cases to include resume/connect args)
+- Modify: `src/index.ts` (register `copilot_resume` through the existing normalization + plugInOnce pipeline)
+- Test: `tests/tools.test.ts` (extend tool-catalog assertion to 4 tools; extend schema-walk cases to include resume args)
 - Test: `tests/resume.test.ts`
-- Test: `tests/connect.test.ts`
 
 **Approach:**
-- `resume.ts` argv: `['--resume=<targetId>', '--output-format', 'json', '-s', '--allow-all-tools', '--no-ask-user']` + `appendRepeatedFlag` for `--add-dir`. Pre-flight: `validateTargetId` first; if `type === 'uuid'`, call `hasLocalCopilotSession(value, resolveConfigDir(args.configDir))`; if false, return `{ error: "No local session found for UUID <id>" }` without spawning. **Resume does NOT accept a `prompt` argument** (semantic alignment: resume + new prompt is fork; deferred to follow-up slice). Schema: `{ targetId: string, cwd?: string, addDirs?: string[], configDir?: string }`.
-- `connect.ts` argv: `['--connect=<targetId>', '--output-format', 'json', '-s', '--allow-all-tools', '--no-ask-user', '--no-remote']` + `--add-dir` reuse. Pre-flight: `validateTargetId`. Validation strategy from Unit 3a: if early identity event exists, validate; if not, the tool description and `notifySpawn` toast carry the loud warning that an invalid ID may silently start a fresh session. Capture target PID's `comm + lstart` via `getPidIdentity()` AT SPAWN TIME (synchronous with PID assignment) and store on `TaskState.psIdentity`. Schema: `{ targetId: string, cwd?: string, addDirs?: string[], configDir?: string }`.
-- Both tools call `validateAddDirs(args.addDirs, allowedRoots)` and `validateCwd(args.cwd, allowedRoots)` before assembling argv. Validation failures return structured `{ error }` without spawning.
-- Lookup-by-known-task (R3): both tools first scan `getAllTasks()` for any task whose `copilotSessionId === targetId`; if found, reuse its captured `addDirs` as workspace context (re-validated through `validateAddDirs`). The lookup returns workspace metadata only — resume/connect always create a new `TaskState`, never alias to a prior task handle.
-- `launchResume(opts)` and `launchConnect(opts)` are exported from these files (no separate `launch-helpers.ts`). RPC routes (Unit 4) import them directly.
-- `index.ts`: register `copilot_resume` and `copilot_connect` alongside the existing three. Goes through `normalizeToolArgSchemas` walk + `plugInOnce` wrapper automatically.
-- **Borrowed-session rule**: connect-mode `createTask` does NOT include the `pidFilePath` orphan-ledger write hook (the *remote session* lifecycle is what the ledger tracks; the local connector PID is owned but un-reapable in that sense). Resume-mode includes it (resume spawns a real new process owned by this plugin instance and IS in scope for orphan tracking).
-- **Cancel-from-connect identity gate**: when `cancelTaskById` runs against a connect-origin task, re-call `getPidIdentity(task.pid)` and compare against the captured `task.psIdentity` BEFORE invoking `killProcessTree`. On mismatch, log a warning and skip kill (defense against connector PID being reused by the OS). This is wired into `cancel-helper.ts` in Unit 2 (signature already accommodates origin branching).
+- `resume.ts` argv: `['--resume=<targetId>', '--output-format', 'json', '-s', '--allow-all-tools', '--no-ask-user']` + `appendRepeatedFlag` for `--add-dir`. Pre-flight: `validateTargetId` first; if `type === 'uuid'`, call `hasLocalCopilotSession(value, resolveConfigDir(args.configDir))`; if false, return `{ error: "No local session found for UUID <id>" }` without spawning. **Resume does NOT accept a `prompt` argument** (semantic alignment: resume + new prompt is fork; not part of this release). Schema: `{ targetId: string, cwd?: string, addDirs?: string[], configDir?: string }`.
+- The tool calls `validateAddDirs(args.addDirs, allowedRoots)` and `validateCwd(args.cwd, allowedRoots)` before assembling argv. Validation failures return structured `{ error }` without spawning.
+- Lookup-by-known-task (R3): scan `getAllTasks()` for any task whose `copilotSessionId === targetId`; if found, reuse its captured `addDirs` as workspace context (re-validated through `validateAddDirs`). The lookup returns workspace metadata only — resume always creates a new `TaskState`, never aliases to a prior task handle.
+- `launchResume(opts)` is exported from `src/tools/resume.ts` (no separate `launch-helpers.ts`). RPC routes (Unit 4) import it directly.
+- `index.ts`: register `copilot_resume` alongside the existing three. Goes through `normalizeToolArgSchemas` walk + `plugInOnce` wrapper automatically.
+- Resume-mode includes the `pidFilePath` orphan-ledger write hook because resume spawns a real new process owned by this plugin instance and is in scope for orphan tracking.
 
 **Execution note:** Test-first for the tool factories using the existing fake-binary pattern from `tests/tools.test.ts`. Validation helpers from Unit 3b already covered; here we only test wiring + argv assembly + pre-flight gating + happy/sad paths.
 
@@ -445,21 +441,16 @@ The plugin is strong at spawning fresh delegations and weak at picking useful wo
 - Error path (resume): target = valid UUID with no local `session.db`; returns `{ error: "No local session found for UUID <id>" }` without spawning. — resume
 - Error path (resume): target = unknown name (CLI exits 1 with stderr no-match); tool returns `{ error: "Session not found: '<value>'" }`. — resume
 - Edge case (resume): target = name shorter than 7 chars; CLI rejects same way; same normalized error. — resume
-- Happy path (connect): target = real session ID; spawn succeeds; `result.sessionId === target`; task created with `origin: 'connect'`, no orphan ledger entry. — connect
-- Error path (connect): target = unknown ID; spawn succeeds but `result.sessionId !== target`; tool surfaces `{ error: "remote session '<id>' not found; new session started instead" }` and the spurious task is cleaned up. — connect
-- Happy path (connect): captured `psIdentity` is non-empty after attach. — connect
-- Integration: cancel on a `connect`-origin task returns `{ disconnected: true, was_running: true }` (relies on Unit 2). — tools
-- Integration: tool catalog assertion in `tests/tools.test.ts` lists all 5 tools. — tools
-- Integration: schema-walk case set in `tests/tools.test.ts` exercises resume/connect args (catches forgotten `normalizeToolArgSchemas` regression). — tools
+- Integration: tool catalog assertion in `tests/tools.test.ts` lists all 4 tools. — tools
+- Integration: schema-walk case set in `tests/tools.test.ts` exercises resume args (catches forgotten `normalizeToolArgSchemas` regression). — tools
 - Happy path: `hasLocalSession(<uuid>)` returns true when `session.db` exists, false when the directory or file is absent. — session-store
 - Edge case: `hasLocalSession` with non-UUID input returns false without throwing. — session-store
 - Happy path: `normalizeContinuityError` matches the no-match stderr pattern and returns the cleaned message. — continuity-errors
 - Edge case: `normalizeContinuityError` returns null for stderr it does not recognize. — continuity-errors
 
 **Verification:**
-- 5 tools registered; tool catalog test passes.
+- 4 tools registered; tool catalog test passes.
 - All schema-walk cases pass after extension.
-- Connect-mode tasks do not create an entry in the orphan PID ledger; verified by checking `orphans/` directory contents in the connect happy-path test.
 - Resume-mode tasks DO create an orphan-ledger entry (regression check that resume keeps the existing spawn ownership behavior).
 
 ---

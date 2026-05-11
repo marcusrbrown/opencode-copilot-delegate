@@ -133,6 +133,7 @@ describe('plugin init lifecycle', () => {
       'copilot_cancel',
       'copilot_delegate',
       'copilot_output',
+      'copilot_resume',
     ])
   })
 
@@ -156,6 +157,7 @@ describe('plugin init lifecycle', () => {
       'copilot_cancel',
       'copilot_delegate',
       'copilot_output',
+      'copilot_resume',
     ])
     expect(existsSync(portFilePath)).toBe(true)
     expect(
@@ -186,6 +188,7 @@ describe('plugin init lifecycle', () => {
       'copilot_cancel',
       'copilot_delegate',
       'copilot_output',
+      'copilot_resume',
     ])
   })
 
@@ -218,6 +221,7 @@ describe('plugin init lifecycle', () => {
       'copilot_cancel',
       'copilot_delegate',
       'copilot_output',
+      'copilot_resume',
     ])
 
     // And the orphans directory was NOT created (proves the failure path
@@ -281,11 +285,12 @@ describe('plugin init lifecycle', () => {
     const second = await plugin(input)
     const third = await plugin(input)
 
-    // First invocation gets the real hooks with all three tools.
+    // First invocation gets the real hooks with the full tool catalog.
     expect(Object.keys(first.tool ?? {}).sort()).toEqual([
       'copilot_cancel',
       'copilot_delegate',
       'copilot_output',
+      'copilot_resume',
     ])
 
     // Duplicate invocations get an empty hooks object — `tool` is absent
@@ -323,6 +328,7 @@ describe('plugin init lifecycle', () => {
       'copilot_cancel',
       'copilot_delegate',
       'copilot_output',
+      'copilot_resume',
     ])
     expect(lstatSync(linkedPluginStateDir).isSymbolicLink()).toBe(true)
     expect(readFileSync(foreignPidFile, 'utf-8')).toBe(
