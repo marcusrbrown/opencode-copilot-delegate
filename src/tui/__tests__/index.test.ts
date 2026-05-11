@@ -32,6 +32,11 @@ type ToastCall = {
   duration?: number
 }
 
+type KeymapLayerCall = {
+  commands: ReadonlyArray<Record<string, unknown>>
+  bindings: ReadonlyArray<unknown>
+}
+
 type TestApiControls = {
   api: TuiPluginApi
   commandFactories: Array<() => TuiCommand[]>
@@ -41,6 +46,21 @@ type TestApiControls = {
   disposeHandlers: Array<() => void | Promise<void>>
   toastCalls: ToastCall[]
   unregisterCalls: number
+  keymapLayerCalls: KeymapLayerCall[]
+  keymapUnregisterCalls: number
+}
+
+type CreateTestApiOptions = {
+  /**
+   * Which TUI registration surfaces the api stub exposes:
+   * - `'command'` (default): only `api.command.register` — OpenCode 1.14.41 baseline
+   * - `'keymap'`: only `api.keymap.registerLayer` — OpenCode 1.14.44+ canonical (and the 1.14.42–43 gap)
+   * - `'both'`: both surfaces — the 1.14.44+ shim era where `command.register` is restored as a deprecated shim
+   *
+   * Default `'command'` preserves the existing test suite's assertions about the
+   * legacy `command.register` registration path without modification.
+   */
+  surfaces?: 'command' | 'keymap' | 'both'
 }
 
 const originalFetch = globalThis.fetch
@@ -75,26 +95,54 @@ async function loadTuiPlugin(): Promise<TuiPlugin> {
   return plugin as TuiPlugin
 }
 
-function createTestApi(): TestApiControls {
+function createTestApi(options: CreateTestApiOptions = {}): TestApiControls {
+  const surfaces = options.surfaces ?? 'command'
+  const exposeKeymap = surfaces === 'keymap' || surfaces === 'both'
+  const exposeCommand = surfaces === 'command' || surfaces === 'both'
+
   const commandFactories: Array<() => TuiCommand[]> = []
   const dialogReplacements: DialogReplacement[] = []
   const dialogSizes: Array<'medium' | 'large' | 'xlarge'> = []
   const disposeHandlers: Array<() => void | Promise<void>> = []
   const toastCalls: ToastCall[] = []
+  const keymapLayerCalls: KeymapLayerCall[] = []
   let clearCalls = 0
   let unregisterCalls = 0
+  let keymapUnregisterCalls = 0
+
+  const commandSurface = exposeCommand
+    ? {
+        register: (cb: () => TuiCommand[]) => {
+          commandFactories.push(cb)
+          return () => {
+            unregisterCalls += 1
+          }
+        },
+        trigger: () => {},
+        show: () => {},
+      }
+    : undefined
+
+  const keymapSurface = exposeKeymap
+    ? {
+        registerLayer: (layer: {
+          commands: ReadonlyArray<Record<string, unknown>>
+          bindings: ReadonlyArray<unknown>
+        }) => {
+          keymapLayerCalls.push({
+            commands: layer.commands,
+            bindings: layer.bindings,
+          })
+          return () => {
+            keymapUnregisterCalls += 1
+          }
+        },
+      }
+    : undefined
 
   const api = {
-    command: {
-      register: (cb: () => TuiCommand[]) => {
-        commandFactories.push(cb)
-        return () => {
-          unregisterCalls += 1
-        }
-      },
-      trigger: () => {},
-      show: () => {},
-    },
+    ...(commandSurface ? { command: commandSurface } : {}),
+    ...(keymapSurface ? { keymap: keymapSurface } : {}),
     ui: {
       Dialog: ((props: { children?: JSX.Element }) =>
         props.children ?? null) as TuiPluginApi['ui']['Dialog'],
@@ -147,6 +195,10 @@ function createTestApi(): TestApiControls {
     toastCalls,
     get unregisterCalls() {
       return unregisterCalls
+    },
+    keymapLayerCalls,
+    get keymapUnregisterCalls() {
+      return keymapUnregisterCalls
     },
   }
 }
@@ -351,6 +403,77 @@ describe('tui entrypoint', () => {
     expect(controls.dialogReplacements).toHaveLength(1)
     expect(controls.dialogSizes).toEqual(['large'])
     expect(controls.toastCalls).toEqual([])
+  })
+
+  it('prefers api.keymap.registerLayer when available (OpenCode 1.14.44+)', async () => {
+    const plugin = await loadTuiPlugin()
+    const controls = createTestApi({ surfaces: 'keymap' })
+
+    await plugin(controls.api, undefined, makePluginMeta())
+
+    expect(controls.keymapLayerCalls).toHaveLength(1)
+    expect(controls.commandFactories).toHaveLength(0)
+
+    const layer = controls.keymapLayerCalls[0]
+    expect(layer.bindings).toEqual([])
+    expect(layer.commands).toHaveLength(1)
+
+    const command = layer.commands[0]
+    expect(command).toMatchObject({
+      namespace: 'palette',
+      name: 'copilot-status',
+      title: 'Copilot Status',
+      category: 'Copilot',
+    })
+    expect(typeof command.run).toBe('function')
+
+    expect(controls.disposeHandlers).toHaveLength(1)
+    await controls.disposeHandlers[0]()
+    expect(controls.keymapUnregisterCalls).toBe(1)
+    expect(controls.unregisterCalls).toBe(0)
+  })
+
+  it('prefers api.keymap.registerLayer when both APIs exist (1.14.44+ shim era)', async () => {
+    const plugin = await loadTuiPlugin()
+    const controls = createTestApi({ surfaces: 'both' })
+
+    await plugin(controls.api, undefined, makePluginMeta())
+
+    expect(controls.keymapLayerCalls).toHaveLength(1)
+    expect(controls.commandFactories).toHaveLength(0)
+  })
+
+  it('falls back to api.command.register when keymap.registerLayer is absent (OpenCode 1.14.41)', async () => {
+    const plugin = await loadTuiPlugin()
+    const controls = createTestApi({ surfaces: 'command' })
+
+    await plugin(controls.api, undefined, makePluginMeta())
+
+    expect(controls.commandFactories).toHaveLength(1)
+    expect(controls.keymapLayerCalls).toHaveLength(0)
+    expect(controls.disposeHandlers).toHaveLength(1)
+
+    // Dispose unregisters via the command-register path, mirroring the
+    // keymap-path test's assertion that the correct teardown route runs.
+    await controls.disposeHandlers[0]()
+    expect(controls.unregisterCalls).toBe(1)
+    expect(controls.keymapUnregisterCalls).toBe(0)
+  })
+
+  it('opens the modal list when the keymap-path command is run', async () => {
+    const plugin = await loadTuiPlugin()
+    const controls = createTestApi({ surfaces: 'keymap' })
+
+    await plugin(controls.api, undefined, makePluginMeta())
+
+    const command = controls.keymapLayerCalls[0]?.commands[0] as
+      | (Record<string, unknown> & { run?: () => void })
+      | undefined
+    expect(command).toBeDefined()
+    command?.run?.()
+
+    expect(controls.dialogReplacements).toHaveLength(1)
+    expect(controls.dialogSizes).toEqual(['large'])
   })
 
   it('keeps /copilot-status on a single read-only dialog replacement', async () => {
