@@ -6,3 +6,6 @@ dist/
 .DS_Store
 .context/
 .sisyphus/
+
+# oh-my-opencode-slim project config
+.opencode/oh-my-opencode-slim.jsonc
