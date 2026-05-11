@@ -18,6 +18,7 @@ import { getAllTasks, getTask } from './runtime/task-registry'
 import { createCancelTool } from './tools/cancel'
 import { createDelegateTool } from './tools/delegate'
 import { createOutputTool } from './tools/output'
+import { createResumeTool } from './tools/resume'
 
 type PluginInputWithTestHooks = PluginInput & {
   __captureRpcCleanup?: (cleanup: () => Promise<void>) => void
@@ -131,6 +132,13 @@ async function initializePlugin(input: PluginInputWithTestHooks) {
       ),
       copilot_output: normalizeToolArgSchemas(createOutputTool()),
       copilot_cancel: normalizeToolArgSchemas(createCancelTool()),
+      copilot_resume: normalizeToolArgSchemas(
+        createResumeTool({
+          client,
+          directory,
+          pidFilePath: currentInstancePath,
+        }),
+      ),
     },
   }
 }

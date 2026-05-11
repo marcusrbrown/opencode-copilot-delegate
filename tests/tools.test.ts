@@ -203,7 +203,7 @@ function requireTools(result: Awaited<ReturnType<typeof plugin>>) {
 }
 
 describe('plugin tools', () => {
-  it('registers the three plugin tools', async () => {
+  it('registers the four plugin tools including copilot_resume', async () => {
     // Given a plugin input
     const input = makePluginInput(process.cwd())
 
@@ -215,6 +215,7 @@ describe('plugin tools', () => {
       'copilot_cancel',
       'copilot_delegate',
       'copilot_output',
+      'copilot_resume',
     ])
   })
 
@@ -246,6 +247,8 @@ describe('plugin tools', () => {
       { tool: 'copilot_output', arg: 'task_id' },
       { tool: 'copilot_output', arg: 'block' },
       { tool: 'copilot_cancel', arg: 'task_id' },
+      { tool: 'copilot_resume', arg: 'targetId' },
+      { tool: 'copilot_resume', arg: 'addDirs' },
     ]
 
     for (const { tool: toolId, arg } of cases) {
@@ -285,9 +288,8 @@ describe('plugin tools', () => {
     expect(output.task_id).toMatch(/^cpl_[0-9a-f-]+$/)
   })
 
-  it('surfaces copilot_session_id and origin on the output envelope after end-to-end completion (S2 Unit 1 pipeline regression)', async () => {
-    // This is the integration-style guard for the Unit 1 sync gap:
-    // assignCopilotSessionId() writes copilotSessionId on SpawnCopilotResult,
+  it('surfaces copilot_session_id and origin on the output envelope after end-to-end completion', async () => {
+    // Integration guard: assignCopilotSessionId() writes copilotSessionId on SpawnCopilotResult,
     // but the registry's TaskState is a separate object, populated up-front
     // via createTask({...spawnFields, ...}). The completion handler in
     // delegate.ts uses Object.assign to sync select fields back. If
