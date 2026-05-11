@@ -1,14 +1,22 @@
 /**
  * copilot_resume tool — resumes a prior Copilot session by ID, name, or prefix.
  *
- * Wraps `copilot --resume=<targetId>` with:
+ * Wraps `copilot --resume=<target_id>` with:
+ *   - Concurrency cap: same 10-task limit as copilot_delegate
  *   - Input validation (validateTargetId, validateAddDirs, validateCwd)
- *   - UUID preflight: checks local session.db before spawning
- *   - Known-task addDirs reuse: if a prior task's copilotSessionId matches targetId,
- *     its captured addDirs are reused when the caller omits addDirs
+ *   - UUID preflight: checks local session.db before spawning; fs errors → structured { error }
+ *   - configDir propagation: resolved configDir is passed as COPILOT_CONFIG_DIR env to the
+ *     spawned process so preflight and CLI use the same session store
+ *   - Known-task add_dir reuse: if a prior task's copilotSessionId matches target_id,
+ *     its captured addDirs are reused when the caller omits add_dir; inherited paths bypass
+ *     explicit containment so multi-repo context from the prior task is preserved
+ *   - Symlink containment: realpath-based canonicalization in validateAddDirs/validateCwd
  *   - CLI no-match stderr normalization to structured { error } response
  *   - origin: 'resume' on the created TaskState
  *   - Full completion pipeline (attachCompletionPipeline) identical to delegate
+ *
+ * Public tool args use snake_case (target_id, add_dir, config_dir) consistent with
+ * the rest of the plugin's public API surface.
  *
  * No `prompt` argument — resume + new prompt is a fork operation.
  *
@@ -40,6 +48,8 @@ import { createTask, deleteTask, getAllTasks } from '../runtime/task-registry'
 // ---------------------------------------------------------------------------
 // Internal helpers
 // ---------------------------------------------------------------------------
+
+const MAX_CONCURRENT = 10
 
 function appendRepeatedFlag(
   args: string[],
@@ -77,58 +87,71 @@ export type LaunchResumeOptions = {
 export type LaunchResumeResult = { task_id: string } | { error: string }
 
 type ValidatedResumeInputs = {
-  targetValue: string
   targetType: 'uuid' | 'name'
+  resolvedConfigDir: string
   resolvedAddDirs: string[] | undefined
+  /** Inherited addDirs from a prior known task. */
+  inheritedAddDirs: string[] | undefined
   resolvedCwd: string | undefined
   cliArgs: string[]
 }
 
 /**
  * Validate targetId and run UUID preflight if needed.
+ * Returns the resolved configDir alongside the target so it can be propagated
+ * to the spawned process env.
  */
 async function validateTarget(
   targetId: string,
   configDir?: string,
-): Promise<{ type: 'uuid' | 'name'; value: string } | { error: string }> {
+): Promise<
+  | { type: 'uuid' | 'name'; value: string; resolvedConfigDir: string }
+  | { error: string }
+> {
   const targetResult = validateTargetId(targetId)
   if ('error' in targetResult) return targetResult
 
+  const resolvedConfigDir = resolveConfigDir(configDir)
+
   if (targetResult.type === 'uuid') {
-    const resolvedConfigDir = resolveConfigDir(configDir)
-    const hasSession = await hasLocalCopilotSession(
+    const sessionResult = await hasLocalCopilotSession(
       targetResult.value,
       resolvedConfigDir,
     )
-    if (!hasSession) {
+    if (typeof sessionResult === 'object' && 'error' in sessionResult) {
+      return { error: sessionResult.error }
+    }
+    if (!sessionResult) {
       return { error: `No local session found for UUID ${targetResult.value}` }
     }
   }
 
-  return targetResult
+  return { ...targetResult, resolvedConfigDir }
 }
 
 /**
- * Validate addDirs and cwd against allowed roots.
+ * Validate explicit caller-provided addDirs and cwd against allowed roots.
+ * Inherited addDirs (from a prior known task) are NOT passed through here —
+ * they bypass containment so the prior task's multi-repo context is preserved.
  */
 function validatePaths(
-  opts: Pick<LaunchResumeOptions, 'addDirs' | 'cwd'>,
-  inheritedAddDirs: string[] | undefined,
+  callerAddDirs: string[] | undefined,
+  cwd: string | undefined,
   allowedRoots: string[],
 ):
   | { resolvedAddDirs: string[] | undefined; resolvedCwd: string | undefined }
   | { error: string } {
-  let resolvedAddDirs = opts.addDirs ?? inheritedAddDirs
+  let resolvedAddDirs: string[] | undefined
 
-  if (resolvedAddDirs && resolvedAddDirs.length > 0) {
-    const addDirsResult = validateAddDirs(resolvedAddDirs, allowedRoots)
+  if (callerAddDirs && callerAddDirs.length > 0) {
+    const addDirsResult = validateAddDirs(callerAddDirs, allowedRoots)
     if (!Array.isArray(addDirsResult)) return { error: addDirsResult.error }
     resolvedAddDirs = addDirsResult
   }
 
   let resolvedCwd: string | undefined
-  if (opts.cwd) {
-    const cwdResult = validateCwd(opts.cwd, allowedRoots)
+  if (cwd) {
+    const cwdResult = validateCwd(cwd, allowedRoots)
     if (typeof cwdResult !== 'string') return { error: cwdResult.error }
     resolvedCwd = cwdResult
   }
@@ -148,20 +171,22 @@ async function validateResumeInputs(
   const targetResult = await validateTarget(targetId, configDir)
   if ('error' in targetResult) return targetResult
 
-  // Reuse captured addDirs from a prior task when the caller omits them
-  const callerAddDirs = opts.addDirs
+  // Reuse captured addDirs from a prior task when the caller omits them or passes [].
+  // Inherited paths may legitimately reference paths outside the current primary
+  // directory, so they preserve the prior task's multi-repo context verbatim.
+  const callerAddDirs =
+    opts.addDirs && opts.addDirs.length > 0 ? opts.addDirs : undefined
   const inheritedAddDirs =
-    !callerAddDirs || callerAddDirs.length === 0
+    callerAddDirs === undefined
       ? getAllTasks().find((t) => t.copilotSessionId === targetId)?.addDirs
       : undefined
 
   const allowedRoots = computeAllowedRoots(directory)
-  const pathsResult = validatePaths(
-    { addDirs: callerAddDirs, cwd: opts.cwd },
-    inheritedAddDirs,
-    allowedRoots,
-  )
+  const pathsResult = validatePaths(callerAddDirs, opts.cwd, allowedRoots)
   if ('error' in pathsResult) return pathsResult
+
+  // Effective addDirs: explicit caller paths (validated) or inherited paths (trusted)
+  const effectiveAddDirs = pathsResult.resolvedAddDirs ?? inheritedAddDirs
 
   const cliArgs = [
     `--resume=${targetResult.value}`,
@@ -171,12 +196,13 @@ async function validateResumeInputs(
     '--allow-all-tools',
     '--no-ask-user',
   ]
-  appendRepeatedFlag(cliArgs, '--add-dir', pathsResult.resolvedAddDirs)
+  appendRepeatedFlag(cliArgs, '--add-dir', effectiveAddDirs)
 
   return {
-    targetValue: targetResult.value,
     targetType: targetResult.type,
-    resolvedAddDirs: pathsResult.resolvedAddDirs,
+    resolvedConfigDir: targetResult.resolvedConfigDir,
+    resolvedAddDirs: effectiveAddDirs,
+    inheritedAddDirs,
     resolvedCwd: pathsResult.resolvedCwd,
     cliArgs,
   }
@@ -201,17 +227,37 @@ export async function launchResume(
 ): Promise<LaunchResumeResult> {
   const { client, directory, sessionID, pidFilePath } = opts
 
+  const runningCount = getAllTasks().filter(
+    (task) => task.status === 'running' || task.status === 'cancelling',
+  ).length
+  if (runningCount >= MAX_CONCURRENT) {
+    return {
+      error:
+        'Concurrent delegation limit reached (10 running). Cancel or wait for existing tasks.',
+    }
+  }
+
   const validated = await validateResumeInputs(opts)
   if ('error' in validated) return validated
 
-  const { targetType, resolvedAddDirs, resolvedCwd, cliArgs } = validated
+  const {
+    targetType,
+    resolvedConfigDir,
+    resolvedAddDirs,
+    resolvedCwd,
+    cliArgs,
+  } = validated
   const effectiveCwd = resolvedCwd ?? directory
 
   const startedAt = Date.now()
   let spawnResult: SpawnCopilotResult
 
   try {
-    spawnResult = spawnCopilot(cliArgs, { cwd: effectiveCwd, pidFilePath })
+    spawnResult = spawnCopilot(cliArgs, {
+      cwd: effectiveCwd,
+      pidFilePath,
+      env: { COPILOT_CONFIG_DIR: resolvedConfigDir },
+    })
   } catch (error) {
     return {
       error: `Failed to spawn copilot: ${error instanceof Error ? error.message : String(error)}`,
@@ -275,7 +321,7 @@ type ResumeToolOptions = {
 const TOOL_DESCRIPTION = [
   'Resume a prior Copilot session by ID, name, or prefix.',
   '',
-  'Wraps `copilot --resume=<targetId>` and returns a plugin task handle immediately.',
+  'Wraps `copilot --resume=<target_id>` and returns a plugin task handle immediately.',
   'The resumed session runs as a background subprocess; retrieve its output with',
   '`copilot_output(task_id)` and cancel it with `copilot_cancel(task_id)`.',
   '',
@@ -285,6 +331,9 @@ const TOOL_DESCRIPTION = [
   '- Session name or prefix — passed directly to the CLI.',
   '- Plugin task ID (`cpl_*`) — not supported here; use `copilot_output` instead.',
   '',
+  'Concurrency: at most 10 Copilot sessions may be running concurrently. Exceeding',
+  'the cap returns `{ error: ... }` and the caller should wait or cancel existing tasks.',
+  '',
   'Note: resume + new prompt is a fork operation and is not part of this release.',
   'This tool resumes the session as-is without injecting a new prompt.',
 ].join('\n')
@@ -293,7 +342,7 @@ export function createResumeTool(options: ResumeToolOptions) {
   return tool({
     description: TOOL_DESCRIPTION,
     args: {
-      targetId: tool.schema
+      target_id: tool.schema
         .string()
         .min(1)
         .describe(
@@ -305,18 +354,18 @@ export function createResumeTool(options: ResumeToolOptions) {
         .describe(
           'Working directory for the resumed session. Must be an absolute path within the active workspace. Defaults to the plugin directory when omitted.',
         ),
-      addDirs: tool.schema
+      add_dir: tool.schema
         .string()
         .array()
         .optional()
         .describe(
-          'Additional repository paths to grant Copilot access to. Each entry becomes a `--add-dir <path>` flag. When omitted and a prior plugin task matches the target, its captured addDirs are reused automatically.',
+          'Additional repository paths to grant Copilot access to. Each entry becomes a `--add-dir <path>` flag. When omitted and a prior plugin task matches the target, its captured add_dir values are reused automatically.',
         ),
-      configDir: tool.schema
+      config_dir: tool.schema
         .string()
         .optional()
         .describe(
-          'Override the Copilot config directory used for UUID session-state lookup. Defaults to `~/.copilot` (or `COPILOT_CONFIG_DIR` env). Rarely needed.',
+          'Override the Copilot config directory used for UUID session-state lookup and propagated to the spawned process as COPILOT_CONFIG_DIR. Defaults to `~/.copilot` (or `COPILOT_CONFIG_DIR` env). Rarely needed.',
         ),
     },
     async execute(args, ctx) {
@@ -325,10 +374,10 @@ export function createResumeTool(options: ResumeToolOptions) {
         directory: options.directory,
         pidFilePath: options.pidFilePath,
         sessionID: ctx.sessionID,
-        targetId: args.targetId,
+        targetId: args.target_id,
         cwd: args.cwd,
-        addDirs: args.addDirs,
-        configDir: args.configDir,
+        addDirs: args.add_dir,
+        configDir: args.config_dir,
       })
 
       return JSON.stringify(result)

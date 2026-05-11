@@ -24,10 +24,12 @@ export function isCopilotSessionUuid(value: string): boolean {
   return copilotSessionUuidPattern.test(value)
 }
 
+export type SessionLookupResult = boolean | { error: string }
+
 export async function hasLocalCopilotSession(
   uuid: string,
   configDir: string,
-): Promise<boolean> {
+): Promise<SessionLookupResult> {
   const sessionStateDir = resolve(configDir, 'session-state')
   const sessionDbPath = resolve(sessionStateDir, uuid, 'session.db')
 
@@ -40,7 +42,10 @@ export async function hasLocalCopilotSession(
     return stats.isFile()
   } catch (e) {
     if (isErrnoException(e) && e.code === 'ENOENT') return false
-    throw e
+    const code = isErrnoException(e) ? e.code : 'UNKNOWN'
+    return {
+      error: `Session store stat failed (${code}): ${e instanceof Error ? e.message : String(e)}`,
+    }
   }
 }
 

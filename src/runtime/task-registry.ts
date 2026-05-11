@@ -57,9 +57,8 @@ export function createTask(
     ...rest,
     taskId,
     // Existing call sites (delegate.ts) predate the discriminator; default
-    // to 'spawn' so they keep working without explicit `origin` until
-    // Unit 3c lands the resume tool. Explicit values from the input are
-    // preserved by the spread above.
+    // to 'spawn' so they keep working without explicit `origin`. Explicit
+    // values from the input are preserved by the spread above.
     origin: rest.origin ?? 'spawn',
   }
 

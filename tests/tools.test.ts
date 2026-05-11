@@ -247,8 +247,8 @@ describe('plugin tools', () => {
       { tool: 'copilot_output', arg: 'task_id' },
       { tool: 'copilot_output', arg: 'block' },
       { tool: 'copilot_cancel', arg: 'task_id' },
-      { tool: 'copilot_resume', arg: 'targetId' },
-      { tool: 'copilot_resume', arg: 'addDirs' },
+      { tool: 'copilot_resume', arg: 'target_id' },
+      { tool: 'copilot_resume', arg: 'add_dir' },
     ]
 
     for (const { tool: toolId, arg } of cases) {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'bun:test'
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import {
@@ -13,11 +13,19 @@ function makeTempDir(): string {
 }
 
 const uuid = '123e4567-e89b-12d3-a456-426614174000'
+const uuidUpper = '123E4567-E89B-12D3-A456-426614174000'
 
 describe('continuity-validation', () => {
   describe('validateTargetId', () => {
     it('should return a uuid target for UUID-shaped values', () => {
       expect(validateTargetId(uuid)).toEqual({ type: 'uuid', value: uuid })
+    })
+
+    it('should canonicalize uppercase UUID to lowercase', () => {
+      expect(validateTargetId(uuidUpper)).toEqual({
+        type: 'uuid',
+        value: uuid,
+      })
     })
 
     it('should return a name target for safe names', () => {
@@ -37,6 +45,22 @@ describe('continuity-validation', () => {
       expect(validateTargetId('a'.repeat(200))).toEqual({
         error: 'invalid target ID format',
       })
+    })
+
+    it('should reject plugin task IDs starting with cpl_ with an actionable error', () => {
+      const result = validateTargetId('cpl_abc123')
+      expect(result).toEqual({
+        error:
+          'Plugin task IDs (cpl_*) are not valid resume targets. Use copilot_output(task_id) to retrieve results, or pass the copilot_session_id from the completed task envelope.',
+      })
+    })
+
+    it('should reject cpl_ IDs without spawning (no task_id in result)', () => {
+      const result = validateTargetId(
+        'cpl_123e4567-e89b-12d3-a456-426614174000',
+      )
+      expect('error' in result).toBe(true)
+      expect('type' in result).toBe(false)
     })
   })
 
@@ -73,7 +97,9 @@ describe('continuity-validation', () => {
       mkdirSync(child)
 
       try {
-        expect(validateAddDirs([child], [root])).toEqual([resolve(child)])
+        expect(validateAddDirs([child], [root])).toEqual([
+          realpathSync(resolve(child)),
+        ])
       } finally {
         rmSync(root, { recursive: true, force: true })
       }
@@ -114,7 +140,7 @@ describe('continuity-validation', () => {
       const root = makeTempDir()
 
       try {
-        expect(validateCwd(root, [root])).toBe(resolve(root))
+        expect(validateCwd(root, [root])).toBe(realpathSync(resolve(root)))
       } finally {
         rmSync(root, { recursive: true, force: true })
       }

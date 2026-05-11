@@ -82,7 +82,7 @@ describe('continuity-checks', () => {
       }
     })
 
-    it('should reject with a non-ENOENT filesystem error (ENOTDIR)', async () => {
+    it('should return { error } on a non-ENOENT filesystem error (ENOTDIR)', async () => {
       const configDir = makeTempDir()
       // Place a regular file where the uuid directory would be, so stat of
       // `${uuid}/session.db` raises ENOTDIR instead of ENOENT.
@@ -91,9 +91,10 @@ describe('continuity-checks', () => {
       writeFileSync(join(sessionStateDir, uuid), '')
 
       try {
-        await expect(
-          hasLocalCopilotSession(uuid, configDir),
-        ).rejects.toMatchObject({ code: 'ENOTDIR' })
+        const result = await hasLocalCopilotSession(uuid, configDir)
+        expect(result).toMatchObject({
+          error: expect.stringContaining('ENOTDIR'),
+        })
       } finally {
         rmSync(configDir, { recursive: true, force: true })
       }
