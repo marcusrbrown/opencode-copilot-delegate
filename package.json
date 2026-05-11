@@ -57,10 +57,10 @@
   "devDependencies": {
     "@biomejs/biome": "2.4.14",
     "@changesets/cli": "2.31.0",
-    "@opencode-ai/plugin": "1.14.39",
+    "@opencode-ai/plugin": "1.14.41",
     "@types/babel__core": "^7.20.5",
     "@types/bun": "1.3.13",
-    "@types/node": "24.12.2",
+    "@types/node": "24.12.3",
     "rimraf": "6.1.3",
     "typescript": "6.0.3"
   },
@@ -79,8 +79,8 @@
     "publish-changesets": "bun run build && changeset publish"
   },
   "dependencies": {
-    "@opentui/core": "0.2.2",
-    "@opentui/solid": "0.2.2",
+    "@opentui/core": "0.2.5",
+    "@opentui/solid": "0.2.5",
     "fkill": "10.0.3",
     "solid-js": "1.9.12",
     "zod": "^4.3.0"
