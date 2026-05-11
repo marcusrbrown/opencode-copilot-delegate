@@ -1,5 +1,57 @@
 # opencode-copilot-delegate
 
+## 0.12.0
+
+### Minor Changes
+
+- 2667712: Add `copilot_resume` tool for resuming prior Copilot sessions by ID, name, or prefix.
+
+  The new tool wraps `copilot --resume=<target>` and integrates fully with the existing task lifecycle — output, cancel, and completion notifications all work the same way as delegated tasks.
+
+  Key behaviors:
+
+  - UUID targets are validated against the local Copilot session store before spawning; missing sessions return a structured error without touching the CLI.
+  - When a prior plugin task's session ID matches the target, its workspace paths (`--add-dir` set) are reused automatically when the caller omits `addDirs`.
+  - CLI no-match errors (`Error: No session, task, or name matched '...'`) are normalized to a clean `Session not found` response.
+  - All path inputs (`cwd`, `addDirs`) are validated against allowed roots before spawn; argv-injection-shaped values are rejected.
+
+  The tool catalog grows from 3 to 4. Resume + new prompt (fork) is not part of this release.
+
+- a02c3e7: Extract the post-completion pipeline (`SpawnCopilotResult` → `TaskState` back-patch + completion notification) into a shared `attachCompletionPipeline` helper in `src/runtime/notify.ts`. `copilot_delegate` now delegates its `void task.completionPromise.then(...)` block to this helper; the upcoming `copilot_resume` tool will reuse it without duplicating the load-bearing field sync.
+
+  Notification headers are now origin-aware: tasks created with `origin: 'spawn'` (today's only call site) keep the existing `[COPILOT DELEGATION COMPLETED]` header. Tasks with `origin: 'resume'` will surface `[COPILOT RESUME COMPLETED]` so users can distinguish a resumed Copilot session from a fresh delegation. The `connect` header is wired for forward compatibility but no `connect`-origin tasks are constructed in this slice.
+
+- 217a69e: Harden the plugin entry's public surface and Node-loadability so the build artifact survives the same class of regression that bit Systematic in v2.5.0 and v2.12.1.
+
+  OpenCode's plugin loader treats every named export from a plugin entry point as a separate plugin factory and invokes it with `undefined` input. That contract has bitten upstream plugins twice with hours of downtime each; this PR institutionalizes the fix in three coordinated changes:
+
+  - **Helper moved out of the entry point.** `wireRpcServerCleanup` now lives in `src/lib/rpc-cleanup.ts`. The plugin entry exports only `default` and re-imports the helper internally. No behavior change — the helper's identity-once semantics and its single caller are byte-identical.
+  - **Build target switched to Node for the plugin entry.** `scripts/build.ts` now builds `src/index.ts` with `target: 'node'` so `dist/index.js` loads under plain Node ESM. The TUI entry stays on `target: 'bun'` because `@opentui/solid` is Bun-specific. The Node-loadable build is the prerequisite for the new CI gate (next bullet).
+  - **CI gate asserts the export shape on every PR.** A new step in `.github/workflows/ci.yaml` between `Build` and `Unit tests` runs `node --input-type=module -e "import('./dist/index.js').then(m => …)"` and exits non-zero if the entry exposes any export other than `default` or if `default` is not a function. The local test surface gets a matching assertion in `tests/package-exports.test.ts`. The gate's failure message references the v2.5.0/v2.12.1 regression class so future contributors can find the rationale.
+
+  Also documents the divergence rationale: this plugin keeps the `plugInOnce` singleton pattern (returns empty hooks on duplicate invocations) even though Systematic's PR #352 replaced that pattern with per-load registration. The constraint inverts here because this plugin's `doInit` binds a TCP port and writes a PID file — running `doInit` twice in the same process would race on those exclusive resources. `src/runtime/plugin-singleton.ts` and `src/lib/rpc-cleanup.ts` carry top-of-file JSDoc explaining the divergence with cross-references to https://github.com/marcusrbrown/systematic/pull/352.
+
+  No user-visible behavior change.
+
+- 66f97f4: Add `origin` discriminator (`'spawn' | 'resume' | 'connect'`) to `TaskState`, the `OutputEnvelope` returned by `copilot_output`, and the `EnvelopeInput` builder. Capture the upstream Copilot session UUID from the JSONL `result` event and surface it as `copilot_session_id` on the envelope (omitted when the subprocess never emitted a `result` event).
+
+  Existing `copilot_delegate` calls receive `origin: 'spawn'` automatically and continue to behave the same way. The new fields are the substrate the upcoming `copilot_resume` tool builds on; they do not change today's tool surface.
+
+- 82a1026: Make the TUI plugin survive OpenCode's `api.command.register` migration.
+
+  OpenCode 1.14.42 removed `api.command.register` in favor of the new keymap engine. 1.14.44+ restored `api.command.register` as a deprecated shim that translates to `api.keymap.registerLayer` internally. The TUI plugin's `/copilot-status` command was unconditionally calling `api.command.register`, which would silently disappear on OpenCode versions where the call path went away.
+
+  The TUI entry now runtime-feature-detects:
+
+  - **OpenCode 1.14.44+** (canonical): registers via `api.keymap.registerLayer({ commands: [{ namespace: 'palette', name: 'copilot-status', title: 'Copilot Status', category: 'Copilot', run() }], bindings: [] })`. Mirrors the dual-path pattern Magic Context established in commit `5fe1c4f`.
+  - **OpenCode 1.14.41** (the prior pinned version): falls back to `api.command.register(...)` with the original command shape, so the slash menu continues to surface `/copilot-status` exactly as before.
+  - **Neither API present** (defensive): logs a warning and continues to load the plugin without the slash command. The status modal remains available via direct API consumers.
+
+  Other surfaces:
+
+  - `devDependencies['@opencode-ai/plugin']` moves from `1.14.41` to `1.14.48` so tests run against the canonical keymap API.
+  - `peerDependencies['@opencode-ai/plugin']` narrows from `>=1.14.0` to `>=1.14.41` to align advertised compatibility with what's actually tested.
+
 ## 0.11.0
 
 ### Minor Changes
