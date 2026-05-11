@@ -52,15 +52,15 @@ type TestApiControls = {
 
 type CreateTestApiOptions = {
   /**
-   * When true, the api stub exposes `api.keymap.registerLayer` (OpenCode
-   * 1.14.44+ canonical TUI API). When false, only the legacy
-   * `api.command.register` is exposed (OpenCode 1.14.41 / pinned baseline).
-   * When 'both', both surfaces are exposed (the 1.14.44+ shim era).
+   * Which TUI registration surfaces the api stub exposes:
+   * - `'command'` (default): only `api.command.register` — OpenCode 1.14.41 baseline
+   * - `'keymap'`: only `api.keymap.registerLayer` — OpenCode 1.14.44+ canonical (and the 1.14.42–43 gap)
+   * - `'both'`: both surfaces — the 1.14.44+ shim era where `command.register` is restored as a deprecated shim
    *
-   * Default: false (legacy-only) — preserves the existing test suite's
-   * assertions about the `command.register` registration path.
+   * Default `'command'` preserves the existing test suite's assertions about the
+   * legacy `command.register` registration path without modification.
    */
-  keymap?: boolean | 'both'
+  surfaces?: 'command' | 'keymap' | 'both'
 }
 
 const originalFetch = globalThis.fetch
@@ -96,8 +96,9 @@ async function loadTuiPlugin(): Promise<TuiPlugin> {
 }
 
 function createTestApi(options: CreateTestApiOptions = {}): TestApiControls {
-  const exposeKeymap = options.keymap === true || options.keymap === 'both'
-  const exposeCommand = options.keymap !== true
+  const surfaces = options.surfaces ?? 'command'
+  const exposeKeymap = surfaces === 'keymap' || surfaces === 'both'
+  const exposeCommand = surfaces === 'command' || surfaces === 'both'
 
   const commandFactories: Array<() => TuiCommand[]> = []
   const dialogReplacements: DialogReplacement[] = []
@@ -406,7 +407,7 @@ describe('tui entrypoint', () => {
 
   it('prefers api.keymap.registerLayer when available (OpenCode 1.14.44+)', async () => {
     const plugin = await loadTuiPlugin()
-    const controls = createTestApi({ keymap: true })
+    const controls = createTestApi({ surfaces: 'keymap' })
 
     await plugin(controls.api, undefined, makePluginMeta())
 
@@ -434,7 +435,7 @@ describe('tui entrypoint', () => {
 
   it('prefers api.keymap.registerLayer when both APIs exist (1.14.44+ shim era)', async () => {
     const plugin = await loadTuiPlugin()
-    const controls = createTestApi({ keymap: 'both' })
+    const controls = createTestApi({ surfaces: 'both' })
 
     await plugin(controls.api, undefined, makePluginMeta())
 
@@ -444,17 +445,24 @@ describe('tui entrypoint', () => {
 
   it('falls back to api.command.register when keymap.registerLayer is absent (OpenCode 1.14.41)', async () => {
     const plugin = await loadTuiPlugin()
-    const controls = createTestApi({ keymap: false })
+    const controls = createTestApi({ surfaces: 'command' })
 
     await plugin(controls.api, undefined, makePluginMeta())
 
     expect(controls.commandFactories).toHaveLength(1)
     expect(controls.keymapLayerCalls).toHaveLength(0)
+    expect(controls.disposeHandlers).toHaveLength(1)
+
+    // Dispose unregisters via the command-register path, mirroring the
+    // keymap-path test's assertion that the correct teardown route runs.
+    await controls.disposeHandlers[0]()
+    expect(controls.unregisterCalls).toBe(1)
+    expect(controls.keymapUnregisterCalls).toBe(0)
   })
 
   it('opens the modal list when the keymap-path command is run', async () => {
     const plugin = await loadTuiPlugin()
-    const controls = createTestApi({ keymap: true })
+    const controls = createTestApi({ surfaces: 'keymap' })
 
     await plugin(controls.api, undefined, makePluginMeta())
 

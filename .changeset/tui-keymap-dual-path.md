@@ -1,5 +1,5 @@
 ---
-'opencode-copilot-delegate': patch
+'opencode-copilot-delegate': minor
 ---
 
 Make the TUI plugin survive OpenCode's `api.command.register` migration.

@@ -13,6 +13,35 @@ function errorMessage(error: unknown): string {
 }
 
 /**
+ * Narrow structural interface for `api.keymap.registerLayer`. Mirrors the
+ * shape exposed by `@opencode-ai/plugin/tui`'s `TuiKeymap` (which aliases
+ * `Keymap<Renderable, KeyEvent>` from `@opentui/keymap`). That upstream
+ * type is not exported through `@opencode-ai/plugin`'s public surface and
+ * `@opentui/keymap` is not a direct dependency here, so we declare the
+ * minimum contract needed for the dual-path registration to type-check
+ * without reaching into private OpenTUI types.
+ */
+interface KeymapRegisterLayerHost {
+  registerLayer: (layer: {
+    commands: ReadonlyArray<{
+      namespace: string
+      name: string
+      title: string
+      category: string
+      run: () => void
+    }>
+    bindings: ReadonlyArray<unknown>
+  }) => () => void
+}
+
+function hasKeymapRegisterLayer(
+  api: Parameters<TuiPlugin>[0],
+): api is Parameters<TuiPlugin>[0] & { keymap: KeymapRegisterLayerHost } {
+  const candidate = (api as { keymap?: { registerLayer?: unknown } }).keymap
+  return candidate != null && typeof candidate.registerLayer === 'function'
+}
+
+/**
  * Register the `/copilot-status` command using whichever TUI API surface
  * the host OpenCode runtime exposes.
  *
@@ -34,22 +63,8 @@ function registerCopilotStatusCommand(
   api: Parameters<TuiPlugin>[0],
   openList: () => void,
 ): () => void {
-  const apiAny = api as unknown as {
-    keymap?: {
-      registerLayer?: (layer: {
-        commands: ReadonlyArray<Record<string, unknown>>
-        bindings: ReadonlyArray<unknown>
-      }) => () => void
-    }
-    command?: {
-      register?: (
-        cb: () => ReadonlyArray<Record<string, unknown>>,
-      ) => () => void
-    }
-  }
-
-  if (typeof apiAny.keymap?.registerLayer === 'function') {
-    return apiAny.keymap.registerLayer({
+  if (hasKeymapRegisterLayer(api)) {
+    return api.keymap.registerLayer({
       commands: [
         {
           namespace: 'palette',
@@ -65,8 +80,8 @@ function registerCopilotStatusCommand(
     })
   }
 
-  if (typeof apiAny.command?.register === 'function') {
-    return apiAny.command.register(() => [
+  if (typeof api.command?.register === 'function') {
+    return api.command.register(() => [
       {
         title: 'Copilot Status',
         value: '/copilot-status',
@@ -78,6 +93,11 @@ function registerCopilotStatusCommand(
     ])
   }
 
+  // Plugin-level logs normally go through `client.app.log`, but the TUI
+  // half has no equivalent structured channel — `console.warn` is the
+  // only practical option. Surfaces in dev/debug consoles; in production
+  // the message is purely defensive (it only fires when the host runtime
+  // exposes neither registration surface, which should never happen).
   console.warn(
     '[opencode-copilot-delegate] No supported TUI command-registration API found (neither api.keymap.registerLayer nor api.command.register). The /copilot-status slash command will not be available, but the plugin remains loaded.',
   )
