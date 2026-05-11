@@ -1,7 +1,7 @@
 ---
 title: 'feat: Plugin contract and TUI API resilience'
 type: feat
-status: active
+status: completed
 date: 2026-05-11
 origin: docs/brainstorms/2026-05-11-plugin-contract-and-tui-api-resilience-requirements.md
 ---
@@ -168,7 +168,7 @@ None — every decision resolves at planning time.
 
 ### PR-2: Plugin contract structural fixes
 
-- [ ] **Unit 2: Move `wireRpcServerCleanup` out of plugin entry**
+- [x] **Unit 2: Move `wireRpcServerCleanup` out of plugin entry**
 
 **Goal:** Eliminate the named export from `src/index.ts` so the build artifact exposes `default` only. Prepares the codebase for U3/U4 to enforce the contract.
 
@@ -206,7 +206,7 @@ None — every decision resolves at planning time.
 
 ---
 
-- [ ] **Unit 3: Switch plugin entry build target to `node`**
+- [x] **Unit 3: Switch plugin entry build target to `node`**
 
 **Goal:** Make `dist/index.js` loadable under Node ESM (no `import.meta.require`) so U4's CI gate can run.
 
@@ -244,7 +244,7 @@ None — every decision resolves at planning time.
 
 ---
 
-- [ ] **Unit 4: CI Node-ESM export-shape smoke test**
+- [x] **Unit 4: CI Node-ESM export-shape smoke test**
 
 **Goal:** Block any future PR that re-introduces a named export from `src/index.ts` before it can merge.
 
@@ -284,7 +284,7 @@ None — every decision resolves at planning time.
 
 ---
 
-- [ ] **Unit 5: Singleton design rationale**
+- [x] **Unit 5: Singleton design rationale**
 
 **Goal:** Record the singleton-vs-per-load divergence rationale in the code where the singleton lives.
 

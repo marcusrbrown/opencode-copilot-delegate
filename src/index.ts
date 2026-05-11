@@ -1,10 +1,12 @@
 import { mkdir } from 'node:fs/promises'
 import { dirname } from 'node:path'
 import type { Plugin, PluginInput } from '@opencode-ai/plugin'
+
 import { discoverAgents } from './discovery/agents'
 import { buildDescription } from './discovery/description'
 import { killProcessTree } from './lib/kill-tree'
 import { normalizeToolArgSchemas } from './lib/normalize-tool-arg-schemas'
+import { wireRpcServerCleanup } from './lib/rpc-cleanup'
 import { cancelTaskById } from './runtime/cancel-helper'
 import { getPidIdentity, reapOrphans } from './runtime/orphan-reaper'
 import {
@@ -22,40 +24,6 @@ import { createResumeTool } from './tools/resume'
 
 type PluginInputWithTestHooks = PluginInput & {
   __captureRpcCleanup?: (cleanup: () => Promise<void>) => void
-}
-
-export function wireRpcServerCleanup(
-  closeRpcServer: () => Promise<void>,
-): () => Promise<void> {
-  let closePromise: Promise<void> | undefined
-
-  const closeOnce = (): Promise<void> => {
-    if (!closePromise) {
-      closePromise = closeRpcServer()
-        .catch(() => {})
-        .finally(() => {
-          process.off('beforeExit', onBeforeExit)
-          process.off('SIGTERM', onSigterm)
-        })
-    }
-
-    return closePromise
-  }
-
-  const onBeforeExit = () => {
-    void closeOnce()
-  }
-
-  const onSigterm = () => {
-    void closeOnce().finally(() => {
-      process.kill(process.pid, 'SIGTERM')
-    })
-  }
-
-  process.on('beforeExit', onBeforeExit)
-  process.once('SIGTERM', onSigterm)
-
-  return closeOnce
 }
 
 function getAgentsDirectories(directory: string): {

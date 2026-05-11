@@ -46,4 +46,18 @@ describe('package exports', () => {
       tui: expect.any(Function),
     })
   })
+
+  it('exports only default from the built plugin entrypoint (no named-export regression)', async () => {
+    const builtPlugin = await import(join(process.cwd(), 'dist/index.js'))
+    const exportKeys = Object.keys(builtPlugin).sort()
+
+    expect(
+      exportKeys,
+      'Plugin entry must export only default — extra named exports break OpenCode plugin loading (v2.5.0/v2.12.1 regression class). Move helpers to src/lib/.',
+    ).toEqual(['default'])
+    expect(
+      typeof builtPlugin.default,
+      'Plugin default export must be a function',
+    ).toBe('function')
+  })
 })
