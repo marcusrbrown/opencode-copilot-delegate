@@ -44,6 +44,26 @@
  * restart. OpenCode currently surfaces a failed plugin factory as a
  * startup error rather than retrying within the process, so this matches
  * the upstream contract.
+ *
+ * **Why this plugin keeps the singleton pattern when Systematic dropped it.**
+ * Systematic's PR #352 (https://github.com/marcusrbrown/systematic/pull/352,
+ * shipped in v2.12.1/v2.12.2) replaced `plugInOnce` with per-load
+ * registration guarded by a marker flag. That change was correct for
+ * Systematic: its plugins are stateless and idempotent — they register
+ * tools and inject prompts, but they do not bind ports or write PID files.
+ * Running the same Systematic plugin factory twice in the same process is
+ * harmless because the second run produces the same registrations as the
+ * first.
+ *
+ * This plugin's init is not idempotent. `doInit` starts an RPC server that
+ * binds a TCP port and writes a PID file to a well-known path. A second
+ * `doInit` call in the same process would attempt to bind the same port
+ * (EADDRINUSE) and overwrite the PID file with a duplicate entry. The
+ * singleton pattern is the correct constraint here: exactly one server
+ * starts per process, and exactly one PID file entry is written. The
+ * paired `wireRpcServerCleanup` helper in `src/lib/rpc-cleanup.ts`
+ * enforces the matching invariant on shutdown — the server closes exactly
+ * once. Both guards exist because the resource is exclusive to the process.
  */
 
 const SINGLETON_KEY: unique symbol = Symbol.for(
