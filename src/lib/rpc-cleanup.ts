@@ -53,7 +53,12 @@ export function wireRpcServerCleanup(
     })
   }
 
-  process.on('beforeExit', onBeforeExit)
+  // Both handlers use `process.once` so re-entrancy is impossible: even
+  // if `beforeExit` fires repeatedly while `closeRpcServer()` is pending,
+  // only the first invocation reaches `closeOnce`. The `.finally()` block
+  // above still calls `process.off` for both as a belt-and-suspenders no-op
+  // (cheap, removes the listener if it survived for any reason).
+  process.once('beforeExit', onBeforeExit)
   process.once('SIGTERM', onSigterm)
 
   return closeOnce
