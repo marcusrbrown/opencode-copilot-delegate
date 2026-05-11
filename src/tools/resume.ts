@@ -208,7 +208,8 @@ async function validateResumeInputs(
   }
 }
 
-/** Milliseconds to wait for an immediate CLI failure before attaching the pipeline. */
+// Empirical fast-fail probe: wait this long for an immediate CLI exit (e.g. "no session matched")
+// before treating the spawn as live and falling back to background task output via copilot_output.
 const NAME_TARGET_FAILURE_WINDOW_MS = 500
 
 function attachResumePipeline(

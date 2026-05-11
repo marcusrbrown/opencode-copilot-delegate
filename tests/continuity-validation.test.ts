@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'bun:test'
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from 'node:fs'
+import {
+  mkdirSync,
+  mkdtempSync,
+  realpathSync,
+  rmSync,
+  symlinkSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import {
@@ -169,6 +175,46 @@ describe('continuity-validation', () => {
       } finally {
         rmSync(root, { recursive: true, force: true })
         rmSync(outside, { recursive: true, force: true })
+      }
+    })
+
+    it('should return structured error when cwd contains a symlink loop', () => {
+      const root = makeTempDir()
+      const linkPath = join(root, 'loop-link')
+      symlinkSync(linkPath, linkPath)
+
+      try {
+        const result = validateCwd(linkPath, [root])
+        expect(result).toEqual({ error: 'cwd outside allowed roots' })
+      } finally {
+        rmSync(root, { recursive: true, force: true })
+      }
+    })
+  })
+
+  describe('validateAddDirs (realpath error handling)', () => {
+    it('should return structured error when add_dir contains a symlink loop (ELOOP)', () => {
+      const root = makeTempDir()
+      const linkPath = join(root, 'loop-link')
+      symlinkSync(linkPath, linkPath)
+
+      try {
+        const result = validateAddDirs([linkPath], [root])
+        expect(result).toEqual({ error: 'path outside allowed roots' })
+      } finally {
+        rmSync(root, { recursive: true, force: true })
+      }
+    })
+
+    it('should not throw when add_dir realpath fails', () => {
+      const root = makeTempDir()
+      const linkPath = join(root, 'loop2')
+      symlinkSync(linkPath, linkPath)
+
+      try {
+        expect(() => validateAddDirs([linkPath], [root])).not.toThrow()
+      } finally {
+        rmSync(root, { recursive: true, force: true })
       }
     })
   })

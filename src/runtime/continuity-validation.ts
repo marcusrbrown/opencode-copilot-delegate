@@ -58,7 +58,10 @@ export function validateCwd(
  * in candidate paths are caught when we compare real paths.
  */
 function canonicalizeRoots(roots: string[]): string[] {
-  return roots.map((r) => tryRealpath(resolve(r)))
+  return roots.flatMap((r) => {
+    const real = tryRealpath(resolve(r))
+    return real !== null ? [real] : []
+  })
 }
 
 /**
@@ -66,6 +69,7 @@ function canonicalizeRoots(roots: string[]): string[] {
  * Uses realpath to follow symlinks — a symlink inside an allowed root that
  * points outside will resolve to a real path outside and be rejected.
  * Falls back to `resolve()` when the path does not exist (ENOENT).
+ * Returns null (→ rejected) on any other realpath error (ELOOP, EACCES, …).
  */
 function validatePathUnderAllowedRoots(
   value: string,
@@ -74,12 +78,17 @@ function validatePathUnderAllowedRoots(
   if (!isAbsolute(value)) return null
 
   const real = tryRealpath(resolve(value))
+  if (real === null) return null
   if (canonicalRoots.some((root) => isWithin(real, root))) return real
   return null
 }
 
-/** realpath with ENOENT fallback to resolve(). Throws on other errors. */
-function tryRealpath(path: string): string {
+/**
+ * realpath with ENOENT fallback to resolve(), null on any other error.
+ * Returning null signals the caller to treat the path as unresolvable and
+ * reject it — covers ELOOP (symlink cycles), EACCES, ENOTDIR, etc.
+ */
+function tryRealpath(path: string): string | null {
   try {
     return realpathSync(path)
   } catch (e) {
@@ -90,7 +99,7 @@ function tryRealpath(path: string): string {
     ) {
       return path
     }
-    throw e
+    return null
   }
 }
 

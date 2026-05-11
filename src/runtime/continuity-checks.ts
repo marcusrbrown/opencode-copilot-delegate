@@ -6,6 +6,7 @@ import { isErrnoException } from '../lib/errno'
 const copilotSessionUuidPattern =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
+// "Error:" casing matches Copilot CLI 1.0.40 observed stderr output.
 export function normalizeContinuityError(stderr: string): string | null {
   const match = stderr.match(
     /^Error: No session, task, or name matched '(.+)'/m,

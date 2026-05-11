@@ -14,6 +14,7 @@ import {
   mkdtempSync,
   readFileSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -988,6 +989,50 @@ describe('symlink escape containment', () => {
 
     const raw = await tool.execute(
       { target_id: VALID_UUID, config_dir: configDir, add_dir: [linkPath] },
+      makeToolContext({ directory: cwd, worktree: cwd }),
+    )
+
+    const result = expectObject(raw)
+    expect(result.error).toBeDefined()
+    expect(result.task_id).toBeUndefined()
+  })
+
+  it('returns structured error (not throw) when cwd is a symlink loop (ELOOP)', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'resume-eloop-cwd-'))
+    tempPaths.push(cwd)
+    const { binDir, configDir } = makeFakeResumeBin()
+    process.env.PATH = `${binDir}:${process.env.PATH ?? ''}`
+
+    const loopLink = join(cwd, 'loop')
+    symlinkSync(loopLink, loopLink)
+
+    const client = makeMockClient()
+    const tool = createResumeTool({ client, directory: cwd })
+
+    const raw = await tool.execute(
+      { target_id: 'my-session', config_dir: configDir, cwd: loopLink },
+      makeToolContext({ directory: cwd, worktree: cwd }),
+    )
+
+    const result = expectObject(raw)
+    expect(result.error).toBeDefined()
+    expect(result.task_id).toBeUndefined()
+  })
+
+  it('returns structured error (not throw) when add_dir is a symlink loop (ELOOP)', async () => {
+    const cwd = mkdtempSync(join(tmpdir(), 'resume-eloop-adddir-'))
+    tempPaths.push(cwd)
+    const { binDir, configDir } = makeFakeResumeBin()
+    process.env.PATH = `${binDir}:${process.env.PATH ?? ''}`
+
+    const loopLink = join(cwd, 'loop')
+    symlinkSync(loopLink, loopLink)
+
+    const client = makeMockClient()
+    const tool = createResumeTool({ client, directory: cwd })
+
+    const raw = await tool.execute(
+      { target_id: 'my-session', config_dir: configDir, add_dir: [loopLink] },
       makeToolContext({ directory: cwd, worktree: cwd }),
     )
 
