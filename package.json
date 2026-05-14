@@ -55,7 +55,7 @@
     "@opencode-ai/plugin": ">=1.14.41"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.4.14",
+    "@biomejs/biome": "2.4.15",
     "@changesets/cli": "2.31.0",
     "@opencode-ai/plugin": "1.14.48",
     "@types/babel__core": "^7.20.5",
@@ -79,8 +79,8 @@
     "publish-changesets": "bun run build && changeset publish"
   },
   "dependencies": {
-    "@opentui/core": "0.2.5",
-    "@opentui/solid": "0.2.5",
+    "@opentui/core": "0.2.6",
+    "@opentui/solid": "0.2.6",
     "fkill": "10.0.3",
     "solid-js": "1.9.12",
     "zod": "^4.3.0"
