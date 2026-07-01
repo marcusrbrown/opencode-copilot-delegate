@@ -88,6 +88,9 @@ env:
          If the minimum required version has changed, open a PR updating the constraint.
        - Check for major version bumps in devDependencies (typescript, @biomejs/biome,
          @types/bun, @types/node, rimraf). Create one PR per major bump.
+         IMPORTANT: @types/node must only be bumped to even major versions (LTS
+         releases: 20, 22, 24, 26, …). Never bump to odd-numbered major versions.
+         Do not pin to a bare major number — use a caret range (e.g., ^24.x).
        - Pin any unpinned GitHub Actions in .github/workflows/ to full commit SHAs.
        Check changeset hygiene:
        - Verify no unreleased changeset entries have drifted out of sync with package.json version.
