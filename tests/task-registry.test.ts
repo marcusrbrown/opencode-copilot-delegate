@@ -227,6 +227,45 @@ describe('task registry PID-file hooks', () => {
     expect(() => readFileSync(pidFilePath, 'utf-8')).toThrow()
   })
 
+  it('does not append to the PID file after a terminal transition wins the spawn race', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'task-registry-'))
+    tempPaths.push(dir)
+    const pidFilePath = join(dir, 'orphans.pids')
+
+    const child = Bun.spawn({ cmd: ['sleep', '30'] })
+    childHandles.push(child)
+    const abortController = new AbortController()
+
+    const task = createTask(
+      {
+        parentSessionID: 'session-fast-terminal',
+        pid: child.pid,
+        startedAt: Date.now(),
+        status: 'running',
+        args: ['-c', 'sleep 30'],
+        cwd: process.cwd(),
+        stdoutLineBuffer: '',
+        events: [],
+        child,
+        completionPromise: child.exited.then(() => undefined),
+        abortController,
+        pidFilePath,
+      },
+      undefined,
+    )
+
+    setStatus(task, 'complete', { pidFilePath })
+
+    const staleEntryAppeared = await waitUntil(
+      () =>
+        existsSync(pidFilePath) &&
+        readFileSync(pidFilePath, 'utf-8').includes(`${child.pid}\t`),
+      { timeoutMs: 300, intervalMs: 25 },
+    )
+
+    expect(staleEntryAppeared).toBe(false)
+  })
+
   it('skips PID-file work when pid <= 0', async () => {
     // Given a task with pid === 0 (sentinel for "no subprocess yet").
     // The createTask guard `task.pid > 0 && pidFilePath` must short-circuit

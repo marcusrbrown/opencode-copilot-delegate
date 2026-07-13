@@ -47,6 +47,11 @@ export type CreateTaskInput = Omit<SpawnCopilotResult, 'taskId'> & {
 }
 
 const tasks = new Map<string, TaskState>()
+const TERMINAL_STATUSES = new Set<TaskState['status']>([
+  'complete',
+  'failed',
+  'cancelled',
+])
 
 export function createTask(
   input: CreateTaskInput,
@@ -65,6 +70,10 @@ export function createTask(
   if (task.pid > 0 && pidFilePath) {
     getPidIdentity(task.pid)
       .then((identity) => {
+        if (TERMINAL_STATUSES.has(task.status)) {
+          return
+        }
+
         if (identity) {
           appendPidEntry(
             pidFilePath,
