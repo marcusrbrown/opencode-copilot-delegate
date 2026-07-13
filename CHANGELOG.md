@@ -1,5 +1,11 @@
 # opencode-copilot-delegate
 
+## 0.12.1
+
+### Patch Changes
+
+- 488e8da: Skip delayed orphan PID registration after a Copilot task has already reached a terminal state.
+
 ## 0.12.0
 
 ### Minor Changes
