@@ -55,7 +55,7 @@
     "@opencode-ai/plugin": ">=1.14.41"
   },
   "devDependencies": {
-    "@biomejs/biome": "2.5.8",
+    "@biomejs/biome": "2.5.9",
     "@changesets/cli": "2.31.1",
     "@opencode-ai/plugin": "1.18.18",
     "@types/babel__core": "7.20.5",
@@ -82,7 +82,7 @@
     "@opentui/core": "0.2.7",
     "@opentui/solid": "0.2.7",
     "fkill": "10.0.3",
-    "solid-js": "1.9.14",
+    "solid-js": "1.9.15",
     "zod": "^4.3.0"
   },
   "overrides": {
