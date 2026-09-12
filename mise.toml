@@ -1,4 +1,4 @@
 [tools]
 bun = "1.4.2"
-"npm:opencode-ai" = "1.18.29"
+"npm:opencode-ai" = "1.18.30"
 "npm:@github/copilot" = "1.0.83"
