@@ -57,7 +57,7 @@
   "devDependencies": {
     "@biomejs/biome": "2.5.15",
     "@changesets/cli": "2.31.1",
-    "@opencode-ai/plugin": "1.19.0",
+    "@opencode-ai/plugin": "1.19.1",
     "@types/babel__core": "7.20.5",
     "@types/bun": "1.4.3",
     "@types/node": "24.19.2",
