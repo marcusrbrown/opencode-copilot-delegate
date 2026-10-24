@@ -1,4 +1,5 @@
 ---
+
 title: Reliable integration testing for OpenCode plugins via CLI invocations
 date: 2026-04-26
 category: best-practices
@@ -7,18 +8,19 @@ problem_type: best_practice
 component: testing_framework
 severity: medium
 applies_when:
-  - Building integration tests for an OpenCode plugin that exercises tool execution end-to-end
-  - Choosing between an SDK harness (`opencode serve` + `createOpencodeClient`) and a CLI subprocess
-  - Diagnosing test timeouts that look like plugin-loading or tool-calling regressions
-  - Selecting a default model for a CI test suite
-tags:
-  - opencode
-  - integration-testing
-  - cli-invocations
-  - rate-limits
-  - isolation
-  - spawn-sync
-  - model-selection
+- Building integration tests for an OpenCode plugin that exercises tool execution end-to-end
+- Choosing between an SDK harness (`opencode serve` + `createOpencodeClient`) and a CLI subprocess
+- Diagnosing test timeouts that look like plugin-loading or tool-calling regressions
+- Selecting a default model for a CI test suite
+  tags:
+- opencode
+- integration-testing
+- cli-invocations
+- rate-limits
+- isolation
+- spawn-sync
+- model-selection
+
 ---
 
 # Reliable integration testing for OpenCode plugins via CLI invocations
@@ -30,7 +32,6 @@ The first integration suite for this plugin was SDK-based: a `helpers/server.ts`
 ## Guidance
 
 For integration tests of an OpenCode plugin:
-
 - **Drive `opencode run` directly via `node:child_process.spawnSync`** instead of `opencode serve` + the SDK. No port management, no health polling, no SDK version coupling.
 - **Default to a paid model** (`opencode/minimax-m2.5`) for reliability. Free models on `opencode.ai/zen` (e.g., `opencode/big-pickle`) have per-account rate limits that get burned through quickly during failing test loops, surfacing as opaque test timeouts. Allow override via `OPENCODE_TEST_MODEL` env var so individual developers can use free models when their per-account quota is fresh.
 - **Minimum isolation**: `OPENCODE_CONFIG_DIR=<empty temp dir>` skips the user's `~/.config/opencode/opencode.json` (which is what was loading Magic Context / OMO). `OPENCODE_CONFIG_CONTENT` registers `dist/index.js` as a plugin via a `file://` URL. Avoid HOME / XDG redirection unless you have evidence of needing more — the heavy harness was solving the wrong problem.
@@ -54,8 +55,8 @@ The SDK rabbit hole burned roughly six hours and many tokens chasing isolation, 
 ### Minimal test helper
 
 ```ts
-import {spawnSync, type SpawnSyncReturns} from 'node:child_process'
-import {dirSync} from 'tmp'
+import { spawnSync, type SpawnSyncReturns } from 'node:child_process'
+import { dirSync } from 'tmp'
 
 interface RunArgs {
   model?: string
@@ -65,12 +66,13 @@ interface RunArgs {
 }
 
 export function runOpencode(args: RunArgs): SpawnSyncReturns<string> {
-  const model = args.model ?? process.env.OPENCODE_TEST_MODEL ?? 'opencode/minimax-m2.5'
-  const configDir = dirSync({unsafeCleanup: true}).name
+  const model =
+    args.model ?? process.env.OPENCODE_TEST_MODEL ?? 'opencode/minimax-m2.5'
+  const configDir = dirSync({ unsafeCleanup: true }).name
   const env: NodeJS.ProcessEnv = {
     ...process.env,
     OPENCODE_CONFIG_DIR: configDir,
-    OPENCODE_CONFIG_CONTENT: JSON.stringify({plugin: [args.pluginUrl]}),
+    OPENCODE_CONFIG_CONTENT: JSON.stringify({ plugin: [args.pluginUrl] }),
   }
   // copilotPat is forwarded as GH_TOKEN — see auth precedence in README
   // (COPILOT_GITHUB_TOKEN > GH_TOKEN > GITHUB_TOKEN > ~/.copilot/auth).
@@ -85,7 +87,9 @@ export function runOpencode(args: RunArgs): SpawnSyncReturns<string> {
 
 export function assertOk(result: SpawnSyncReturns<string>): void {
   if (result.status !== 0) {
-    throw new Error(`opencode run exited ${result.status}; stderr tail:\n${result.stderr.slice(-2_000)}`)
+    throw new Error(
+      `opencode run exited ${result.status}; stderr tail:\n${result.stderr.slice(-2_000)}`,
+    )
   }
 }
 ```
@@ -95,11 +99,14 @@ export function assertOk(result: SpawnSyncReturns<string>): void {
 Before (SDK harness, simplified):
 
 ```ts
-const server = await startServer({port: 0, isolation: deepIsolation()})
+const server = await startServer({ port: 0, isolation: deepIsolation() })
 const client = makeClient(server.baseUrl)
 const session = await client.session.create()
-await client.session.prompt({path: {id: session.id}, body: {parts: [{type: 'text', text: 'PING'}]}})
-const messages = await client.session.messages({path: {id: session.id}})
+await client.session.prompt({
+  path: { id: session.id },
+  body: { parts: [{ type: 'text', text: 'PING' }] },
+})
+const messages = await client.session.messages({ path: { id: session.id } })
 expect(extractText(messages)).toMatch(/PONG/)
 await server.stop()
 ```
@@ -107,7 +114,10 @@ await server.stop()
 After (CLI subprocess):
 
 ```ts
-const result = runOpencode({prompt: 'Reply with exactly PONG.', pluginUrl: `file://${distPath}/index.js`})
+const result = runOpencode({
+  prompt: 'Reply with exactly PONG.',
+  pluginUrl: `file://${distPath}/index.js`,
+})
 assertOk(result)
 expect(result.stdout).toMatch(/PONG/)
 ```

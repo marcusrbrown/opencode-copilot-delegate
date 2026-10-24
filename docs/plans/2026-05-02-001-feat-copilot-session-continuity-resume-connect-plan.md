@@ -1,4 +1,5 @@
 ---
+
 title: Copilot session continuity — resume + connect
 type: feat
 status: active
@@ -21,7 +22,6 @@ After this plan landed, Unit 3a was executed per the empirical-first design. Fin
 Both `--connect=<id> --no-remote` (the original plan argv) and `--connect=<id>` without `--no-remote` silent-fallback to a fresh local session for every tested target — known recent IDs and unknown all-zeros placeholders alike — at exit 0 with empty stderr and no detectable signal in the JSONL stream until the terminal `result` event reveals `result.sessionId !== requested`. The remote-control mechanism behind `--connect` requires an actively-running, listening session that the plugin's one-shot `-p` execution model cannot provide. Side finding: `--share[=path]` is a local markdown transcript export, not a cloud-share primitive — CLI 1.0.40 has no remote-share flag at all.
 
 **Effective scope of this slice (post-amendment):**
-
 - Tools shipped: `copilot_resume` only (catalog grows 3 → 4, not 3 → 5).
 - RPC routes: `/tasks/resume` + `/tasks/recent-sessions` only (no `/tasks/connect`).
 - Origin discriminator stays `'spawn' | 'resume' | 'connect'` in the type for forward compatibility, but no `'connect'`-origin tasks are constructed in this slice.
@@ -30,21 +30,21 @@ Both `--connect=<id> --no-remote` (the original plan argv) and `--connect=<id>` 
 
 **Read each subsequent section with this lens:**
 
-| Section | Treatment under the amendment |
-|---|---|
-| Requirements R1, R2, R6, R8, R10, R11, R12, R13, R14 | Where they say "and connect", read as "(connect deferred)". R9 connect-specific clauses become moot (no validation strategy needed for a tool we don't ship). |
-| Key Technical Decisions: "Two dedicated tools, not one parameterized" | Read as "one new tool (`copilot_resume`); `copilot_connect` deferred to follow-up slice once an upstream signal exists". |
-| Key Technical Decisions: "`--connect` validation timing is empirical-first" | Empirically determined: no validation strategy works; connect deferred. The decision itself was correct (empirical-first), the outcome was deferral. |
-| Key Technical Decisions: "Borrowed sessions are un-reapable" | Type-level discriminator stays for forward compat; no connect-origin tasks are constructed, so the rule has no current consumer. |
-| Unit 1 | Implement as written: `origin` discriminator includes `'connect'` for forward compatibility. `psIdentity` field stays in `TaskState` for the same reason. |
-| Unit 2 | Implement resume + spawn paths as written. Connect-specific branches (identity gate in cancel, confirm-card connect variant, `notifySpawn` connect warning, `disconnected` cancel response) are NOT implemented in this slice. |
-| Unit 3a | Already complete (PR #94). No further capture work needed. Skip in `ce:work`. |
-| Unit 3b | Implement as written; pre-flight helpers serve resume only. |
-| Unit 3c | Implement `copilot_resume` only; do NOT create `src/tools/connect.ts` or `tests/connect.test.ts`. Tool catalog assertion in `tests/tools.test.ts` extends from 3 to 4, not 5. |
-| Unit 4 | Implement `/tasks/resume` + `/tasks/recent-sessions` only; do NOT add `/tasks/connect` route or `TasksConnectRequestSchema`. |
-| Unit 5 | Implement modal-list focus model + Recent Sessions view + raw-ID input form for resume only. Drop the `C` keyboard hint and the connect-mode form variant; confirm-card stays at one variant (existing cancel copy). |
-| Unit 6 | Document resume only. Update tool catalog count to 4. Add a brief "Connect deferred" subsection in the AGENTS.md `Borrowed sessions` block linking to PR #94 and this amendment. |
-| System-Wide Impact / Risks / Security & Input Validation | Drop connect-specific rows; the validation framework applies to resume identically. The borrowed-process risk row becomes vestigial (no borrowed processes constructed). |
+| Section                                                                     | Treatment under the amendment                                                                                                                                                                                                  |
+| --------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Requirements R1, R2, R6, R8, R10, R11, R12, R13, R14                        | Where they say "and connect", read as "(connect deferred)". R9 connect-specific clauses become moot (no validation strategy needed for a tool we don't ship).                                                                  |
+| Key Technical Decisions: "Two dedicated tools, not one parameterized"       | Read as "one new tool (`copilot_resume`); `copilot_connect` deferred to follow-up slice once an upstream signal exists".                                                                                                       |
+| Key Technical Decisions: "`--connect` validation timing is empirical-first" | Empirically determined: no validation strategy works; connect deferred. The decision itself was correct (empirical-first), the outcome was deferral.                                                                           |
+| Key Technical Decisions: "Borrowed sessions are un-reapable"                | Type-level discriminator stays for forward compat; no connect-origin tasks are constructed, so the rule has no current consumer.                                                                                               |
+| Unit 1                                                                      | Implement as written: `origin` discriminator includes `'connect'` for forward compatibility. `psIdentity` field stays in `TaskState` for the same reason.                                                                      |
+| Unit 2                                                                      | Implement resume + spawn paths as written. Connect-specific branches (identity gate in cancel, confirm-card connect variant, `notifySpawn` connect warning, `disconnected` cancel response) are NOT implemented in this slice. |
+| Unit 3a                                                                     | Already complete (PR #94). No further capture work needed. Skip in `ce:work`.                                                                                                                                                  |
+| Unit 3b                                                                     | Implement as written; pre-flight helpers serve resume only.                                                                                                                                                                    |
+| Unit 3c                                                                     | Implement `copilot_resume` only; do NOT create `src/tools/connect.ts` or `tests/connect.test.ts`. Tool catalog assertion in `tests/tools.test.ts` extends from 3 to 4, not 5.                                                  |
+| Unit 4                                                                      | Implement `/tasks/resume` + `/tasks/recent-sessions` only; do NOT add `/tasks/connect` route or `TasksConnectRequestSchema`.                                                                                                   |
+| Unit 5                                                                      | Implement modal-list focus model + Recent Sessions view + raw-ID input form for resume only. Drop the `C` keyboard hint and the connect-mode form variant; confirm-card stays at one variant (existing cancel copy).           |
+| Unit 6                                                                      | Document resume only. Update tool catalog count to 4. Add a brief "Connect deferred" subsection in the AGENTS.md `Borrowed sessions` block linking to PR #94 and this amendment.                                               |
+| System-Wide Impact / Risks / Security & Input Validation                    | Drop connect-specific rows; the validation framework applies to resume identically. The borrowed-process risk row becomes vestigial (no borrowed processes constructed).                                                       |
 
 When `ce:work` starts a unit, the implementing subagent brings the per-section corrections inline as part of that unit's PR (rename `connect`-specific test scenarios to `resume`, drop connect.ts file references in Unit 3c, etc.). This amendment serves as the interpretive layer; per-unit surgical updates land alongside the matching implementation.
 
@@ -61,7 +61,7 @@ The plugin is strong at spawning fresh delegations and weak at picking useful wo
 - R1. Resume and connect ship as first-class continuity actions, not hidden flags on `copilot_delegate`. (Units 3c, 5)
 - R2. Raw Copilot session identities are first-class targets alongside plugin `cpl_*` task IDs. (Units 1, 3b, 3c, 5)
 - R3. When a known plugin task matches the target, prefer it as the default lookup path while still allowing direct raw-ID targeting. (Units 1, 3c, 5)
-- R4. Resume and connect via explicit raw Copilot session identity remain available after plugin or OpenCode restart. The plugin accepts user-provided raw IDs and does not retain a plugin-owned session catalog across restarts. The Recent Sessions view (Unit 5) is a *view onto Copilot CLI's own filesystem catalog*, not a plugin-owned cache. (Units 3c, 5, 6)
+- R4. Resume and connect via explicit raw Copilot session identity remain available after plugin or OpenCode restart. The plugin accepts user-provided raw IDs and does not retain a plugin-owned session catalog across restarts. The Recent Sessions view (Unit 5) is a _view onto Copilot CLI's own filesystem catalog_, not a plugin-owned cache. (Units 3c, 5, 6)
 - R5. ACP is deferred. (Out of scope.)
 - R6. Continuity actions re-apply known prior workspace context (`cwd` and `--add-dir` set). (Units 1, 3c, 5)
 - R7. When workspace metadata is unavailable, the flow makes the gap explicit. TUI launches default to current `directory`; tool-path callers (`copilot_resume`, `copilot_connect`) accept explicit `cwd` / `addDirs` arguments for power-user customization. (Units 3c, 5)
@@ -131,15 +131,15 @@ The plugin is strong at spawning fresh delegations and weak at picking useful wo
 ## Key Technical Decisions
 
 - **Origin discriminator on `TaskState`**, not a separate borrowed-task type. Single registry, single envelope shape, one branching point per consumer (notify text, cancel response, output envelope). Rationale: minimizes refactor surface; consumers that don't care about origin keep working unchanged. (R11)
-- **Borrowed sessions are un-reapable; the local connector PID is owned.** `origin === 'connect'` tasks bind the local plugin process to a *remote Copilot session* the plugin instance did not originate. The local connector PID IS owned by this plugin instance and is killed on cancel; the remote session continues independently. Connect tasks do NOT write to the orphan PID ledger because the ledger's spawner-liveness gate concerns the *remote session's lifecycle*, not the connector's. Cancel response wording reflects this truthfully (`disconnected: true` for connect; `cancelled: true` for spawn/resume). Throughout this plan, "borrowed" refers to the remote Copilot session; the local connector PID is always owned and killable.
+- **Borrowed sessions are un-reapable; the local connector PID is owned.** `origin === 'connect'` tasks bind the local plugin process to a _remote Copilot session_ the plugin instance did not originate. The local connector PID IS owned by this plugin instance and is killed on cancel; the remote session continues independently. Connect tasks do NOT write to the orphan PID ledger because the ledger's spawner-liveness gate concerns the _remote session's lifecycle_, not the connector's. Cancel response wording reflects this truthfully (`disconnected: true` for connect; `cancelled: true` for spawn/resume). Throughout this plan, "borrowed" refers to the remote Copilot session; the local connector PID is always owned and killable.
 - **No new internal `disconnected` status.** Connect-disconnect uses the existing `cancelled` terminal state; the envelope and notification text disambiguate via the `origin` field rather than via a new status. Rationale: keeps the terminal-state set bounded and avoids ripple changes through `setStatus`, `TERMINAL_STATUSES`, the RPC `TaskStatusSchema`, and `outputStatus`.
 - **Pre-flight UUID-existence check for `--resume`**, config-dir aware. When the target is a UUID, stat `${configDir ?? ~/.copilot}/session-state/<uuid>/session.db` and short-circuit with a structured error if absent. `configDir` is read in priority order: explicit tool argument → `COPILOT_CONFIG_DIR` env var → default `~/.copilot/`. Empirical Copilot CLI 1.0.40 finding: passing a valid-format-but-unknown UUID to `--resume` silently creates a new session at exit 0; the pre-flight closes that hole for default-config users and config-dir users equally.
-- **`--connect` validation timing is empirical-first.** The plan does NOT assume `result.sessionId` comparison works as an attach-time mismatch detector. The Copilot CLI `result` event is a session-end summary, not a handshake event — by the time it arrives, a spurious new session has already done potentially-destructive work. Unit 3's first sub-step is an empirical capture of a real `--connect` JSONL stream against a known-bad ID to identify whether any *early* session-identity event exists during the connect handshake. The validation strategy crystallizes from that capture; default fallback is honest-deferral (loud warning in tool description; no architectural validation claim) until evidence supports a stronger guarantee.
+- **`--connect` validation timing is empirical-first.** The plan does NOT assume `result.sessionId` comparison works as an attach-time mismatch detector. The Copilot CLI `result` event is a session-end summary, not a handshake event — by the time it arrives, a spurious new session has already done potentially-destructive work. Unit 3's first sub-step is an empirical capture of a real `--connect` JSONL stream against a known-bad ID to identify whether any _early_ session-identity event exists during the connect handshake. The validation strategy crystallizes from that capture; default fallback is honest-deferral (loud warning in tool description; no architectural validation claim) until evidence supports a stronger guarantee.
 - **Stderr regex normalization for the no-match path.** Copilot CLI 1.0.40 emits a freeform English `Error: No session, task, or name matched '<value>'` to stderr at exit 1 with no JSONL output. A `normalizeContinuityError(stderr)` helper detects this and returns a clean error message; all other exit-1 paths are passed through verbatim. R9 is acknowledged as Copilot CLI 1.0.40-conditional in scope (the regex is empirical, not a documented contract); a runtime canary on plugin init logs a warning when `copilot --version` differs from the tested range.
 - **Resume does NOT take a new prompt argument.** `copilot_resume` continues the resumed session from its last state without injecting a new turn. The semantic of "resume + new prompt" is fork; shipping fork mechanically inside resume would lock in ergonomics the explicit fork tool would need to undo in a follow-up slice. Enforced at the schema level: `copilot_resume` accepts only `targetId`, `cwd?`, `addDirs?`, `configDir?`. Fork remains explicitly deferred (see Scope Boundaries).
 - **Two dedicated tools, not one parameterized tool.** `copilot_resume` and `copilot_connect` rather than a single `copilot_continuity { action }`. Rationale: distinct semantics merit distinct tool descriptions; agents discovering tools via tool catalog see two clearly-labeled options with action-specific argument shapes. Tool-catalog cost is acknowledged: this slice grows the catalog from 3 to 5 tools, each consuming agent context-token budget on every turn; consolidation back to one tool would be a deprecation-cycle commitment we accept in exchange for argument-shape clarity.
 - **TUI affordances inline in the existing modal, no new slash commands.** Per R13. Two distinct flows:
-  - **Resume primary path — `Recent Sessions` view**. Reads `${configDir ?? ~/.copilot}/session-state/` as a directory listing; surfaces selectable rows with mtime + best-effort metadata (project name, first user message snippet, tool-call count) extracted from each session's `events.jsonl`. This is a *view onto Copilot CLI's own catalog*, not a plugin-owned catalog — R4 stays intact. User picks a row → launches resume against that session ID.
+  - **Resume primary path — `Recent Sessions` view**. Reads `${configDir ?? ~/.copilot}/session-state/` as a directory listing; surfaces selectable rows with mtime + best-effort metadata (project name, first user message snippet, tool-call count) extracted from each session's `events.jsonl`. This is a _view onto Copilot CLI's own catalog_, not a plugin-owned catalog — R4 stays intact. User picks a row → launches resume against that session ID.
   - **Resume fallback / Connect primary — raw-ID input form**. Used when the user wants to resume a session not in the local list, or to connect to a remote/shared session ID (always raw-ID first because connect targets are typically external).
   - Dialog swaps use `api.ui.dialog.replace`, never `clear` + `replace` (per re-entrant dialog close learning).
 - **Shared `launchResume` / `launchConnect` helpers exported directly from `src/tools/resume.ts` and `src/tools/connect.ts`**, imported by the RPC routes. No separate `launch-helpers.ts` file — cancel-helper.ts is 12 lines of trivial logic; launch is the entire body of the tools. If a third caller appears (fork in a follow-up slice), extract then.
@@ -172,7 +172,7 @@ The plugin is strong at spawning fresh delegations and weak at picking useful wo
 
 ## High-Level Technical Design
 
-> *This illustrates the intended approach and is directional guidance for review, not implementation specification. The implementing agent should treat it as context, not code to reproduce.*
+> _This illustrates the intended approach and is directional guidance for review, not implementation specification. The implementing agent should treat it as context, not code to reproduce._
 
 ```
                     ┌─────────────────────────────────┐
@@ -223,11 +223,11 @@ The plugin is strong at spawning fresh delegations and weak at picking useful wo
    └───────────────────────────────────────────────────┘
 ```
 
-| Origin | local PID | orphan ledger | cancel response | notify completion text |
-|---|---|---|---|---|
-| `spawn` | owned | written | `cancelled: true` | "COPILOT DELEGATION COMPLETED" |
-| `resume` | owned (new process resuming a CLI session) | written | `cancelled: true` | "COPILOT RESUME COMPLETED" |
-| `connect` | owned connector (remote session continues independently) | NOT written | `disconnected: true` | "COPILOT CONNECTOR DISCONNECTED" |
+| Origin    | local PID                                                | orphan ledger | cancel response      | notify completion text           |
+| --------- | -------------------------------------------------------- | ------------- | -------------------- | -------------------------------- |
+| `spawn`   | owned                                                    | written       | `cancelled: true`    | "COPILOT DELEGATION COMPLETED"   |
+| `resume`  | owned (new process resuming a CLI session)               | written       | `cancelled: true`    | "COPILOT RESUME COMPLETED"       |
+| `connect` | owned connector (remote session continues independently) | NOT written   | `disconnected: true` | "COPILOT CONNECTOR DISCONNECTED" |
 
 ## Implementation Units
 
@@ -323,7 +323,7 @@ The plugin is strong at spawning fresh delegations and weak at picking useful wo
 
 - [ ] **Unit 3a: Empirical pre-flight — capture real `--connect` JSONL behavior**
 
-**Goal:** Before any connect-validation design lands, capture an actual `copilot --connect=<known-bad-id>` JSONL stream and identify whether any *early* session-identity event arrives during the connect handshake (before tool calls or model output).
+**Goal:** Before any connect-validation design lands, capture an actual `copilot --connect=<known-bad-id>` JSONL stream and identify whether any _early_ session-identity event arrives during the connect handshake (before tool calls or model output).
 
 **Requirements:** R9 (validation strategy depends on empirical evidence)
 
@@ -340,11 +340,11 @@ The plugin is strong at spawning fresh delegations and weak at picking useful wo
 - Document findings in the capabilities reference doc; pick the validation strategy for Unit 3c based on what the capture shows.
 
 **Decision tree based on findings:**
-| Finding | Validation strategy for Unit 3c |
-|---|---|
-| Early event carries `sessionId` | Validate against that event; abort connect on mismatch BEFORE any tool calls fire |
-| No early event; only `result` carries it | Honest-deferral posture: ship `--connect` with loud warning in tool description and notification toast; do NOT claim attach-time validation; document upstream gap |
-| Connect against unknown ID surfaces clean stderr error at exit ≠ 0 | Use stderr regex normalization (extend `normalizeContinuityError`); no JSONL validation needed |
+| Finding                                                            | Validation strategy for Unit 3c                                                                                                                                    |
+| ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Early event carries `sessionId`                                    | Validate against that event; abort connect on mismatch BEFORE any tool calls fire                                                                                  |
+| No early event; only `result` carries it                           | Honest-deferral posture: ship `--connect` with loud warning in tool description and notification toast; do NOT claim attach-time validation; document upstream gap |
+| Connect against unknown ID surfaces clean stderr error at exit ≠ 0 | Use stderr regex normalization (extend `normalizeContinuityError`); no JSONL validation needed                                                                     |
 
 **Test scenarios:** none (this unit is research; outputs are fixtures + a doc update).
 
@@ -631,12 +631,12 @@ The new RPC routes accept user-supplied target IDs and workspace paths and forwa
 
 **Input contracts (all enforced in `src/runtime/continuity-validation.ts`, called by both tool factories and RPC routes):**
 
-| Input | Validation | Failure mode |
-|---|---|---|
-| `targetId` | Discriminated union: UUID (`/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i`) OR safe-name (`/^[A-Za-z0-9._-]{1,128}$/`). Length capped at 128. | Return `{ error: 'invalid target ID format' }` without spawning. |
-| `cwd` | Must be absolute path; must not begin with `--`; must `path.resolve` under one of `allowedRoots` (active workspace + `directory` plugin option, by default). | Return `{ error: 'cwd outside allowed roots' }` without spawning. |
-| `addDirs` | Per entry: must be absolute path; must not begin with `--`; must `path.resolve` under one of `allowedRoots`. Array length capped at 32. | Return `{ error: 'argv-injection-shaped value in addDirs' }` or `{ error: 'path outside allowed roots' }` without spawning. |
-| `configDir` | If provided: must be absolute path; must `path.resolve` under user home directory or an explicitly-allowed override list. | Return `{ error: 'configDir outside allowed roots' }` without spawning. |
+| Input       | Validation                                                                                                                                                        | Failure mode                                                                                                                 |
+| ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `targetId`  | Discriminated union: UUID (`/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i`) OR safe-name (`/^[A-Za-z0-9._-]{1,128}$/`). Length capped at 128. | Return `{ error: 'invalid target ID format' }` without spawning.                                                             |
+| `cwd`       | Must be absolute path; must not begin with `--`; must `path.resolve` under one of `allowedRoots` (active workspace + `directory` plugin option, by default).      | Return `{ error: 'cwd outside allowed roots' }` without spawning.                                                            |
+| `addDirs`   | Per entry: must be absolute path; must not begin with `--`; must `path.resolve` under one of `allowedRoots`. Array length capped at 32.                           | Return `{ error: 'argv-injection-shaped value in addDirs' }` or `{ error: 'path outside allowed roots' }` without spawning.  |
+| `configDir` | If provided: must be absolute path; must `path.resolve` under user home directory or an explicitly-allowed override list.                                         | Return `{ error: 'configDir outside allowed roots' }` without spawning.                                                      |
 
 **`psIdentity` capture timing**: at spawn time (synchronously with PID assignment in `subprocess.ts`), NOT after the first JSONL event. Captured `psIdentity` is verified before any later destructive action (cancel of connect-origin task) by re-calling `getPidIdentity(task.pid)` and comparing. Mismatch → log warning, skip kill, still transition to terminal state.
 
@@ -649,16 +649,16 @@ The new RPC routes accept user-supplied target IDs and workspace paths and forwa
 
 ## Risks & Dependencies
 
-| Risk | Mitigation |
-|------|------------|
-| Copilot CLI changes `--resume` / `--connect` argv shape, error text, or session-state filesystem layout between 1.0.40 and a future version | Pin Copilot CLI in `mise.toml` (already done); plugin init logs a runtime canary warning when `copilot --version` differs from tested 1.0.40; document R9 as version-conditional in tool descriptions and AGENTS.md; CI regression test exercises the empirical fixture as a leading indicator. |
-| `--connect` silent-fallback (CLI silently starts fresh session against unknown ID) does damage before any plugin-side validation can fire | Empirical-first design: Unit 3a captures real connect JSONL and identifies whether any early identity event exists; if not, ship with loud warning in tool description + spawn toast ("invalid IDs may silently start a fresh session"); do not claim attach-time validation we cannot deliver. |
-| Connect-origin task cancel kills the wrong process if connector PID is OS-reused | `psIdentity` captured at spawn time; `getPidIdentity()` verifies before kill; mismatch logs warning and skips kill; task still transitions to terminal state. Residual risk: `lstart` is wall-clock-second granular; same-second PID reuse with same `comm` would pass the gate (extremely rare on a busy system; documented). |
-| Recursive Copilot sessions: a resumed session internally spawns child copilot processes (via MCP, hooks, subagents) that escape the origin model and orphan-ledger tracking | Out of scope for this slice; documented as a known gap in AGENTS.md and tracked as a follow-up open question. Resume-mode orphan tracking only covers the directly-spawned PID. |
-| External consumers reading `status: 'cancelled'` cannot distinguish user-cancel from connect-disconnect | Tool description for `copilot_output` updated to mention the `origin` field and the asymmetry (Unit 6). External consumers (`output.ts`) keep the existing status surface; no new `disconnected` status. Acceptable cost given the simpler internal type system. |
-| TUI form regressions re-introduce the re-entrant dialog freeze | Explicit integration test asserts no `clear()`-then-`replace()` sequence in the new code paths; PR review verifies by inspection. |
-| The known-task lookup (R3) misleads users into thinking a resumed session shares state with the known task even after restart | Documentation in README and tool descriptions makes the after-restart raw-ID contract explicit (no plugin-side catalog persists across restarts; recovery relies on the upstream Copilot CLI session storage AND the Recent Sessions view, which is a *view onto Copilot CLI's catalog*, not a plugin-owned one). |
-| Recent Sessions view performs filesystem reads and `events.jsonl` parsing on every modal open, slowing modal load | Capped at N most recent (default 20); per-session metadata extraction is best-effort with a hard timeout; failures degrade gracefully (UUID + mtime only, no project name / event count). |
+| Risk                                                                                                                                                                        | Mitigation                                                                                                                                                                                                                                                                                                                     |
+| --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| Copilot CLI changes `--resume` / `--connect` argv shape, error text, or session-state filesystem layout between 1.0.40 and a future version                                 | Pin Copilot CLI in `mise.toml` (already done); plugin init logs a runtime canary warning when `copilot --version` differs from tested 1.0.40; document R9 as version-conditional in tool descriptions and AGENTS.md; CI regression test exercises the empirical fixture as a leading indicator.                                |
+| `--connect` silent-fallback (CLI silently starts fresh session against unknown ID) does damage before any plugin-side validation can fire                                   | Empirical-first design: Unit 3a captures real connect JSONL and identifies whether any early identity event exists; if not, ship with loud warning in tool description + spawn toast ("invalid IDs may silently start a fresh session"); do not claim attach-time validation we cannot deliver.                                |
+| Connect-origin task cancel kills the wrong process if connector PID is OS-reused                                                                                            | `psIdentity` captured at spawn time; `getPidIdentity()` verifies before kill; mismatch logs warning and skips kill; task still transitions to terminal state. Residual risk: `lstart` is wall-clock-second granular; same-second PID reuse with same `comm` would pass the gate (extremely rare on a busy system; documented). |
+| Recursive Copilot sessions: a resumed session internally spawns child copilot processes (via MCP, hooks, subagents) that escape the origin model and orphan-ledger tracking | Out of scope for this slice; documented as a known gap in AGENTS.md and tracked as a follow-up open question. Resume-mode orphan tracking only covers the directly-spawned PID.                                                                                                                                                |
+| External consumers reading `status: 'cancelled'` cannot distinguish user-cancel from connect-disconnect                                                                     | Tool description for `copilot_output` updated to mention the `origin` field and the asymmetry (Unit 6). External consumers (`output.ts`) keep the existing status surface; no new `disconnected` status. Acceptable cost given the simpler internal type system.                                                               |
+| TUI form regressions re-introduce the re-entrant dialog freeze                                                                                                              | Explicit integration test asserts no `clear()`-then-`replace()` sequence in the new code paths; PR review verifies by inspection.                                                                                                                                                                                              |
+| The known-task lookup (R3) misleads users into thinking a resumed session shares state with the known task even after restart                                               | Documentation in README and tool descriptions makes the after-restart raw-ID contract explicit (no plugin-side catalog persists across restarts; recovery relies on the upstream Copilot CLI session storage AND the Recent Sessions view, which is a _view onto Copilot CLI's catalog_, not a plugin-owned one).              |
+| Recent Sessions view performs filesystem reads and `events.jsonl` parsing on every modal open, slowing modal load                                                           | Capped at N most recent (default 20); per-session metadata extraction is best-effort with a hard timeout; failures degrade gracefully (UUID + mtime only, no project name / event count).                                                                                                                                      |
 
 ## Documentation / Operational Notes
 

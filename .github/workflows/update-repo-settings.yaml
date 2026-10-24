@@ -6,10 +6,10 @@ on:
   push:
     branches: [main]
     paths:
-      - '.github/settings.yml'
-      - '.github/workflows/update-repo-settings.yaml'
+      - ".github/settings.yml"
+      - ".github/workflows/update-repo-settings.yaml"
   schedule:
-    - cron: '55 2 * * *'
+    - cron: "55 2 * * *"
   workflow_dispatch:
 
 permissions:

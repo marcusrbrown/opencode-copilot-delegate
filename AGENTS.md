@@ -3,7 +3,6 @@
 ## What This Project Is
 
 `opencode-copilot-delegate` is an OpenCode plugin that spawns GitHub Copilot CLI (`copilot -p`) as background subprocesses. It exposes four tools to OpenCode sessions:
-
 - **`copilot_delegate`** — Spawn a Copilot CLI subprocess with a prompt and optional agent/model
 - **`copilot_output`** — Retrieve results from a running or completed delegation (supports blocking with timeout)
 - **`copilot_cancel`** — Cancel a running delegation and kill its process tree

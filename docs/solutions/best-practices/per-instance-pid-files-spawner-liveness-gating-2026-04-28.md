@@ -1,4 +1,5 @@
 ---
+
 title: Per-Instance PID Files with Spawner-Liveness Gating
 date: 2026-04-28
 category: best-practices
@@ -7,17 +8,18 @@ problem_type: best_practice
 component: development_workflow
 severity: high
 applies_when:
-  - Managing subprocess lifecycles in plugins
-  - Preventing PID reuse of unrelated processes
-  - Handling cross-instance orphan cleanup
-  - Ensuring spawner liveness before reaping
-tags:
-  - pid-files
-  - subprocess-management
-  - liveness-probing
-  - orphan-reaping
-  - process-identity
-  - comm-lstart-gate
+- Managing subprocess lifecycles in plugins
+- Preventing PID reuse of unrelated processes
+- Handling cross-instance orphan cleanup
+- Ensuring spawner liveness before reaping
+  tags:
+- pid-files
+- subprocess-management
+- liveness-probing
+- orphan-reaping
+- process-identity
+- comm-lstart-gate
+
 ---
 
 # Per-Instance PID Files with Spawner-Liveness Gating
@@ -51,13 +53,11 @@ export function resolveInstancePidFilePath(): string {
 ```
 
 That gives each running plugin instance its own file:
-
 - `<XDG_STATE_HOME>/opencode-copilot-delegate/orphans/<plugin-pid>.pids`
 - one host process, one file
 - no cross-instance append/remove clobbering
 
 Store child identity in each line as:
-
 - `<pid>\t<comm>\t<lstart>`
 
 `pid` alone is not enough.
@@ -135,7 +135,6 @@ export function defaultIsPluginAlive(pid: number): boolean {
 ```
 
 On POSIX, `process.kill(pid, 0)` means:
-
 - success: process exists and is signalable
 - `EPERM`: process exists but you lack permission to signal it
 - `ESRCH`: process does not exist
@@ -144,7 +143,6 @@ This implementation treats success and `EPERM` as "alive," and everything else a
 That is the right bias for reaping: never kill another still-running parent's children.
 
 The per-file reap flow is:
-
 1. list `orphans/`
 2. ignore non-`.pids` files
 3. parse the filename stem as the owning plugin PID
@@ -234,7 +232,6 @@ try {
 ```
 
 A useful mental model is:
-
 - filename answers "who owns this file?"
 - `kill(pid, 0)` answers "is that owner still around?"
 - `comm + lstart` answer "does this child PID still refer to the same process?"
@@ -263,7 +260,6 @@ Per-instance files remove clobber races, spawner-liveness probing preserves live
 ### Before: naive shared PID file
 
 This version has two bugs:
-
 1. all instances write to the same file
 2. startup reaper trusts the stored child PID without checking whether the file's owner is still alive
 
@@ -280,7 +276,6 @@ await truncate(pidFile, 0)
 ```
 
 Failure mode:
-
 - OpenCode session A and session B both append to `orphans.pids`
 - session B reloads first
 - B reads the shared file and kills every recorded child PID
@@ -326,7 +321,6 @@ for (const file of await readdir(pidFileDir)) {
 ```
 
 That closes the cross-instance kill bug:
-
 - session A owns `12345.pids`
 - session B owns `23456.pids`
 - B starts and scans the directory
@@ -350,7 +344,6 @@ for (const { pid } of entries) {
 ```
 
 Failure mode:
-
 - child PID `8123` was recorded yesterday
 - that child died
 - the kernel reused `8123` for another process
@@ -383,7 +376,6 @@ for (const entry of entries) {
 ```
 
 This closes the PID-reuse hole:
-
 - `comm` rejects "same PID, different executable"
 - `lstart` rejects "same PID, same executable name, different process lifetime"
 - the kill only happens when the live process still matches the exact recorded child identity
@@ -391,7 +383,6 @@ This closes the PID-reuse hole:
 ### Real-source alignment
 
 The shipped implementation follows that exact shape:
-
 - per-instance file path keyed by `process.pid` (`src/runtime/pid-file.ts:33-42`)
 - peer-file owner liveness gate via `defaultIsPluginAlive` (`src/runtime/orphan-reaper.ts:20-27`)
 - `ps -p <pid> -o comm=` and `ps -p <pid> -o lstart=` for identity checks (`src/runtime/orphan-reaper.ts:29-63`)
