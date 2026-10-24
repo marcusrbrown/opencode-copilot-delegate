@@ -1,4 +1,5 @@
 ---
+
 title: Atomic File Append/Remove with O_EXCL Temp-File and In-Process Serialization Queue
 date: 2026-04-28
 category: best-practices
@@ -7,17 +8,18 @@ problem_type: best_practice
 component: development_workflow
 severity: medium
 applies_when:
-  - Implementing atomic file mutations
-  - Handling concurrent appends to shared files
-  - Ensuring crash-safe PID file writes
-  - Avoiding race conditions without locks
-tags:
-  - atomic-writes
-  - file-serialization
-  - temp-files
-  - o-excl
-  - crash-safety
-  - in-process-queue
+- Implementing atomic file mutations
+- Handling concurrent appends to shared files
+- Ensuring crash-safe PID file writes
+- Avoiding race conditions without locks
+  tags:
+- atomic-writes
+- file-serialization
+- temp-files
+- o-excl
+- crash-safety
+- in-process-queue
+
 ---
 
 # Atomic File Append/Remove with O_EXCL Temp-File and In-Process Serialization Queue
@@ -184,7 +186,12 @@ A naive implementation treats each spawn event as "just append one line." That l
 // before: illustrative naive pattern
 import { appendFile } from 'node:fs/promises'
 
-async function recordSpawn(filePath: string, pid: number, comm: string, lstart: string) {
+async function recordSpawn(
+  filePath: string,
+  pid: number,
+  comm: string,
+  lstart: string,
+) {
   const line = `${pid}\t${comm}\t${lstart}\n`
   await appendFile(filePath, line, 'utf8')
 }
@@ -217,7 +224,6 @@ async function removePidNaive(filePath: string, pid: number) {
 ```
 
 Now the failure mode is stale reads:
-
 1. append A reads old file
 2. append B reads same old file
 3. append A writes `old + A`
@@ -237,7 +243,6 @@ await Promise.all([
 ```
 
 What happens instead:
-
 1. caller A enters `serializeWrite(pidFile, ...)`
 2. caller B chains behind A in `writeChains`
 3. A reads current content, writes temp file, renames into place

@@ -1,4 +1,5 @@
 ---
+
 title: Bounded-Concurrency Worker Pool via Chunked Promise.all
 date: 2026-04-28
 category: best-practices
@@ -7,17 +8,18 @@ problem_type: best_practice
 component: development_workflow
 severity: medium
 applies_when:
-  - Implementing bounded parallel processing
-  - Processing lists with concurrent tasks
-  - Trading simplicity for head-of-line blocking
-  - When individual tasks have bounded latency
-tags:
-  - bounded-concurrency
-  - promise-all
-  - chunking
-  - worker-pool
-  - parallel-processing
-  - head-of-line-blocking
+- Implementing bounded parallel processing
+- Processing lists with concurrent tasks
+- Trading simplicity for head-of-line blocking
+- When individual tasks have bounded latency
+  tags:
+- bounded-concurrency
+- promise-all
+- chunking
+- worker-pool
+- parallel-processing
+- head-of-line-blocking
+
 ---
 
 # Bounded-Concurrency Worker Pool via Chunked Promise.all
@@ -75,7 +77,6 @@ for (let i = 0; i < entries.length; i += 5) {
 ```
 
 If you present the chunked pattern as guidance, be explicit about the head-of-line property:
-
 - wave 1 starts up to 5 entries
 - fast entries in wave 1 still wait for the slowest sibling
 - wave 2 does not start until `Promise.all(wave1)` resolves
@@ -182,14 +183,12 @@ for (let i = 0; i < entries.length; i += 5) {
 ```
 
 Why chunked was fine for v0.1.1:
-
 - bounded per-task timeout (1s SIGTERM ceiling)
 - cold path: orphan cleanup during plugin init
 - small batch: up to 10 entries per file
 - tiny implementation surface
 
 Why chunked stopped being the right tradeoff:
-
 - chunk `N+1` waits for the slowest task in chunk `N`
 - one slow `ps` (300-500ms is realistic on loaded systems) idles four sibling workers
 - batch wall time becomes `chunk_count * slowest_in_each_chunk`, which dominates init under load
@@ -215,14 +214,12 @@ await Promise.all(workers)
 ```
 
 Key properties:
-
 - `queue.shift()` is atomic in single-threaded JS — no race between the length check and the shift
 - `reaped`/`skipped` increments are also atomic from the perspective of concurrent async functions; no yield happens between the `++` read and write
 - a slow probe in worker `i` doesn't block workers `j ≠ i` from picking up new entries
 - the cap stays at `MAX_CONCURRENT_PROBES = 5`, so concurrency math is unchanged
 
 This is the better pattern when:
-
 - tail latency matters
 - task runtimes vary a lot
 - the batch is larger

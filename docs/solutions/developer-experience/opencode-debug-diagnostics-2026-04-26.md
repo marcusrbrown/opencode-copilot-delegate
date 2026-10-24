@@ -1,4 +1,5 @@
 ---
+
 title: Diagnosing OpenCode failures with debug logs
 date: 2026-04-26
 category: developer-experience
@@ -7,18 +8,19 @@ problem_type: developer_experience
 component: development_workflow
 severity: medium
 applies_when:
-  - An opencode test or invocation hangs or times out without an obvious local cause
-  - "build · model" stalls without progress, or `assistant[]` comes back empty
-  - You suspect an upstream regression, plugin-loading bug, or isolation problem
-  - Anytime you find yourself forming a theory before reading logs
-tags:
-  - opencode
-  - debugging
-  - print-logs
-  - log-level
-  - rate-limit
-  - api-errors
-  - troubleshooting
+- An opencode test or invocation hangs or times out without an obvious local cause
+- "build · model" stalls without progress, or `assistant[]` comes back empty
+- You suspect an upstream regression, plugin-loading bug, or isolation problem
+- Anytime you find yourself forming a theory before reading logs
+  tags:
+- opencode
+- debugging
+- print-logs
+- log-level
+- rate-limit
+- api-errors
+- troubleshooting
+
 ---
 
 # Diagnosing OpenCode failures with debug logs
@@ -30,7 +32,6 @@ OpenCode hides API-level errors behind silent retries: any response marked `isRe
 ## Guidance
 
 When investigating any opencode failure that doesn't have an obvious local cause:
-
 1. **Capture full DEBUG output to a file** (it's verbose; never pipe straight to a terminal you'll have to scroll):
 
    ```sh

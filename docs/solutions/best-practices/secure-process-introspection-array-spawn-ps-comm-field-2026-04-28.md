@@ -1,4 +1,5 @@
 ---
+
 title: Secure Process Introspection with Array-Spawn ps and Comm-Field Identity Gate
 date: 2026-04-28
 category: best-practices
@@ -7,18 +8,19 @@ problem_type: best_practice
 component: development_workflow
 severity: high
 applies_when:
-  - Verifying process ownership securely
-  - Preventing PID reuse and tampering
-  - Using kernel-tracked process identity
-  - Safely spawning system commands
-tags:
-  - process-introspection
-  - ps-command
-  - comm-field
-  - lstart-matching
-  - secure-spawning
-  - injection-prevention
-  - kernel-truth
+- Verifying process ownership securely
+- Preventing PID reuse and tampering
+- Using kernel-tracked process identity
+- Safely spawning system commands
+  tags:
+- process-introspection
+- ps-command
+- comm-field
+- lstart-matching
+- secure-spawning
+- injection-prevention
+- kernel-truth
+
 ---
 
 # Secure Process Introspection with Array-Spawn ps and Comm-Field Identity Gate
@@ -32,7 +34,6 @@ In `src/runtime/orphan-reaper.ts`, the shipped fix closes both gaps: it re-reads
 ## Guidance
 
 Use a two-part identity gate before signaling any PID you are recovering from persisted state:
-
 - **Never shell-string `ps`.** Spawn `ps` with an argv array so the OS passes discrete arguments directly to the process. That removes shell parsing from the equation and avoids command injection footguns.
 - **Use `comm`, not `args`, for the name check.** `comm` is a kernel-reported process/task name field, which is a materially stronger signal than `args` because it is not just the user-facing command-line string.
 - **Use `lstart` as the second identity leg.** A reused PID running the same binary can still pass a `comm` check. Matching start time closes that hole.
@@ -60,11 +61,11 @@ That is the important spawn pattern: no shell, no string interpolation into a sh
 The second detail is easy to miss and worth preserving as part of the pattern, not a throwaway implementation note:
 
 ```ts
-    child.stdout?.on('data', (chunk: Buffer) => {
-      stdout += chunk.toString('utf-8')
-    })
-    // Drain stderr so the OS pipe buffer never fills under backpressure.
-    child.stderr?.resume()
+child.stdout?.on('data', (chunk: Buffer) => {
+  stdout += chunk.toString('utf-8')
+})
+// Drain stderr so the OS pipe buffer never fills under backpressure.
+child.stderr?.resume()
 ```
 
 If a subprocess writes to `stderr` and the parent never drains it, the kernel pipe can fill. Once full, the child blocks on write, which means it may never exit, which means your seemingly harmless introspection helper can hang the system in exactly the path that is supposed to make cleanup safer.
@@ -72,20 +73,20 @@ If a subprocess writes to `stderr` and the parent never drains it, the kernel pi
 The wrapper also normalizes failure to a safe default:
 
 ```ts
-    child.on('close', (code) => {
-      clearTimeout(timeout)
-      if (timedOut || code !== 0) {
-        resolve(null)
-      } else {
-        const trimmed = stdout.trim()
-        resolve(trimmed || null)
-      }
-    })
+child.on('close', (code) => {
+  clearTimeout(timeout)
+  if (timedOut || code !== 0) {
+    resolve(null)
+  } else {
+    const trimmed = stdout.trim()
+    resolve(trimmed || null)
+  }
+})
 
-    child.on('error', () => {
-      clearTimeout(timeout)
-      resolve(null)
-    })
+child.on('error', () => {
+  clearTimeout(timeout)
+  resolve(null)
+})
 ```
 
 Timeout, spawn error, non-zero exit, and empty output all become `null`. That is fine here because the caller only needs one answer: "can I still prove this is the same process?" If not, skip the kill.
@@ -124,7 +125,6 @@ if (
 That triple `||` is the contract. If introspection failed at all, or if either leg of identity moved, the process is no longer trusted. No "close enough," no partial match, no best-effort kill.
 
 A clean way to describe the pattern is:
-
 1. Record `pid`, `comm`, and `lstart` when you spawn or first adopt the child.
 2. When it is time to reap, re-read live `comm` and `lstart` with array-spawned `ps`.
 3. If either value differs, treat the PID as stale and skip signaling.
@@ -166,7 +166,6 @@ process.kill(recordedPid, 'SIGTERM')
 ```
 
 Failure mode:
-
 1. Worker A had PID `1234`.
 2. Worker A exited.
 3. The OS recycled PID `1234`.
@@ -206,7 +205,6 @@ if (live && live.comm === recordedComm) {
 ```
 
 Failure mode:
-
 1. Old process was `copilot`, PID `1234`.
 2. Old process exited.
 3. New, unrelated `copilot` process starts and receives PID `1234`.
@@ -226,7 +224,6 @@ exec(`ps -p ${pid} -o comm=`, (err, stdout) => {
 ```
 
 Problems:
-
 - Shell parsing is back in play.
 - Variable interpolation becomes part of a command string.
 - Even if `pid` is "supposed to be numeric," this is an unnecessary footgun.
@@ -240,7 +237,6 @@ const child = spawn('ps', ['-p', String(pid), '-o', 'comm='])
 ```
 
 Benefits:
-
 - No shell.
 - No quoting games.
 - Arguments are passed as discrete argv tokens.

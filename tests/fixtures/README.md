@@ -4,10 +4,10 @@ Captured from live `copilot` CLI output for testing the JSONL parser.
 
 ## Provenance
 
-| Fixture | CLI version | Capture date | Notes |
-|---|---|---|---|
-| `happy-path.jsonl`, `multi-tool.jsonl`, `model-error.jsonl` | 1.0.34 | 2026-04-23 | Original parser-test set; `--model` switching variants |
-| `connect-mismatch.jsonl`, `resume-mismatch.jsonl` | 1.0.40 | 2026-05-02 | Continuity-feature research captures (Unit 3a) |
+| Fixture                                                     | CLI version | Capture date | Notes                                                  |
+| ----------------------------------------------------------- | ----------- | ------------ | ------------------------------------------------------ |
+| `happy-path.jsonl`, `multi-tool.jsonl`, `model-error.jsonl` | 1.0.34      | 2026-04-23   | Original parser-test set; `--model` switching variants |
+| `connect-mismatch.jsonl`, `resume-mismatch.jsonl`           | 1.0.40      | 2026-05-02   | Continuity-feature research captures (Unit 3a)         |
 
 **Command patterns:**
 - Original (1.0.34): `copilot -p "<prompt>" --output-format json -s --allow-all-tools --no-ask-user --model <model>`
@@ -44,19 +44,19 @@ Command: `copilot --resume=00000000-... --no-remote -p "noop" --output-format js
 
 ## Event Types Observed
 
-| Type | Description | Ephemeral |
-|------|-------------|-----------|
-| `session.mcp_server_status_changed` | MCP server connected | Yes |
-| `session.mcp_servers_loaded` | All MCP servers loaded | Yes |
-| `session.skills_loaded` | Skills discovered | Yes |
-| `session.tools_updated` | Tools updated with model | Yes |
-| `user.message` | User prompt with transformed content | No |
-| `assistant.turn_start` | Turn begins | No |
-| `assistant.reasoning_delta` | Streaming reasoning chunk | Yes |
-| `assistant.reasoning` | Full reasoning content | Yes |
-| `assistant.message_delta` | Streaming message chunk | Yes |
-| `assistant.message` | Complete message with tool requests | No |
-| `tool.execution_start` | Tool invocation begins | No |
-| `tool.execution_complete` | Tool result returned | No |
-| `assistant.turn_end` | Turn ends | No |
-| `result` | Session summary with usage stats | No |
+| Type                                | Description                          | Ephemeral |
+| ----------------------------------- | ------------------------------------ | --------- |
+| `session.mcp_server_status_changed` | MCP server connected                 | Yes       |
+| `session.mcp_servers_loaded`        | All MCP servers loaded               | Yes       |
+| `session.skills_loaded`             | Skills discovered                    | Yes       |
+| `session.tools_updated`             | Tools updated with model             | Yes       |
+| `user.message`                      | User prompt with transformed content | No        |
+| `assistant.turn_start`              | Turn begins                          | No        |
+| `assistant.reasoning_delta`         | Streaming reasoning chunk            | Yes       |
+| `assistant.reasoning`               | Full reasoning content               | Yes       |
+| `assistant.message_delta`           | Streaming message chunk              | Yes       |
+| `assistant.message`                 | Complete message with tool requests  | No        |
+| `tool.execution_start`              | Tool invocation begins               | No        |
+| `tool.execution_complete`           | Tool result returned                 | No        |
+| `assistant.turn_end`                | Turn ends                            | No        |
+| `result`                            | Session summary with usage stats     | No        |

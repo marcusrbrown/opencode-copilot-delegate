@@ -1,4 +1,5 @@
 ---
+
 title: Missing GitHub Release for already-published npm package
 date: 2026-04-26
 category: workflow-issues
@@ -7,16 +8,17 @@ problem_type: workflow_issue
 component: development_workflow
 severity: medium
 applies_when:
-  - Bootstrapping the first release of a new npm package using changesets/action and Trusted Publishing
-  - A version is manually published to npm before changesets/action runs for that version
-  - Auditing a release pipeline that skipped a version's GitHub Release or git tag
-tags:
-  - changesets-action
-  - github-release
-  - npm-publish
-  - trusted-publishing
-  - workflow-run
-  - release-pipeline
+- Bootstrapping the first release of a new npm package using changesets/action and Trusted Publishing
+- A version is manually published to npm before changesets/action runs for that version
+- Auditing a release pipeline that skipped a version's GitHub Release or git tag
+  tags:
+- changesets-action
+- github-release
+- npm-publish
+- trusted-publishing
+- workflow-run
+- release-pipeline
+
 ---
 
 # Missing GitHub Release for already-published npm package
@@ -30,7 +32,6 @@ When bootstrapping a new npm package that uses `changesets/action` for automated
 ## Guidance
 
 For the first release of a new npm package using changesets and Trusted Publishing, follow this bootstrap sequence to avoid the gap:
-
 1. Manually publish the initial version to npm: `npm publish --access=public`.
 2. Register npm Trusted Publishing for the package (this requires the package to exist first).
 3. In the repository, manually create and push a git tag for the version, then create the GitHub Release using the `CHANGELOG.md` content.

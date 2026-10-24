@@ -1,4 +1,5 @@
 ---
+
 title: Re-entrant dialog close froze /copilot-status on Escape
 date: 2026-05-02
 category: ui-bugs
@@ -6,15 +7,16 @@ module: tui
 problem_type: ui_bug
 component: tooling
 symptoms:
-  - Pressing Escape in `/copilot-status` froze the entire OpenCode TUI instead of closing the modal.
-  - The freeze also affected the modal load-error path while switching to the unavailable alert.
-  - Layout and input rewrites changed the presentation but did not remove the freeze.
-root_cause: wrong_api
-resolution_type: code_fix
-severity: high
-related_components:
-  - testing_framework
-tags: [tui, copilot-status, dialog-lifecycle, escape-key, modal, re-entrant-close]
+- Pressing Escape in `/copilot-status` froze the entire OpenCode TUI instead of closing the modal.
+- The freeze also affected the modal load-error path while switching to the unavailable alert.
+- Layout and input rewrites changed the presentation but did not remove the freeze.
+  root_cause: wrong_api
+  resolution_type: code_fix
+  severity: high
+  related_components:
+- testing_framework
+  tags: [tui, copilot-status, dialog-lifecycle, escape-key, modal, re-entrant-close]
+
 ---
 
 # Re-entrant dialog close froze /copilot-status on Escape
@@ -76,12 +78,10 @@ void loadTasks().catch((error) => {
 ```
 
 Regression coverage pins the lifecycle contract:
-
 - `src/tui/__tests__/index.test.ts` asserts the custom status dialog replacement does not receive a re-entrant host `onClose` callback.
 - `src/tui/__tests__/modal-list.test.tsx` asserts load failures report `error` without a preceding `close`.
 
 Verification for the fix:
-
 - focused RED/GREEN tests for the close-flow bug
 - `bun run test:tui`
 - `bun run lint`
@@ -96,7 +96,6 @@ Verification for the fix:
 The RPC load-error path had the same structural bug from the other direction: it mixed "close the current dialog" and "replace the current dialog with an unavailable alert" in the same failure path.
 
 The fix restores clean ownership boundaries:
-
 - the host closes the custom modal
 - the modal reports failures upward instead of mutating dialog state first
 - the parent decides whether to replace the dialog with an alert without a pre-emptive `clear()` re-entering the host close flow

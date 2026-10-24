@@ -1,35 +1,37 @@
 ---
+
 title: "/copilot-status TUI — visibility platform requirements"
 date: 2026-04-27
 status: ready-for-planning
 scope: standard
 ideation_source: docs/ideation/2026-04-27-copilot-delegate-v0.2.md (S1)
 related:
-  - docs/research/copilot-cli-capabilities-2026-04-27.md
-  - docs/plans/2026-04-21-copilot-delegate-plugin.md (closed)
-layout_reference:
+- docs/research/copilot-cli-capabilities-2026-04-27.md
+- docs/plans/2026-04-21-copilot-delegate-plugin.md (closed)
+  layout_reference:
   source: OpenCode native subagent view (observed during brainstorming; not checked into this repo)
   shape: |
-    A vertically stacked panel layout, post-completion. Top: a header strip showing
-    `Subagent (N of N)` indicating the run is finished. Below: a main prompt panel
-    with a cyan / accent left border that holds the original delegated prompt.
-    Below that: a vertical sequence of output cards — one per tool call — each
-    collapsible with a `Click to expand` affordance on collapsed cards and showing
-    the full tool result when expanded. Bottom: a status bar with delegation
-    metadata on the left and navigation hints on the right reading
-    `Parent up · Prev left · Next right`. Color treatment is OpenCode-default
-    (cyan accent, default terminal foreground/background).
-target_releases: v0.2.0 → v0.2.1 → v0.2.2 (staged; each minor bump per `0.x` policy)
-handoff: ce:plan (v0.2.0 only); v0.2.1 and v0.2.2 each get their own brainstorm before planning
-review_artifacts:
-  - 5 of 6 reviewers returned (coherence-reviewer timed out); staging decision driven by HIGH consensus across scope-guardian, adversarial, and product-lens
+  A vertically stacked panel layout, post-completion. Top: a header strip showing
+  `Subagent (N of N)` indicating the run is finished. Below: a main prompt panel
+  with a cyan / accent left border that holds the original delegated prompt.
+  Below that: a vertical sequence of output cards — one per tool call — each
+  collapsible with a `Click to expand` affordance on collapsed cards and showing
+  the full tool result when expanded. Bottom: a status bar with delegation
+  metadata on the left and navigation hints on the right reading
+  `Parent up · Prev left · Next right`. Color treatment is OpenCode-default
+  (cyan accent, default terminal foreground/background).
+  target_releases: v0.2.0 → v0.2.1 → v0.2.2 (staged; each minor bump per `0.x` policy)
+  handoff: ce:plan (v0.2.0 only); v0.2.1 and v0.2.2 each get their own brainstorm before planning
+  review_artifacts:
+- 5 of 6 reviewers returned (coherence-reviewer timed out); staging decision driven by HIGH consensus across scope-guardian, adversarial, and product-lens
+
 ---
 
 # `/copilot-status` TUI — visibility platform requirements
 
 ## Problem
 
-The v0.1.0 plugin makes long-running Copilot delegations possible but inconvenient to monitor. A 5-minute opus delegation looks identical to a hung subprocess from the parent OpenCode session: spawn returns a `task_id`, then nothing visible happens until the completion toast / system-reminder fires. The user *can* call `copilot_output` with blocking to inspect a running delegation, but that's a tool call away from the chat (and surfaces only the structured envelope, not a live event stream). Cancelling requires leaving the chat to call `copilot_cancel`. The v0.1.0 signature gap is **convenience and live progress**: no chat-native surface for in-flight inspection, no live tool-call rendering, no inline cancel control.
+The v0.1.0 plugin makes long-running Copilot delegations possible but inconvenient to monitor. A 5-minute opus delegation looks identical to a hung subprocess from the parent OpenCode session: spawn returns a `task_id`, then nothing visible happens until the completion toast / system-reminder fires. The user _can_ call `copilot_output` with blocking to inspect a running delegation, but that's a tool call away from the chat (and surfaces only the structured envelope, not a live event stream). Cancelling requires leaving the chat to call `copilot_cancel`. The v0.1.0 signature gap is **convenience and live progress**: no chat-native surface for in-flight inspection, no live tool-call rendering, no inline cancel control.
 
 ## Goal
 
@@ -47,11 +49,11 @@ The TUI plugin is opt-in via the user's `tui.jsonc` (same opt-in posture as Magi
 
 ## Release staging
 
-| Release    | What ships                                                                                          | Why this slice                                                                                     |
-| ---------- | --------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------- |
+| Release    | What ships                                                                                                   | Why this slice                                                                                         |
+| ---------- | ------------------------------------------------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------ |
 | **v0.2.0** | Foundation (TUI plugin half + RPC + build prerequisites + PID workaround) + list view + cancel + spawn toast | Ships the load-bearing architectural commit + minimum viable visibility (see what's running, kill it). |
-| **v0.2.1** | Drilled fullscreen view with live event streaming                                                   | Solves "what is it doing right now?" Requires the foundation from v0.2.0 to be settled.            |
-| **v0.2.2** | Recent-history (post-mortem), expandable output cards, concurrent ←/→ navigation                    | UX richness layered on top once core flow is validated.                                            |
+| **v0.2.1** | Drilled fullscreen view with live event streaming                                                            | Solves "what is it doing right now?" Requires the foundation from v0.2.0 to be settled.                |
+| **v0.2.2** | Recent-history (post-mortem), expandable output cards, concurrent ←/→ navigation                             | UX richness layered on top once core flow is validated.                                                |
 
 This brainstorm scopes **v0.2.0 only** in detail. v0.2.1 and v0.2.2 get their own brainstorms when their time comes, informed by what v0.2.0 reveals.
 
@@ -108,12 +110,12 @@ The completion system-reminder remains unconditional — it's the LLM-orchestrat
 
 ### Interaction model — v0.2.0 keybinds (modal list view only)
 
-| Key       | Action                                              |
-| --------- | --------------------------------------------------- |
-| `↑` / `k`   | Move focus up                                       |
-| `↓` / `j`   | Move focus down                                     |
-| `c`         | Cancel focused running delegation (confirm dialog)  |
-| `Esc`       | Close modal, return to OpenCode session             |
+| Key       | Action                                             |
+| --------- | -------------------------------------------------- |
+| `↑` / `k` | Move focus up                                      |
+| `↓` / `j` | Move focus down                                    |
+| `c`       | Cancel focused running delegation (confirm dialog) |
+| `Esc`     | Close modal, return to OpenCode session            |
 
 `Enter` (drill in), `r` (manual refresh), `←`/`→` (concurrent nav), `e`/`Space` (expand), `PgUp`/`PgDn` (scroll event stream) are deferred to v0.2.1 / v0.2.2 with the surfaces they belong to.
 
@@ -168,7 +170,7 @@ These resolve the design-lens-reviewer findings for v0.2.0. Drilled-view + concu
 ## v0.2.1 — preview (out of scope for this brainstorm)
 
 Drilled fullscreen view with live event streaming, mirroring OpenCode's native subagent shape (see frontmatter `layout_reference` for the captured static post-completion layout). Re-brainstormed when v0.2.0 is shipped and reviewed; that brainstorm will resolve:
-- Drilled view layout for the *streaming* state (the captured reference is post-completion only).
+- Drilled view layout for the _streaming_ state (the captured reference is post-completion only).
 - Arrow-key consistency between list view (`↑` = previous item) and drilled view (`↑` = parent up).
 - Per-task event buffer caps (memory budget) for the focused delegation. (Pull-from-registry transport is already locked at prerequisite #4.)
 - `Enter` (drill-in), back-out, and event-stream scroll keybinds.
@@ -190,7 +192,7 @@ Recent-history surface, expandable output cards, concurrent ←/→ navigation i
 
 **Compatibility**:
 - The plugin continues to work when the TUI plugin half is not installed: `copilot_delegate` / `copilot_output` / `copilot_cancel` and existing toasts/system-reminders continue. Only `/copilot-status` is unavailable.
-- The plugin continues to work when the TUI plugin half is *installed but fails to load* (RPC unreachable, opentui mismatch, etc.): `/copilot-status` shows the spec'd RPC error state rather than throwing or blocking the session.
+- The plugin continues to work when the TUI plugin half is _installed but fails to load_ (RPC unreachable, opentui mismatch, etc.): `/copilot-status` shows the spec'd RPC error state rather than throwing or blocking the session.
 - After a plugin reload while delegations are running, the PID workaround (see prerequisite #3) reaps the orphaned subprocesses on plugin re-init before any RPC requests are served; the modal then accurately reflects the registry state (no stale "running" rows).
 
 ### v0.2.1 / v0.2.2
@@ -200,7 +202,6 @@ Captured in their respective future brainstorms.
 ## Prerequisites for `ce:plan` (v0.2.0; locked, not deferred)
 
 These are blocking dependencies that must be resolved before implementation. Originally framed as open questions; review surfaced them as architectural constraints, not options.
-
 1. **Build pipeline.** Add `@opentui/core` and `@opentui/solid` to `devDependencies` (peer deps of `@opencode-ai/plugin/tui`). Add JSX configuration to `tsconfig.json` (`jsx: "preserve"` + `jsxImportSource: "@opentui/solid"`, or per-file `/** @jsxImportSource @opentui/solid */` pragmas as Magic Context uses). The current build is `bun build` + `tsc --emitDeclarationOnly` — there is no `tsdown` in this repo and none is needed.
 2. **`package.json` exports.** Add `exports["./tui"]` pointing at `./src/tui/index.tsx` (source, not built). The TUI half is loaded as TypeScript; OpenCode's TUI runtime handles compilation. Mirror Magic Context's `oc-plugin: ["server", "tui"]` field if/when OpenCode standardizes on it (currently a Magic Context convention, not an OpenCode-required field).
 3. **PID-file workaround for plugin-reload orphans.** The `@opencode-ai/plugin` `Hooks` interface has no server-side dispose hook. v0.2.0 implements a workaround:
@@ -208,9 +209,9 @@ These are blocking dependencies that must be resolved before implementation. Ori
    - For each PID still alive (POSIX `kill(pid, 0)`), invoke existing `killProcessTree(pid)` and log the reap.
    - On task spawn, append the subprocess PID to the file (atomic append with file lock).
    - On task terminal transition (`complete` / `failed` / `cancelled`), remove the PID from the file.
-   - **Init bound**: the reap completes synchronously during plugin init *before* the RPC server begins accepting requests; at typical sizes (≤10 entries, the existing concurrent cap) the operation should complete in well under one second. The success criterion of "before any RPC requests are served" is structural (sequencing), not a wall-clock target.
+   - **Init bound**: the reap completes synchronously during plugin init _before_ the RPC server begins accepting requests; at typical sizes (≤10 entries, the existing concurrent cap) the operation should complete in well under one second. The success criterion of "before any RPC requests are served" is structural (sequencing), not a wall-clock target.
    - Bounded scope; ~50 lines in `src/runtime/orphan-reaper.ts` plus an init call from `src/index.ts`.
-4. **Push vs pull for events.** Architectural, not implementation. **Pull** — the TUI requests buffered events from the server-side registry on demand (per drilled-view focus, per RPC poll). Push from the JSONL parser into the RPC layer couples the parser to transport and creates backpressure risk. The server-side `task-registry` already buffers `events` in `SpawnCopilotResult`; expose a query method (e.g., `getTaskEvents(taskId, sinceEventId?)`). v0.2.0 only needs the *list* RPC method; the per-task event method lands with v0.2.1.
+4. **Push vs pull for events.** Architectural, not implementation. **Pull** — the TUI requests buffered events from the server-side registry on demand (per drilled-view focus, per RPC poll). Push from the JSONL parser into the RPC layer couples the parser to transport and creates backpressure risk. The server-side `task-registry` already buffers `events` in `SpawnCopilotResult`; expose a query method (e.g., `getTaskEvents(taskId, sinceEventId?)`). v0.2.0 only needs the _list_ RPC method; the per-task event method lands with v0.2.1.
 
 ## Open questions for `ce:plan` (v0.2.0; genuinely deferable)
 

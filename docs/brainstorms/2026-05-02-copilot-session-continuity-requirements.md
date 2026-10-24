@@ -1,4 +1,5 @@
 ---
+
 title: Copilot session continuity requirements
 date: 2026-05-02
 status: ready-for-review
@@ -6,9 +7,10 @@ scope: deep
 topic: copilot-session-continuity
 ideation_source: docs/ideation/2026-04-27-copilot-delegate-v0.2.md (S2)
 related:
-  - docs/research/copilot-cli-capabilities-2026-04-27.md
-  - docs/brainstorms/2026-04-27-copilot-status-tui-requirements.md
-handoff: ce:plan
+- docs/research/copilot-cli-capabilities-2026-04-27.md
+- docs/brainstorms/2026-04-27-copilot-status-tui-requirements.md
+  handoff: ce:plan
+
 ---
 
 # Copilot session continuity requirements

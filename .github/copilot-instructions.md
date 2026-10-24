@@ -36,19 +36,18 @@ bun run build     # Bundle + declaration emit
 
 ## Module Boundaries
 
-| Module | Owns | Must Not |
-|--------|------|----------|
-| `src/tools/` | Tool definitions, schema, execute functions | Import from other tools |
-| `src/runtime/` | Subprocess management, task registry, JSONL parsing, notifications | Reference OpenCode plugin/tool APIs directly |
-| `src/discovery/` | Agent file discovery, description builder | Depend on runtime or tools |
-| `src/index.ts` | Plugin entrypoint, wiring | Contain business logic |
+| Module           | Owns                                                               | Must Not                                     |
+| ---------------- | ------------------------------------------------------------------ | -------------------------------------------- |
+| `src/tools/`     | Tool definitions, schema, execute functions                        | Import from other tools                      |
+| `src/runtime/`   | Subprocess management, task registry, JSONL parsing, notifications | Reference OpenCode plugin/tool APIs directly |
+| `src/discovery/` | Agent file discovery, description builder                          | Depend on runtime or tools                   |
+| `src/index.ts`   | Plugin entrypoint, wiring                                          | Contain business logic                       |
 
 ## Persisting Architectural Memory
 
 This repo has [Copilot Memory](https://docs.github.com/en/copilot/concepts/agents/copilot-memory) enabled (Preview). When you modify load-bearing invariants, call `store_memory` to refresh the corresponding entry so future Copilot sessions inherit the current architecture rather than rediscover it. Memories auto-expire after 28 days unless re-derived from current code.
 
 Trigger files (non-exhaustive):
-
 - `src/lib/normalize-tool-arg-schemas.ts` and `src/runtime/plugin-singleton.ts` — the DUAL pattern (cross-instance Zod metadata + duplicate factory invocation)
 - `src/runtime/task-status.ts`, `src/runtime/task-registry.ts`, `src/runtime/subprocess.ts` — task lifecycle (`setStatus` contract, terminal-state idempotency)
 - `src/runtime/orphan-reaper.ts`, `src/runtime/pid-file.ts`, `src/lib/kill-tree.ts` — orphan reaper (per-instance PID files, spawner-liveness + identity gates)

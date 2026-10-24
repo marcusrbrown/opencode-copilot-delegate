@@ -1,4 +1,5 @@
 ---
+
 title: "feat: /copilot-status TUI foundation"
 type: feat
 status: active
@@ -26,7 +27,6 @@ The architectural commit is one-way: shipping a `tui` entrypoint means users add
 ## Requirements Trace
 
 From the origin brainstorm — foundation-phase functional requirements (R8 moved to the runtime hardening plan):
-
 - **R1** — `/copilot-status` slash command opens the modal at the list view. (origin: `docs/brainstorms/2026-04-27-copilot-status-tui-requirements.md` §"v0.2.0 — functional requirements" → "Slash command". The brainstorm's wording suggests server-side registration; the plan registers from the TUI half because the slash command is meaningless without the TUI to render the dialog — see Key Decisions.)
 - **R2** — Modal list view: header shows `<n> running · 0 recent`; rows show status badge / abbreviated task ID / agent / model / elapsed (live) / tool-call count; running-only in the foundation phase. (origin: same → "Modal — list view")
 - **R3** — Cancel via `c` keybind on focused row → confirm dialog → existing `copilot_cancel` machinery via authenticated RPC → row transitions to `cancelling` then `cancelled`, then is removed per running-only rule. (origin: same → "Cancel flow" + UX micro-spec)
@@ -34,7 +34,7 @@ From the origin brainstorm — foundation-phase functional requirements (R8 move
 - **R5** — foundation-phase keybinds in the list view: `↑`/`k`, `↓`/`j`, `c`, `Esc`. No `Enter` / drill-in / scroll keys (those belong to the drilled-view phase). The confirm-card dialog adds `←`/`→`/`Enter`/`Space`/`Esc` within its own surface. (origin: same → "Interaction model")
 - **R6** — UX micro-specs: focus indicator (inverse video + `●` prefix on running badge), empty state, loading state, RPC error state, cancel-confirm dialog flow, list scroll behavior — including footer hints (`Esc close`) on empty/error states and explicit focus behavior after a cancelled row is removed. (origin: same → "v0.2.0 UX micro-specs")
 - **R7** — TUI plugin is opt-in via user's `tui.jsonc`; server-side keeps working without it; `/copilot-status` shows a graceful RPC-error state when the TUI half fails to load or the RPC server is unreachable. (origin: §"Architectural commit" + success criteria)
-- **R9** — Pull-from-registry event delivery: server-side exposes a list query method; this foundation phase only needs the *list* endpoint (plus health and cancel) — per-task event endpoint lands with the drilled-view phase. (origin: §"Prerequisites for ce:plan" #4)
+- **R9** — Pull-from-registry event delivery: server-side exposes a list query method; this foundation phase only needs the _list_ endpoint (plus health and cancel) — per-task event endpoint lands with the drilled-view phase. (origin: §"Prerequisites for ce:plan" #4)
 
 **R8 is in the runtime hardening plan** (see `prerequisite_plan` frontmatter). This plan assumes the orphan reaper has already shipped and the runtime parser is guarded; both are independent runtime correctness fixes that don't depend on the TUI architecture.
 
@@ -179,7 +179,7 @@ tests/
 
 ## High-Level Technical Design
 
-> *This illustrates the intended approach and is directional guidance for review, not implementation specification. The implementing agent should treat it as context, not code to reproduce.*
+> _This illustrates the intended approach and is directional guidance for review, not implementation specification. The implementing agent should treat it as context, not code to reproduce._
 
 ```
                  ┌─────────────────────────────────────────────────┐
@@ -263,7 +263,7 @@ tests/
 - Existing `package.json`'s ordering and quote style (Biome normalizes).
 
 **Test scenarios:**
-- *Test expectation: none — pure config + dep changes; downstream units validate via typecheck/build/lint.*
+- _Test expectation: none — pure config + dep changes; downstream units validate via typecheck/build/lint._
 
 **Verification:**
 - `bun install` succeeds; `bun run typecheck` passes (will be re-verified after Unit 5); `bun run build` produces unchanged `dist/index.js`; `bun run lint` clean.
@@ -298,13 +298,13 @@ tests/
 - Existing tool-input schemas in `src/tools/*.ts` use the same Zod-then-infer pattern.
 
 **Test scenarios:**
-- *Happy path:* `TasksListResponseSchema.parse({ tasks: [] })` succeeds.
-- *Happy path:* Round-trip a fully-populated row through `JSON.parse(JSON.stringify(parsed))` and re-validate.
-- *Edge case:* `taskId` must match `cpl_*` prefix; missing prefix fails.
-- *Edge case:* `elapsedMs` non-negative integer; negative or float fails.
-- *Edge case:* `PortFileSchema` requires `token` to be non-empty; missing token fails (rejects servers from older versions that lacked auth).
-- *Error path:* Empty `TasksCancelRequestSchema` body fails with required-field error.
-- *Error path:* Strict-mode rejection of unknown extra fields on every schema.
+- _Happy path:_ `TasksListResponseSchema.parse({ tasks: [] })` succeeds.
+- _Happy path:_ Round-trip a fully-populated row through `JSON.parse(JSON.stringify(parsed))` and re-validate.
+- _Edge case:_ `taskId` must match `cpl_*` prefix; missing prefix fails.
+- _Edge case:_ `elapsedMs` non-negative integer; negative or float fails.
+- _Edge case:_ `PortFileSchema` requires `token` to be non-empty; missing token fails (rejects servers from older versions that lacked auth).
+- _Error path:_ Empty `TasksCancelRequestSchema` body fails with required-field error.
+- _Error path:_ Strict-mode rejection of unknown extra fields on every schema.
 
 **Verification:**
 - All scenarios pass via `bun test tests/rpc-contract.test.ts`.
@@ -345,22 +345,22 @@ tests/
 - Magic Context's `node_modules/@cortexkit/opencode-magic-context/src/server.js` for server lifecycle + port-file pattern. Adapt to TS + auth + per-session path.
 
 **Test scenarios:**
-- *Happy path:* `startRpcServer` returns a port > 0 and a non-empty token; port file exists at `<dir>/<discriminator>/server-port.json` with `mode === 0o600` (verify via `fs.stat`).
-- *Happy path:* `GET /health` returns 200 with `{ ok: true, version }` and does NOT require auth.
-- *Happy path:* `POST /tasks/list` with correct `Authorization: Bearer <token>` returns the running tasks; completed/failed tasks are filtered out (server uses `listRunning()` projection).
-- *Happy path:* `POST /tasks/cancel { taskId }` with auth invokes the injected `cancelTaskById` and returns `{ cancelled: true }`. Idempotent: second call returns the same.
-- *Edge case:* `POST /tasks/cancel { taskId: "cpl_unknown" }` returns 404.
-- *Edge case:* Two `startRpcServer` calls with different discriminators succeed concurrently; each writes to its own port file; tokens differ; cross-token requests fail with 401.
-- *Error path:* `POST /tasks/cancel` without `Authorization` header returns 401 (no `timingSafeEqual` invocation — verify auth middleware short-circuits before the compare call).
-- *Error path:* `POST /tasks/cancel` with `Authorization: Basic abc` (wrong scheme) returns 401.
-- *Error path:* `POST /tasks/cancel` with `Authorization: Bearer` (no token value) returns 401.
-- *Error path:* `POST /tasks/cancel` with `Authorization: Bearer short` (token shorter than server's) returns 401 without throwing (length-mismatch path).
-- *Error path:* `POST /tasks/cancel` with `Authorization: Bearer <43-char-but-wrong-token>` returns 401 (verify `timingSafeEqual` is reached and returns false; same response time as a correctly-formed-wrong-value).
-- *Error path:* `POST /tasks/cancel` with malformed JSON body returns 400.
-- *Error path:* `POST /tasks/cancel` with `{ taskId: 123 }` returns 400 with Zod validation message.
-- *Error path:* Request body that streams past 64KB returns 413 mid-stream (verify the server destroys the request before the full body arrives — send a body slowly, observe the response fires before the final chunk).
-- *Lifecycle:* `close()` stops the server, unlinks the port file; subsequent `fetch` to the old port fails with `ECONNREFUSED`.
-- *Integration:* Spawn an actual `copilot` subprocess via `taskRegistry`, list it via `/tasks/list`, cancel it via `/tasks/cancel`, observe the abort-listener triggers `killProcessTree`.
+- _Happy path:_ `startRpcServer` returns a port > 0 and a non-empty token; port file exists at `<dir>/<discriminator>/server-port.json` with `mode === 0o600` (verify via `fs.stat`).
+- _Happy path:_ `GET /health` returns 200 with `{ ok: true, version }` and does NOT require auth.
+- _Happy path:_ `POST /tasks/list` with correct `Authorization: Bearer <token>` returns the running tasks; completed/failed tasks are filtered out (server uses `listRunning()` projection).
+- _Happy path:_ `POST /tasks/cancel { taskId }` with auth invokes the injected `cancelTaskById` and returns `{ cancelled: true }`. Idempotent: second call returns the same.
+- _Edge case:_ `POST /tasks/cancel { taskId: "cpl_unknown" }` returns 404.
+- _Edge case:_ Two `startRpcServer` calls with different discriminators succeed concurrently; each writes to its own port file; tokens differ; cross-token requests fail with 401.
+- _Error path:_ `POST /tasks/cancel` without `Authorization` header returns 401 (no `timingSafeEqual` invocation — verify auth middleware short-circuits before the compare call).
+- _Error path:_ `POST /tasks/cancel` with `Authorization: Basic abc` (wrong scheme) returns 401.
+- _Error path:_ `POST /tasks/cancel` with `Authorization: Bearer` (no token value) returns 401.
+- _Error path:_ `POST /tasks/cancel` with `Authorization: Bearer short` (token shorter than server's) returns 401 without throwing (length-mismatch path).
+- _Error path:_ `POST /tasks/cancel` with `Authorization: Bearer <43-char-but-wrong-token>` returns 401 (verify `timingSafeEqual` is reached and returns false; same response time as a correctly-formed-wrong-value).
+- _Error path:_ `POST /tasks/cancel` with malformed JSON body returns 400.
+- _Error path:_ `POST /tasks/cancel` with `{ taskId: 123 }` returns 400 with Zod validation message.
+- _Error path:_ Request body that streams past 64KB returns 413 mid-stream (verify the server destroys the request before the full body arrives — send a body slowly, observe the response fires before the final chunk).
+- _Lifecycle:_ `close()` stops the server, unlinks the port file; subsequent `fetch` to the old port fails with `ECONNREFUSED`.
+- _Integration:_ Spawn an actual `copilot` subprocess via `taskRegistry`, list it via `/tasks/list`, cancel it via `/tasks/cancel`, observe the abort-listener triggers `killProcessTree`.
 
 **Verification:**
 - All scenarios pass; no port leaks between tests (each test uses a fresh temp dir for port file); zero zombie processes after the integration scenario.
@@ -388,7 +388,7 @@ tests/
 **Approach:**
 - `src/runtime/cancel-helper.ts`: export `cancelTaskById(taskRegistry, taskId): { cancelled: boolean, error?: string }`. Implementation: look up task; if missing, return `{ cancelled: false, error: "no such task" }`; if found, call `task.abortController.abort()` and return `{ cancelled: true }`. The existing abort listener in `subprocess.ts` already handles the kill — no changes there.
 - Refactor `src/tools/cancel.ts` `createCancelTool` to delegate to `cancelHelper.cancelTaskById`. Behavior and return shape unchanged from the tool's perspective.
-- `src/runtime/notify.ts`: add `notifySpawn(client, taskId)` next to `notifyCompletion`. Body: `await client.tui.showToast({ body: { message: \`Copilot delegation ${taskId} started\`, variant: 'info' } })`. **Important: use the `body:` wrapper** — the existing `NotifyClient` API requires it. Same try/catch swallow on failure.
+- `src/runtime/notify.ts`: add `notifySpawn(client, taskId)` next to `notifyCompletion`. Body: `await client.tui.showToast({ body: { message: \`Copilot delegation ${taskId} started\`, variant: 'info' } })`. **Important: use the `body:`wrapper** — the existing`NotifyClient` API requires it. Same try/catch swallow on failure.
 - `src/tools/delegate.ts`: after `createTask` returns, before returning `{ task_id }`, call `notifySpawn(client, taskState.taskId).catch(() => {})`. Fire-and-forget.
 - `src/index.ts`: at plugin init, `await startRpcServer({ taskRegistry, cancelTaskById, ... })`. Store the close handle. Wire `process.on('beforeExit', () => server.close())` and `process.on('SIGTERM', () => server.close())`. Document this as a best-effort fallback; the pre-TUI hardening plan's orphan reaper covers the gap.
 
@@ -399,13 +399,13 @@ tests/
 - Existing `createDelegateTool` post-spawn flow in `src/tools/delegate.ts`.
 
 **Test scenarios:**
-- *Happy path (cancel-helper):* Known running task → `task.abortController.abort()` invoked; returns `{ cancelled: true }`.
-- *Edge case (cancel-helper):* Unknown task ID → returns `{ cancelled: false, error: "no such task" }` without throwing.
-- *Happy path (notifySpawn):* Stub client's `tui.showToast` called once with `{ body: { message: 'Copilot delegation cpl_abc started', variant: 'info' } }`.
-- *Error path (notifySpawn):* `client.tui.showToast` throws → `notifySpawn` swallows; does not propagate.
-- *Integration (delegate):* `createDelegateTool` execute, on success, fires the spawn toast (verify via stub client recording the call) AND returns `{ task_id }` — toast failure does not block the return.
-- *Integration (cancel parity):* `createCancelTool` and the RPC handler both invoke `cancelTaskById` for the same `taskId`; observable behavior (status transition, killProcessTree call) is identical.
-- *Lifecycle:* Plugin init starts the RPC server; `process.on('beforeExit', ...)` calls `server.close()` (verify via spy).
+- _Happy path (cancel-helper):_ Known running task → `task.abortController.abort()` invoked; returns `{ cancelled: true }`.
+- _Edge case (cancel-helper):_ Unknown task ID → returns `{ cancelled: false, error: "no such task" }` without throwing.
+- _Happy path (notifySpawn):_ Stub client's `tui.showToast` called once with `{ body: { message: 'Copilot delegation cpl_abc started', variant: 'info' } }`.
+- _Error path (notifySpawn):_ `client.tui.showToast` throws → `notifySpawn` swallows; does not propagate.
+- _Integration (delegate):_ `createDelegateTool` execute, on success, fires the spawn toast (verify via stub client recording the call) AND returns `{ task_id }` — toast failure does not block the return.
+- _Integration (cancel parity):_ `createCancelTool` and the RPC handler both invoke `cancelTaskById` for the same `taskId`; observable behavior (status transition, killProcessTree call) is identical.
+- _Lifecycle:_ Plugin init starts the RPC server; `process.on('beforeExit', ...)` calls `server.close()` (verify via spy).
 
 **Verification:**
 - All scenarios pass; existing 90+ unit tests still pass; `bun run typecheck` + `bun run lint` + `bun run build` clean.
@@ -438,15 +438,15 @@ tests/
 - `node_modules/@cortexkit/opencode-magic-context-tui/src/api.ts` for the RPC-client shape (without the notification poller).
 
 **Test scenarios:**
-- *Happy path:* `tasksList()` against a stub HTTP server returns parsed `{ tasks: [...] }`; the request includes `Authorization: Bearer <token>`.
-- *Happy path:* `tasksCancel('cpl_x')` against a stub returning `{ cancelled: true }` resolves with `cancelled === true`.
-- *Edge case:* Per-session port file does not exist → `health()` rejects with `RpcUnreachableError`.
-- *Edge case:* Port file present but lacks `token` field → `RpcValidationError` (rejects servers from older versions).
-- *Edge case:* Server returns 401 → `RpcAuthError` (typed distinctly from generic 5xx).
-- *Edge case:* Server returns 500 → `RpcServerError` with status code.
-- *Edge case:* Server returns body that fails Zod validation → `RpcValidationError` with the issues attached.
-- *Lifecycle:* `dispose` aborts an in-flight `fetch`.
-- *Integration:* Slash command registers with the verified field name (`trigger` or `value`). Stub the API and assert exactly one registration call.
+- _Happy path:_ `tasksList()` against a stub HTTP server returns parsed `{ tasks: [...] }`; the request includes `Authorization: Bearer <token>`.
+- _Happy path:_ `tasksCancel('cpl_x')` against a stub returning `{ cancelled: true }` resolves with `cancelled === true`.
+- _Edge case:_ Per-session port file does not exist → `health()` rejects with `RpcUnreachableError`.
+- _Edge case:_ Port file present but lacks `token` field → `RpcValidationError` (rejects servers from older versions).
+- _Edge case:_ Server returns 401 → `RpcAuthError` (typed distinctly from generic 5xx).
+- _Edge case:_ Server returns 500 → `RpcServerError` with status code.
+- _Edge case:_ Server returns body that fails Zod validation → `RpcValidationError` with the issues attached.
+- _Lifecycle:_ `dispose` aborts an in-flight `fetch`.
+- _Integration:_ Slash command registers with the verified field name (`trigger` or `value`). Stub the API and assert exactly one registration call.
 
 **Verification:**
 - All scenarios pass; `bun run typecheck` clean (verifies tsconfig JSX setup works); the TUI plugin loads without crashing when imported from a Node REPL via the source file.
@@ -495,19 +495,19 @@ tests/
 - Magic Context's TUI components for SolidJS-on-opentui idioms.
 
 **Test scenarios:**
-- *Happy path:* Mount with 3 running tasks → 3 rows render; first row is focused (inverse video applied); header reads `3 running · 0 recent`; footer reads `↑↓ navigate · c cancel · Esc close`.
-- *Happy path:* `↓` keypress moves focus to row 2.
-- *Happy path:* `↑` from row 0 wraps to last row.
-- *Happy path:* `Esc` invokes the dismiss callback.
-- *Edge case:* Mount with empty registry → empty-state body rendered; header shows `0 running · 0 recent`; footer shows `Esc close`.
-- *Edge case:* Mount + RPC resolves slowly → loading-state header `Loading delegations…` visible during the gap; transitions to populated/empty when it resolves.
-- *Error path:* RPC throws `RpcUnreachableError` → error-state header `Status unavailable.`; spec'd two-line body; footer `Esc close`.
-- *Error path:* RPC throws `RpcAuthError` → error-state renders (treated as unreachable from the user's perspective).
-- *Integration:* `c` keypress with focused running task triggers `dialog.replace` with the confirm card containing the focused row's `taskId`.
-- *Integration:* After `Cancel Task` confirms via the card, the modal-list refetches; row appears with `cancelling` status; on the next refetch the row is removed and focus index is clamped.
-- *Integration:* Live elapsed updates: at t=0 row reads `0s`, after a 1.1s tick reads `1s` (use fake timers).
-- *Edge case:* 10 concurrent tasks (`MAX_CONCURRENT` cap) → all 10 rows render; arrow keys cycle through all 10 with wrap.
-- *Edge case (last-row cancel → empty):* List has exactly 1 running task. Cancel via `c` → confirm → row reaches `cancelled` and is removed by the running-only filter → list transitions to the empty-state component (header `0 running · 0 recent`, empty-state body, footer `Esc close`). Verify focus index does not crash on the empty list.
+- _Happy path:_ Mount with 3 running tasks → 3 rows render; first row is focused (inverse video applied); header reads `3 running · 0 recent`; footer reads `↑↓ navigate · c cancel · Esc close`.
+- _Happy path:_ `↓` keypress moves focus to row 2.
+- _Happy path:_ `↑` from row 0 wraps to last row.
+- _Happy path:_ `Esc` invokes the dismiss callback.
+- _Edge case:_ Mount with empty registry → empty-state body rendered; header shows `0 running · 0 recent`; footer shows `Esc close`.
+- _Edge case:_ Mount + RPC resolves slowly → loading-state header `Loading delegations…` visible during the gap; transitions to populated/empty when it resolves.
+- _Error path:_ RPC throws `RpcUnreachableError` → error-state header `Status unavailable.`; spec'd two-line body; footer `Esc close`.
+- _Error path:_ RPC throws `RpcAuthError` → error-state renders (treated as unreachable from the user's perspective).
+- _Integration:_ `c` keypress with focused running task triggers `dialog.replace` with the confirm card containing the focused row's `taskId`.
+- _Integration:_ After `Cancel Task` confirms via the card, the modal-list refetches; row appears with `cancelling` status; on the next refetch the row is removed and focus index is clamped.
+- _Integration:_ Live elapsed updates: at t=0 row reads `0s`, after a 1.1s tick reads `1s` (use fake timers).
+- _Edge case:_ 10 concurrent tasks (`MAX_CONCURRENT` cap) → all 10 rows render; arrow keys cycle through all 10 with wrap.
+- _Edge case (last-row cancel → empty):_ List has exactly 1 running task. Cancel via `c` → confirm → row reaches `cancelled` and is removed by the running-only filter → list transitions to the empty-state component (header `0 running · 0 recent`, empty-state body, footer `Esc close`). Verify focus index does not crash on the empty list.
 
 **Verification:**
 - All scenarios pass; component `tsc --noEmit` clean; visual smoke (manual at implementation time) shows the modal opens via `/copilot-status` against a session with running delegations.
@@ -544,14 +544,14 @@ tests/
 - Magic Context's two-button dialog patterns where applicable; otherwise base on opentui's `<dialog>` examples.
 
 **Test scenarios:**
-- *Happy path:* Mount with `taskId='cpl_abc'` → header reads `Cancel Copilot delegation cpl_abc?`; default focus on `Cancel Task`.
-- *Happy path:* `Enter` on `Cancel Task` invokes `rpc.tasksCancel('cpl_abc')` and fires `onConfirm`.
-- *Happy path:* `→` then `Enter` fires `onCancel` (focus moved to `Keep Running`).
-- *Happy path:* `Esc` fires `onCancel` regardless of current focus.
-- *Edge case (in-flight guard):* User presses `Enter` rapidly twice → `rpc.tasksCancel` invoked exactly once.
-- *Error path (inline error):* `rpc.tasksCancel` throws `RpcUnreachableError` → card transitions to error state: button row replaced with error message + single `Dismiss` button; `Enter` activates `Dismiss`; `onDismissAfterError` fires.
-- *Error path (inline error):* Same flow for `RpcServerError` and `RpcAuthError`.
-- *Integration:* From modal-list, `c` keypress on focused row mounts the card; `Enter` confirms; `onConfirm` triggers the modal-list refetch.
+- _Happy path:_ Mount with `taskId='cpl_abc'` → header reads `Cancel Copilot delegation cpl_abc?`; default focus on `Cancel Task`.
+- _Happy path:_ `Enter` on `Cancel Task` invokes `rpc.tasksCancel('cpl_abc')` and fires `onConfirm`.
+- _Happy path:_ `→` then `Enter` fires `onCancel` (focus moved to `Keep Running`).
+- _Happy path:_ `Esc` fires `onCancel` regardless of current focus.
+- _Edge case (in-flight guard):_ User presses `Enter` rapidly twice → `rpc.tasksCancel` invoked exactly once.
+- _Error path (inline error):_ `rpc.tasksCancel` throws `RpcUnreachableError` → card transitions to error state: button row replaced with error message + single `Dismiss` button; `Enter` activates `Dismiss`; `onDismissAfterError` fires.
+- _Error path (inline error):_ Same flow for `RpcServerError` and `RpcAuthError`.
+- _Integration:_ From modal-list, `c` keypress on focused row mounts the card; `Enter` confirms; `onConfirm` triggers the modal-list refetch.
 
 **Verification:**
 - All scenarios pass; manual smoke at implementation time: in a real session with a running delegation, `/copilot-status` → `c` on the row → `Enter` → row transitions to `cancelling` then disappears; `copilot_output cpl_xxx` confirms `cancelled` status from the server side.
@@ -561,7 +561,6 @@ tests/
 ## Definition of Done (PR housekeeping; not a planning unit)
 
 These updates ride with the foundation implementation PR but are not numbered units (per scope-guardian's recommendation that pure docs not be elevated to planning-unit status):
-
 - **README.md**: under Known Limitations, add the foundation-release entries for the architectural commit (TUI half opt-in via `tui.jsonc`, RPC server posture). Note the upstream-issue link for the dispose-hook workaround once filed.
 
 - **README.md**: new section "Optional: install the TUI half" with one-paragraph instructions for adding `opencode-copilot-delegate` to the user's `tui.jsonc`.
@@ -579,21 +578,21 @@ These updates ride with the foundation implementation PR but are not numbered un
 
 ## Risks & Dependencies
 
-| Risk | Mitigation |
-|------|------------|
+| Risk                                                                                                                                                             | Mitigation                                                                                                                                                                                          |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | `@opencode-ai/plugin/tui` API undocumented beyond Magic Context. Field shape (`trigger` vs `value`) and behavior may have shifted since Magic Context's last pin | Pin the peer to a known-good version; verify the field name at implementation time (Unit 5); document the chosen field in `AGENTS.md`. Implementation-time spike if the API has materially changed. |
-| `@opentui/*` is pre-1.0; SolidJS-on-opentui surface may shift | Pin to `^0.1.40` matching Magic Context's working baseline; do not auto-bump via Renovate without manual verification. |
-| Raw `.tsx` export assumes OpenCode's TUI runtime compiles JSX on-the-fly | Verified by precedent (Magic Context does the same). Implementation-time gate in Unit 5: if loading fails, ship a build artifact. |
-| `tsc --noEmit` may not resolve JSX element types under `jsx: "preserve"` + per-file pragma | Implementation-time gate in Unit 1: fall back to `jsx: "react-jsx"` + tsconfig `jsxImportSource` if needed. |
-| `127.0.0.1` binding may fail on networks with IPv6-only loopback or strict firewall rules | Document the constraint in README. The TUI surfaces this as the spec'd RPC error state, not a crash. |
-| `dialog.replace` may capture keybinds intended for the underlying list | Verified by precedent (Magic Context uses the same overlay pattern). Implementation-time gate in Unit 6/7. |
-| RPC port collision with another local listener | Bind to ephemeral port (`0`); each call to `startRpcServer` gets a fresh port. Port-file race resolved by per-session path. |
-| Cross-session token theft if port-file 0o600 perms regress | Test asserts `mode === 0o600` after write (Unit 3). Auth token defense-in-depth: even if perms regress, an attacker still needs the token to make calls. |
-| Spawn-toast queue saturation at 10 concurrent delegations | Unverified; OpenCode's toast implementation may rate-limit. Implementation-time observation: if toasts drop, batch via a debounce. |
-| Transitive dep conflicts from `@opentui/*` + `solid-js` | Verify at `bun add` time (Unit 1). If conflicts, escalate before downstream units begin. |
-| Cancel-from-UI race with stdout buffer (post-kill JSONL events appended to registry) | Closed by the parser-status guard in the runtime hardening plan; this plan assumes that's already shipped. |
-| Modal interferes with active OpenCode work | Modal does not block input to the underlying session; Esc returns instantly. |
-| OpenCode `Hooks` interface lacks dispose; cleanup is best-effort | `process.on('beforeExit'/'SIGTERM')` covers normal exits. Reaper covers SIGKILL leftovers. Upstream-issue follow-up to retire the workaround when a dispose hook lands. |
+| `@opentui/*` is pre-1.0; SolidJS-on-opentui surface may shift                                                                                                    | Pin to `^0.1.40` matching Magic Context's working baseline; do not auto-bump via Renovate without manual verification.                                                                              |
+| Raw `.tsx` export assumes OpenCode's TUI runtime compiles JSX on-the-fly                                                                                         | Verified by precedent (Magic Context does the same). Implementation-time gate in Unit 5: if loading fails, ship a build artifact.                                                                   |
+| `tsc --noEmit` may not resolve JSX element types under `jsx: "preserve"` + per-file pragma                                                                       | Implementation-time gate in Unit 1: fall back to `jsx: "react-jsx"` + tsconfig `jsxImportSource` if needed.                                                                                         |
+| `127.0.0.1` binding may fail on networks with IPv6-only loopback or strict firewall rules                                                                        | Document the constraint in README. The TUI surfaces this as the spec'd RPC error state, not a crash.                                                                                                |
+| `dialog.replace` may capture keybinds intended for the underlying list                                                                                           | Verified by precedent (Magic Context uses the same overlay pattern). Implementation-time gate in Unit 6/7.                                                                                          |
+| RPC port collision with another local listener                                                                                                                   | Bind to ephemeral port (`0`); each call to `startRpcServer` gets a fresh port. Port-file race resolved by per-session path.                                                                         |
+| Cross-session token theft if port-file 0o600 perms regress                                                                                                       | Test asserts `mode === 0o600` after write (Unit 3). Auth token defense-in-depth: even if perms regress, an attacker still needs the token to make calls.                                            |
+| Spawn-toast queue saturation at 10 concurrent delegations                                                                                                        | Unverified; OpenCode's toast implementation may rate-limit. Implementation-time observation: if toasts drop, batch via a debounce.                                                                  |
+| Transitive dep conflicts from `@opentui/*` + `solid-js`                                                                                                          | Verify at `bun add` time (Unit 1). If conflicts, escalate before downstream units begin.                                                                                                            |
+| Cancel-from-UI race with stdout buffer (post-kill JSONL events appended to registry)                                                                             | Closed by the parser-status guard in the runtime hardening plan; this plan assumes that's already shipped.                                                                                          |
+| Modal interferes with active OpenCode work                                                                                                                       | Modal does not block input to the underlying session; Esc returns instantly.                                                                                                                        |
+| OpenCode `Hooks` interface lacks dispose; cleanup is best-effort                                                                                                 | `process.on('beforeExit'/'SIGTERM')` covers normal exits. Reaper covers SIGKILL leftovers. Upstream-issue follow-up to retire the workaround when a dispose hook lands.                             |
 
 ## Documentation / Operational Notes
 
