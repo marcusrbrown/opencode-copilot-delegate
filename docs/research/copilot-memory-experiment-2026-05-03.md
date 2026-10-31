@@ -1,10 +1,12 @@
 ---
+
 title: Copilot CLI memory experiment — `store_memory` tool surface
 type: research
 date: 2026-05-03
 related:
-  - docs/research/copilot-cli-capabilities-2026-04-27.md
-status: empirical
+- docs/research/copilot-cli-capabilities-2026-04-27.md
+  status: empirical
+
 ---
 
 # Copilot CLI memory experiment — `store_memory` tool surface
@@ -13,15 +15,15 @@ Empirical investigation of GitHub Copilot's [agentic memory feature](https://doc
 
 ## Executive summary
 
-| Question | Answer |
-|---|---|
-| Is there a callable `memory` tool in `copilot -p` mode? | **Yes — `store_memory`.** First-class tool, available by default without `--allow-tool=memory`. |
-| Does it require structured citations? | Yes (freeform string), and a `reason` ≥ 2–3 sentences. |
-| Is `fact` length-limited? | **Yes — < 200 characters.** The binding constraint for memory authoring. |
-| Does it return a memory ID? | No. Returns the literal string `"Memory stored successfully."` |
-| Is there a `list_memories` / `get_memories` tool? | **No.** Verification requires the GitHub web UI. |
-| Is `--allow-tool=memory` required? | No. The flag is documented but not enforced as a gate in 1.0.40. |
-| Are memories the same surface as `~/.copilot/session-state/`? | No. Memories are repository-scoped server-side state, not local session-state files. |
+| Question                                                      | Answer                                                                                          |
+| ------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| Is there a callable `memory` tool in `copilot -p` mode?       | **Yes — `store_memory`.** First-class tool, available by default without `--allow-tool=memory`. |
+| Does it require structured citations?                         | Yes (freeform string), and a `reason` ≥ 2–3 sentences.                                          |
+| Is `fact` length-limited?                                     | **Yes — < 200 characters.** The binding constraint for memory authoring.                        |
+| Does it return a memory ID?                                   | No. Returns the literal string `"Memory stored successfully."`                                  |
+| Is there a `list_memories` / `get_memories` tool?             | **No.** Verification requires the GitHub web UI.                                                |
+| Is `--allow-tool=memory` required?                            | No. The flag is documented but not enforced as a gate in 1.0.40.                                |
+| Are memories the same surface as `~/.copilot/session-state/`? | No. Memories are repository-scoped server-side state, not local session-state files.            |
 
 The `memory` kind in [`docs/research/copilot-cli-capabilities-2026-04-27.md`](./copilot-cli-capabilities-2026-04-27.md) §1, §11 turns out to refer to a real callable tool, not just a permission category. The discrepancy with `copilot help permissions` (which omits `memory`) reflects an under-documented surface, not an absent one.
 
@@ -122,11 +124,11 @@ Persistence verified via the GitHub web UI at `https://github.com/marcusrbrown/o
 
 The Memory page rendered:
 
-| Subject | Stored exactly as in §3 above |
-|---|---|
-| `orphan reaper` | ✅ |
-| `DUAL pattern` | ✅ |
-| `task lifecycle` | ✅ |
+| Subject          | Stored exactly as in §3 above |
+| ---------------- | ----------------------------- |
+| `orphan reaper`  | ✅                            |
+| `DUAL pattern`   | ✅                            |
+| `task lifecycle` | ✅                            |
 
 This closes the experimental loop: `"Memory stored successfully."` from `store_memory` corresponds to actual server-side persistence visible in the repo's Copilot Memory page. The success string is therefore a trustworthy persistence signal in 1.0.40, not just a syntactic acknowledgement.
 
@@ -170,11 +172,11 @@ A second `copilot_delegate` (claude-sonnet-4.6, 71.7s, 1 premium request, 892 ev
 
 Three `store_memory` calls were made with intentionally-broken citations:
 
-| # | Subject | Citation defect | Response |
-|---|---|---|---|
-| 1 | `memtest-stale-file` | File does not exist (`src/runtime/totally-nonexistent-fake-file.ts:1-10`) | `"Memory stored successfully."` |
-| 2 | `memtest-bad-range` | Real file, lines past EOF (`src/index.ts:99999-100000`) | `"Memory stored successfully."` |
-| 3 | `memtest-mismatch` | Real file/lines, fact is fabricated (claim about `processOrders` against the import block at `src/index.ts:1-5`) | `"Memory stored successfully."` |
+| #   | Subject              | Citation defect                                                                                                  | Response                        |
+| --- | -------------------- | ---------------------------------------------------------------------------------------------------------------- | ------------------------------- |
+| 1   | `memtest-stale-file` | File does not exist (`src/runtime/totally-nonexistent-fake-file.ts:1-10`)                                        | `"Memory stored successfully."` |
+| 2   | `memtest-bad-range`  | Real file, lines past EOF (`src/index.ts:99999-100000`)                                                          | `"Memory stored successfully."` |
+| 3   | `memtest-mismatch`   | Real file/lines, fact is fabricated (claim about `processOrders` against the import block at `src/index.ts:1-5`) | `"Memory stored successfully."` |
 
 **Verdict:** `store_memory` performs **zero write-time validation**. File existence, line range validity, and content/citation alignment are all unverified. The API is a pure write-through that accepts anything well-formed.
 
@@ -184,7 +186,7 @@ Upstream docs claim that memories with stale citations are "silently dropped" on
 
 ### Q2 — Memory reuse signal
 
-The same delegation asked itself: *"What are the two reaping safety gates in the orphan reaper, and where in source are they implemented?"* The accurate answer is recorded in the `orphan reaper` memory from §"Memory 3" above.
+The same delegation asked itself: _"What are the two reaping safety gates in the orphan reaper, and where in source are they implemented?"_ The accurate answer is recorded in the `orphan reaper` memory from §"Memory 3" above.
 
 **Result:** The model produced an answer with citations matching the stored memory **exactly** — `src/runtime/orphan-reaper.ts:48-55`, `:377`, `:171-178`, `:219-231` — without making any tool call related to memory retrieval.
 
@@ -254,10 +256,10 @@ Called `store_memory` with subject `memtest-stale-file` (matching an existing po
 
 Two parallel `copilot -p` calls asked the same question, both with `--deny-tool=read --deny-tool=shell` to block source inspection. The accurate answer requires recalling the `orphan reaper` memory's exact line ranges (`:48-55`, `:171-178`, `:377`, `:219-231`).
 
-| Mode | Custom instructions | Wall-clock | `:48-55`? | `:171-178`? | `:377`? | `:219-231`? | Notable |
-|---|---|---|---|---|---|---|---|
-| **E1** baseline | ON (default) | ~26s | ✅ | ✅ | ✅ | ✅ | Model explicitly stated *"falling back to the verified repo memory"* |
-| **E2** stripped | OFF (`--no-custom-instructions`) | 115s | ❌ (`45-52`) | ❌ (`169-175`) | ⚠ (`375-377`) | ❌ (`216-228`) | Model escalated to GitHub MCP `get_file_contents` to fetch source; produced independently-derived ranges |
+| Mode            | Custom instructions              | Wall-clock | `:48-55`?    | `:171-178`?    | `:377`?       | `:219-231`?    | Notable                                                                                                  |
+| --------------- | -------------------------------- | ---------- | ------------ | -------------- | ------------- | -------------- | -------------------------------------------------------------------------------------------------------- |
+| **E1** baseline | ON (default)                     | ~26s       | ✅           | ✅             | ✅            | ✅             | Model explicitly stated _"falling back to the verified repo memory"_                                     |
+| **E2** stripped | OFF (`--no-custom-instructions`) | 115s       | ❌ (`45-52`) | ❌ (`169-175`) | ⚠ (`375-377`) | ❌ (`216-228`) | Model escalated to GitHub MCP `get_file_contents` to fetch source; produced independently-derived ranges |
 
 **Verdict:** Memories load as part of the custom-instructions injection path, not as an independent always-on system. `--no-custom-instructions` strips memories alongside `AGENTS.md` and `copilot-instructions.md`. E2's 4.4× slowdown plus citation divergence — combined with the absence of a `<memories>` block in its system prompt — confirm the loading bus is shared.
 
@@ -288,13 +290,13 @@ Still untested:
 
 ### Updated pollution status (cumulative across both follow-up runs)
 
-| Subject | Source | Status |
-|---|---|---|
-| `memtest-stale-file` | Q1 (Test A1) | Pollution — delete from UI |
-| `memtest-bad-range` | Q1 (Test A2) | Pollution — delete from UI |
-| `memtest-mismatch` | Q1 (Test A3) | Pollution — delete from UI |
-| `memtest-stale-file` (collision) | Test D | Either replaced original or coexists with it — delete on inspection |
-| `orphan reaper` (duplicate) | Test C | Either dedup'd by backend or coexists with original real memory — keep one canonical entry |
+| Subject                          | Source       | Status                                                                                     |
+| -------------------------------- | ------------ | ------------------------------------------------------------------------------------------ |
+| `memtest-stale-file`             | Q1 (Test A1) | Pollution — delete from UI                                                                 |
+| `memtest-bad-range`              | Q1 (Test A2) | Pollution — delete from UI                                                                 |
+| `memtest-mismatch`               | Q1 (Test A3) | Pollution — delete from UI                                                                 |
+| `memtest-stale-file` (collision) | Test D       | Either replaced original or coexists with it — delete on inspection                        |
+| `orphan reaper` (duplicate)      | Test C       | Either dedup'd by backend or coexists with original real memory — keep one canonical entry |
 
 **Manual cleanup actions for the repo Memory page** (`https://github.com/marcusrbrown/opencode-copilot-delegate/settings` → Copilot → Memory):
 
