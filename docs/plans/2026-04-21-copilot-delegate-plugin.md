@@ -1,4 +1,5 @@
 ---
+
 title: "feat: OpenCode Copilot Delegate Plugin"
 type: feat
 status: active
@@ -61,7 +62,7 @@ await client.session.promptAsync({
     noReply: !allComplete,
     parts: [{ type: 'text', text: notification, synthetic: true }],
   },
-});
+})
 ```
 
 `noReply` semantics (verified):
@@ -118,6 +119,7 @@ export const CopilotDelegate: Plugin = async ({ client, directory }) => ({
 ```
 spawn(command, args, { stdio: ['pipe', 'pipe', 'pipe'], shell, env, cwd, windowsHide: true })
 ```
+
 - Line-buffer `stdout`, parse JSONL events incrementally.
 - Maintain a `turnState` accumulator (extract `thread_id`, messages, `usage`, errors).
 - On `close` event, resolve with `{ state, stderrTail, exitCode }`.
@@ -220,7 +222,7 @@ opencode-copilot-delegate/
 
 ## High-Level Technical Design
 
-> *This illustrates the intended approach and is directional guidance for review, not implementation specification. The implementing agent should treat it as context, not code to reproduce.*
+> _This illustrates the intended approach and is directional guidance for review, not implementation specification. The implementing agent should treat it as context, not code to reproduce._
 
 **Event flow (single delegation):**
 
@@ -326,14 +328,14 @@ type TaskState = {
   finalMessage?: string
   errorText?: string
   child: ChildProcess
-  completionPromise: Promise<void>  // resolved on close; copilot_output block:true races this vs timeout
+  completionPromise: Promise<void> // resolved on close; copilot_output block:true races this vs timeout
   abortController: AbortController
 }
 ```
 
 ## Implementation Units
 
-- [x] **T1: Repo bootstrap** *(complete)*
+- [x] **T1: Repo bootstrap** _(complete)_
 
 **Goal:** Publish an installable npm package skeleton with working build and changeset tooling.
 
@@ -355,7 +357,7 @@ type TaskState = {
 
 ---
 
-- [x] **T2.5: JSONL fixture capture** *(complete; landed in PR #13)*
+- [x] **T2.5: JSONL fixture capture** _(complete; landed in PR #13)_
 
 **Goal:** Capture real Copilot CLI JSONL output as test fixtures before writing the parser.
 
@@ -385,7 +387,7 @@ type TaskState = {
 
 ---
 
-- [x] **T2: JSONL parser + envelope builder** *(complete; landed in PR #13)*
+- [x] **T2: JSONL parser + envelope builder** _(complete; landed in PR #13)_
 
 **Goal:** Parse Copilot CLI JSONL stdout into typed events; fold events into the structured `copilot_output` envelope.
 
@@ -424,7 +426,7 @@ type TaskState = {
 
 ---
 
-- [x] **T3: Subprocess wrapper + registry** *(complete; landed in PR #14)*
+- [x] **T3: Subprocess wrapper + registry** _(complete; landed in PR #14)_
 
 **Goal:** Spawn the `copilot` process, line-buffer its stdout through the JSONL parser, manage `TaskState` in the registry, and support cancellation.
 
@@ -463,7 +465,7 @@ type TaskState = {
 
 ---
 
-- [x] **T4: Notification injection** *(complete; landed in PR #14)*
+- [x] **T4: Notification injection** _(complete; landed in PR #14)_
 
 **Goal:** Inject `<system-reminder>` notifications into the parent session when a Copilot subprocess completes, with correct `noReply` semantics mirroring OMO.
 
@@ -497,7 +499,7 @@ type TaskState = {
 
 ---
 
-- [x] **T5: Agent discovery + description** *(complete; landed in PR #14)*
+- [x] **T5: Agent discovery + description** _(complete; landed in PR #14)_
 
 **Goal:** Build the `copilot_delegate` tool description by merging built-in, user, and repo Copilot agents at plugin load.
 
@@ -534,7 +536,7 @@ type TaskState = {
 
 ---
 
-- [x] **T6: Tool wiring** *(complete; landed in PR #16)*
+- [x] **T6: Tool wiring** _(complete; landed in PR #16)_
 
 **Goal:** Wire the three tools and plugin entrypoint; integration-test with a stubbed `PluginInput`.
 
@@ -574,7 +576,7 @@ type TaskState = {
 
 ---
 
-- [x] **T6.5: OpenCode server integration tests** *(complete; landed in PR #27, rebuilt around `opencode run` CLI in PR #39)*
+- [x] **T6.5: OpenCode server integration tests** _(complete; landed in PR #27, rebuilt around `opencode run` CLI in PR #39)_
 
 **Goal:** Automated integration tests that spawn a real OpenCode server subprocess with the plugin installed, send actual session prompts via the SDK client, and assert on tool execution results — validating the full plugin lifecycle without manual steps.
 
@@ -614,7 +616,7 @@ type TaskState = {
 
 ---
 
-- [x] **T7: End-to-end manual verification** *(complete; superseded by T6.5's CI-gated LLM-driven scenarios in PR #27 → PR #39 — `delegate happy path`, `output unknown task_id`, `cancel running delegation`. The remaining 3 plan scenarios — concurrent delegations, plugin-reload mid-flight, TUI toast — are documented as known limitations / upstream OpenCode behaviors and are not blockers for v0.1.0.)*
+- [x] **T7: End-to-end manual verification** _(complete; superseded by T6.5's CI-gated LLM-driven scenarios in PR #27 → PR #39 — `delegate happy path`, `output unknown task_id`, `cancel running delegation`. The remaining 3 plan scenarios — concurrent delegations, plugin-reload mid-flight, TUI toast — are documented as known limitations / upstream OpenCode behaviors and are not blockers for v0.1.0.)_
 
 **Goal:** Exercise all user-facing behaviors in a real OpenCode session before tagging v0.1.0. Capture results in `VERIFICATION.md`.
 
@@ -643,7 +645,7 @@ type TaskState = {
 
 ---
 
-- [x] **T8: Skill update** *(complete; branch added at top of `~/.agents/skills/copilot-cli/SKILL.md` referencing `copilot_delegate`/`copilot_output`/`copilot_cancel`. Committed on dotfiles branch `skills/copilot-cli-plugin-branch` (commit `efa3298`); dotfiles HEAD restored to `main` so local file reflects pre-merge state until T10's PR lands.)*
+- [x] **T8: Skill update** _(complete; branch added at top of `~/.agents/skills/copilot-cli/SKILL.md` referencing `copilot_delegate`/`copilot_output`/`copilot_cancel`. Committed on dotfiles branch `skills/copilot-cli-plugin-branch` (commit `efa3298`); dotfiles HEAD restored to `main` so local file reflects pre-merge state until T10's PR lands.)_
 
 **Goal:** Update `~/.agents/skills/copilot-cli/SKILL.md` to branch on plugin presence. Ships with v0.1.0.
 
@@ -669,7 +671,7 @@ type TaskState = {
 
 ---
 
-- [x] **T9: Publish** *(complete; v0.1.0 published to npm via manual bootstrap, GitHub Release backfilled in PR #41 — see `docs/solutions/workflow-issues/bootstrap-missing-github-release-2026-04-26.md`. The plan's user-level config install step (`~/.config/opencode/opencode.json`) was substituted by a project-level entry in this repo's `opencode.json` via PR #44; the plugin loads when sessions open this repo.)*
+- [x] **T9: Publish** _(complete; v0.1.0 published to npm via manual bootstrap, GitHub Release backfilled in PR #41 — see `docs/solutions/workflow-issues/bootstrap-missing-github-release-2026-04-26.md`. The plan's user-level config install step (`~/.config/opencode/opencode.json`) was substituted by a project-level entry in this repo's `opencode.json` via PR #44; the plugin loads when sessions open this repo.)_
 
 **Goal:** Publish `opencode-copilot-delegate@0.1.0` to npm, tag the release, and install in Marcus's OpenCode config.
 
@@ -699,7 +701,7 @@ type TaskState = {
 
 ---
 
-- [x] **T10: Dotfiles PR for skill update** *(complete; PR opened at https://github.com/marcusrbrown/.dotfiles/pull/1495. Single-file change to `.agents/skills/copilot-cli/SKILL.md`. Awaiting merge.)*
+- [x] **T10: Dotfiles PR for skill update** _(complete; PR opened at https://github.com/marcusrbrown/.dotfiles/pull/1495. Single-file change to `.agents/skills/copilot-cli/SKILL.md`. Awaiting merge.)_
 
 **Goal:** Land the `copilot-cli` skill update in the `.dotfiles` repo via a PR.
 
@@ -726,13 +728,13 @@ type TaskState = {
 
 ---
 
-- [x] **T11: CI / quality gates** *(complete; landed in PR #29 + PR #30. `mise.toml` pins bun, opencode, copilot; `.github/workflows/ci.yaml` runs `check` always and `integration` on PRs/dispatch.)*
+- [x] **T11: CI / quality gates** _(complete; landed in PR #29 + PR #30. `mise.toml` pins bun, opencode, copilot; `.github/workflows/ci.yaml` runs `check` always and `integration` on PRs/dispatch.)_
 
 **Goal:** Add GitHub Actions CI workflow; set branch protection on `main`.
 
 **Requirements:** R6
 
-**Dependencies:** T11 *(gate enables after integration tests pass)*
+**Dependencies:** T11 _(gate enables after integration tests pass)_
 
 **Files:**
 - Create: `.github/workflows/ci.yml`
@@ -770,20 +772,20 @@ type TaskState = {
 
 ## Risks & Dependencies
 
-| Risk | Mitigation |
-|------|------------|
-| Plugin restart mid-delegation → orphaned `copilot` subprocess. | Document in README. v1.x: PID file under `${XDG_RUNTIME_DIR}/opencode-copilot-delegate/<task_id>.pid`; plugin start reaps stale PIDs. |
-| Copilot CLI changes JSONL schema. | Defensive parsing (every field optional, unknown event types stored verbatim). Snapshot real JSONL fixtures at v0.1.0 to detect drift via tests. |
-| **RESOLVED:** `promptAsync` + `noReply` API compatibility. | Confirmed: use `prompt()` (not `promptAsync()`) with `noReply` for notification injection. `promptAsync` does not accept `noReply`; `opencode-pty` reference confirms `prompt` with `noReply: true`. This is a known API constraint, not a runtime verification item. |
-| Description string bloats with many user agents. | Cap merged list at 20; show "… and N more" + ship `copilot_list_agents` in v1.x. |
-| Auth misconfiguration (stale `GH_TOKEN` overrides login) → silent failures. | Plugin logs resolved auth source via `client.app.log` at delegate start (token value never logged). |
-| Built-in Copilot agent names guessed wrong. | Verify via `copilot agent list` at impl time. Hardcoded list lives in one place (`src/discovery/agents.ts`). |
-| `fkill` double-kill race — PID recycled between cancel decision and kill execution. | Before calling `fkill`, check whether `completionPromise` has already settled. If yes, treat cancel as a no-op (process already exited cleanly). Never call `fkill` on a settled task. |
-| `completionPromise` rejection unhandled — non-zero CLI exit or spawn error. | Every `await completionPromise` must be try/caught. Rejection must be converted to a typed error; never swallowed. Floating unhandled rejections crash Node ≥15. |
-| Silent notification / prompt timeout — parent never sees `<system-reminder>` (v1 requirement). | Implement per-task notification timeout (default 60s). On timeout: abort subprocess, kill via `fkill`, log warning via `client.app.log`, set `status: 'failed'` with descriptive error in envelope. No silent hangs. |
-| `promptAsync` or `prompt` throws on dead/expired session. | Treat any throw from the notify call as a notification failure (see System-Wide Impact). Log, store `notifyError` in `TaskState`, do not rethrow. |
-| OpenCode SDK breaking changes post-publish invalidate plugin API calls. | Pin `@opencode-ai/sdk` and `@opencode-ai/plugin` to exact versions in `package.json`. Add a compatibility matrix to README. Consider runtime version check at plugin load that warns (not crashes) if SDK version is outside tested range. |
-| `fkill` flakiness on macOS vs Linux. | Use `fkill` npm package (v10.0.3, actively maintained, zero dependencies, SIGTERM→SIGKILL escalation with `forceTimeout`) instead of `tree-kill` (unmaintained Dec 2019). |
+| Risk                                                                                           | Mitigation                                                                                                                                                                                                                                                            |
+| ---------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Plugin restart mid-delegation → orphaned `copilot` subprocess.                                 | Document in README. v1.x: PID file under `${XDG_RUNTIME_DIR}/opencode-copilot-delegate/<task_id>.pid`; plugin start reaps stale PIDs.                                                                                                                                 |
+| Copilot CLI changes JSONL schema.                                                              | Defensive parsing (every field optional, unknown event types stored verbatim). Snapshot real JSONL fixtures at v0.1.0 to detect drift via tests.                                                                                                                      |
+| **RESOLVED:** `promptAsync` + `noReply` API compatibility.                                     | Confirmed: use `prompt()` (not `promptAsync()`) with `noReply` for notification injection. `promptAsync` does not accept `noReply`; `opencode-pty` reference confirms `prompt` with `noReply: true`. This is a known API constraint, not a runtime verification item. |
+| Description string bloats with many user agents.                                               | Cap merged list at 20; show "… and N more" + ship `copilot_list_agents` in v1.x.                                                                                                                                                                                      |
+| Auth misconfiguration (stale `GH_TOKEN` overrides login) → silent failures.                    | Plugin logs resolved auth source via `client.app.log` at delegate start (token value never logged).                                                                                                                                                                   |
+| Built-in Copilot agent names guessed wrong.                                                    | Verify via `copilot agent list` at impl time. Hardcoded list lives in one place (`src/discovery/agents.ts`).                                                                                                                                                          |
+| `fkill` double-kill race — PID recycled between cancel decision and kill execution.            | Before calling `fkill`, check whether `completionPromise` has already settled. If yes, treat cancel as a no-op (process already exited cleanly). Never call `fkill` on a settled task.                                                                                |
+| `completionPromise` rejection unhandled — non-zero CLI exit or spawn error.                    | Every `await completionPromise` must be try/caught. Rejection must be converted to a typed error; never swallowed. Floating unhandled rejections crash Node ≥15.                                                                                                      |
+| Silent notification / prompt timeout — parent never sees `<system-reminder>` (v1 requirement). | Implement per-task notification timeout (default 60s). On timeout: abort subprocess, kill via `fkill`, log warning via `client.app.log`, set `status: 'failed'` with descriptive error in envelope. No silent hangs.                                                  |
+| `promptAsync` or `prompt` throws on dead/expired session.                                      | Treat any throw from the notify call as a notification failure (see System-Wide Impact). Log, store `notifyError` in `TaskState`, do not rethrow.                                                                                                                     |
+| OpenCode SDK breaking changes post-publish invalidate plugin API calls.                        | Pin `@opencode-ai/sdk` and `@opencode-ai/plugin` to exact versions in `package.json`. Add a compatibility matrix to README. Consider runtime version check at plugin load that warns (not crashes) if SDK version is outside tested range.                            |
+| `fkill` flakiness on macOS vs Linux.                                                           | Use `fkill` npm package (v10.0.3, actively maintained, zero dependencies, SIGTERM→SIGKILL escalation with `forceTimeout`) instead of `tree-kill` (unmaintained Dec 2019).                                                                                             |
 
 ## Documentation / Operational Notes
 

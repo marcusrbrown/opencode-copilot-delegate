@@ -1,4 +1,5 @@
 ---
+
 title: Secure Process Introspection with Array-Spawn ps and Comm-Field Identity Gate
 date: 2026-04-28
 category: best-practices
@@ -7,18 +8,19 @@ problem_type: best_practice
 component: development_workflow
 severity: high
 applies_when:
-  - Verifying process ownership securely
-  - Preventing PID reuse and tampering
-  - Using kernel-tracked process identity
-  - Safely spawning system commands
-tags:
-  - process-introspection
-  - ps-command
-  - comm-field
-  - lstart-matching
-  - secure-spawning
-  - injection-prevention
-  - kernel-truth
+- Verifying process ownership securely
+- Preventing PID reuse and tampering
+- Using kernel-tracked process identity
+- Safely spawning system commands
+  tags:
+- process-introspection
+- ps-command
+- comm-field
+- lstart-matching
+- secure-spawning
+- injection-prevention
+- kernel-truth
+
 ---
 
 # Secure Process Introspection with Array-Spawn ps and Comm-Field Identity Gate
@@ -60,11 +62,11 @@ That is the important spawn pattern: no shell, no string interpolation into a sh
 The second detail is easy to miss and worth preserving as part of the pattern, not a throwaway implementation note:
 
 ```ts
-    child.stdout?.on('data', (chunk: Buffer) => {
-      stdout += chunk.toString('utf-8')
-    })
-    // Drain stderr so the OS pipe buffer never fills under backpressure.
-    child.stderr?.resume()
+child.stdout?.on('data', (chunk: Buffer) => {
+  stdout += chunk.toString('utf-8')
+})
+// Drain stderr so the OS pipe buffer never fills under backpressure.
+child.stderr?.resume()
 ```
 
 If a subprocess writes to `stderr` and the parent never drains it, the kernel pipe can fill. Once full, the child blocks on write, which means it may never exit, which means your seemingly harmless introspection helper can hang the system in exactly the path that is supposed to make cleanup safer.
@@ -72,20 +74,20 @@ If a subprocess writes to `stderr` and the parent never drains it, the kernel pi
 The wrapper also normalizes failure to a safe default:
 
 ```ts
-    child.on('close', (code) => {
-      clearTimeout(timeout)
-      if (timedOut || code !== 0) {
-        resolve(null)
-      } else {
-        const trimmed = stdout.trim()
-        resolve(trimmed || null)
-      }
-    })
+child.on('close', (code) => {
+  clearTimeout(timeout)
+  if (timedOut || code !== 0) {
+    resolve(null)
+  } else {
+    const trimmed = stdout.trim()
+    resolve(trimmed || null)
+  }
+})
 
-    child.on('error', () => {
-      clearTimeout(timeout)
-      resolve(null)
-    })
+child.on('error', () => {
+  clearTimeout(timeout)
+  resolve(null)
+})
 ```
 
 Timeout, spawn error, non-zero exit, and empty output all become `null`. That is fine here because the caller only needs one answer: "can I still prove this is the same process?" If not, skip the kill.

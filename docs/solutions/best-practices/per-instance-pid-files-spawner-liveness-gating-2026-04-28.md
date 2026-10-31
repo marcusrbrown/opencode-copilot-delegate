@@ -1,4 +1,5 @@
 ---
+
 title: Per-Instance PID Files with Spawner-Liveness Gating
 date: 2026-04-28
 category: best-practices
@@ -7,17 +8,18 @@ problem_type: best_practice
 component: development_workflow
 severity: high
 applies_when:
-  - Managing subprocess lifecycles in plugins
-  - Preventing PID reuse of unrelated processes
-  - Handling cross-instance orphan cleanup
-  - Ensuring spawner liveness before reaping
-tags:
-  - pid-files
-  - subprocess-management
-  - liveness-probing
-  - orphan-reaping
-  - process-identity
-  - comm-lstart-gate
+- Managing subprocess lifecycles in plugins
+- Preventing PID reuse of unrelated processes
+- Handling cross-instance orphan cleanup
+- Ensuring spawner liveness before reaping
+  tags:
+- pid-files
+- subprocess-management
+- liveness-probing
+- orphan-reaping
+- process-identity
+- comm-lstart-gate
+
 ---
 
 # Per-Instance PID Files with Spawner-Liveness Gating

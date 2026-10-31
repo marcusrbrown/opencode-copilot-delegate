@@ -1,4 +1,5 @@
 ---
+
 title: 'feat: Plugin contract and TUI API resilience'
 type: feat
 status: completed
@@ -79,15 +80,15 @@ Three independent fragilities in the plugin's contract with OpenCode, plus one d
 
 ## Key Technical Decisions
 
-| Decision | Rationale |
-|---|---|
-| TUI dual-path runtime feature-detect | Magic Context already validated this pattern across the 1.14.41/.42/.44 gap; lowest risk |
-| Bump devDep pin to `>= 1.14.44`, narrow peerDep to `>=1.14.41` | Tests run against the canonical API; fallback supports the prior pinned version |
-| Move `wireRpcServerCleanup` to `src/lib/rpc-cleanup.ts` | Matches Systematic PR #355's `src/lib/bootstrap.ts` relocation; clear `lib/` naming convention |
-| CI Node-ESM smoke test asserts default-only | Mirrors Systematic's gate verbatim; consistency across both repos matters more than marginal flexibility |
-| Plugin entry `target: 'node'`, TUI entry `target: 'bun'` | Plugin has no Bun-specific deps; TUI's `@opentui/solid/preload` is Bun-specific. Different runtimes, different targets |
-| Keep `plugInOnce` + `onDuplicate → {}` | RPC server + PID file have N-instance side effects unaddressable by Systematic's per-load model. Returning `{}` (not real-hooks-clone) preserves the original PR #335 reasoning: prevents duplicate tool registration in the host |
-| Split into 2 PRs | U1 (TUI) is user-facing and independent; PR-2 carries U2→U3→U4 as the structural dependency chain, with U5 riding along to document the singleton rationale and verify the full set. Separating lets the TUI fix ship faster without waiting on the structural set |
+| Decision                                                       | Rationale                                                                                                                                                                                                                                                          |
+| -------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| TUI dual-path runtime feature-detect                           | Magic Context already validated this pattern across the 1.14.41/.42/.44 gap; lowest risk                                                                                                                                                                           |
+| Bump devDep pin to `>= 1.14.44`, narrow peerDep to `>=1.14.41` | Tests run against the canonical API; fallback supports the prior pinned version                                                                                                                                                                                    |
+| Move `wireRpcServerCleanup` to `src/lib/rpc-cleanup.ts`        | Matches Systematic PR #355's `src/lib/bootstrap.ts` relocation; clear `lib/` naming convention                                                                                                                                                                     |
+| CI Node-ESM smoke test asserts default-only                    | Mirrors Systematic's gate verbatim; consistency across both repos matters more than marginal flexibility                                                                                                                                                           |
+| Plugin entry `target: 'node'`, TUI entry `target: 'bun'`       | Plugin has no Bun-specific deps; TUI's `@opentui/solid/preload` is Bun-specific. Different runtimes, different targets                                                                                                                                             |
+| Keep `plugInOnce` + `onDuplicate → {}`                         | RPC server + PID file have N-instance side effects unaddressable by Systematic's per-load model. Returning `{}` (not real-hooks-clone) preserves the original PR #335 reasoning: prevents duplicate tool registration in the host                                  |
+| Split into 2 PRs                                               | U1 (TUI) is user-facing and independent; PR-2 carries U2→U3→U4 as the structural dependency chain, with U5 riding along to document the singleton rationale and verify the full set. Separating lets the TUI fix ship faster without waiting on the structural set |
 
 ## High-Level Technical Design
 
@@ -324,12 +325,12 @@ None — every decision resolves at planning time.
 
 ## Risks & Dependencies
 
-| Risk | Mitigation |
-|------|------------|
-| `target: 'node'` build introduces a regression in a transitive dep that uses Bun-specific resolution | U3's pre-change grep audit (`grep -rE "import.meta.(require|main)|Bun\."`) catches direct usage. For transitive deps, U3's verification step (run the built artifact under both Node and Bun) confirms compatibility. If a regression surfaces, U3 can revert to `target: 'bun'` and U4's gate becomes wait-only-on-default-export-shape (Node load deferred to a separate follow-up) |
-| Magic Context's `keymap.registerLayer` command shape (with `namespace: 'palette'`) is not exactly what OpenCode 1.14.44+ wants | Feasibility-reviewer verified the shape against the current `@opencode-ai/plugin/tui` types. If types diverge by 1.14.50+, U1's test extension catches the mismatch before merge |
-| The narrowed peerDep range (`>=1.14.41`) breaks downstream consumers pinned to `1.14.0`–`1.14.40` | The codebase has never tested against those versions; the narrowing aligns advertised support with actual support. If a real consumer surfaces, they upgrade their pin (a trivial change for them) |
-| `wireRpcServerCleanup` relocation breaks a hidden import we haven't grepped | U2's verification step grep ensures exactly two refs to the symbol remain after the move. `bun run typecheck` catches any orphaned imports |
+| Risk                                                                                                                           | Mitigation                                                                                                                                                                                         |
+| ------------------------------------------------------------------------------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `target: 'node'` build introduces a regression in a transitive dep that uses Bun-specific resolution                           | U3's pre-change grep audit (`grep -rE "import.meta.(require                                                                                                                                        | main) | Bun\."`) catches direct usage. For transitive deps, U3's verification step (run the built artifact under both Node and Bun) confirms compatibility. If a regression surfaces, U3 can revert to `target: 'bun'` and U4's gate becomes wait-only-on-default-export-shape (Node load deferred to a separate follow-up) |
+| Magic Context's `keymap.registerLayer` command shape (with `namespace: 'palette'`) is not exactly what OpenCode 1.14.44+ wants | Feasibility-reviewer verified the shape against the current `@opencode-ai/plugin/tui` types. If types diverge by 1.14.50+, U1's test extension catches the mismatch before merge                   |
+| The narrowed peerDep range (`>=1.14.41`) breaks downstream consumers pinned to `1.14.0`–`1.14.40`                              | The codebase has never tested against those versions; the narrowing aligns advertised support with actual support. If a real consumer surfaces, they upgrade their pin (a trivial change for them) |
+| `wireRpcServerCleanup` relocation breaks a hidden import we haven't grepped                                                    | U2's verification step grep ensures exactly two refs to the symbol remain after the move. `bun run typecheck` catches any orphaned imports                                                         |
 
 ## Documentation / Operational Notes
 
