@@ -1,4 +1,5 @@
 ---
+
 title: "fix: runtime hardening (orphan reaper + cancel-race parser guard)"
 type: fix
 status: completed
@@ -71,7 +72,7 @@ Both bugs predate the TUI work. They were identified during planning for that pl
   - **Alive** (call succeeds) or **`EPERM`** (process exists but we lack signal permission — still counts as alive): skip the entire file. The owning plugin is still tracking those subprocesses; killing them would break a running session. The identity gate alone is insufficient for foreign files: a live foreign instance's subprocesses would pass the `comm`+`lstart` gate (they ARE legitimate copilot subprocesses) and be wrongly killed.
   - **Dead** (`ESRCH`): proceed with per-entry reap. After processing, **delete the file** — the owning plugin is gone, and bounded directory growth is the desirable hygiene property here.
   - **Current instance's own file** (filename matches `String(process.pid)`): processed unconditionally; truncated/recreated post-reap. We know our own plugin is alive; we want to clean entries from subprocesses that died while the plugin was loaded but before reap fired.
-- **Parser guard placement**: In `spawnCopilot`, at the top of the existing inline `child.stdout?.on('data', (chunk: string) => { ... })` handler. Inside the `for (const line of lines)` loop, the guard goes **before** `parseJsonlLine(line)` (not before `events.push(event)`) so a cancelled task does not pay the parse cost on already-buffered lines: `if (task.status !== 'running') break;`. The partial-line buffer update (`lines.pop()`) runs *before* the loop, so `break` and `return` would behave identically here — `break` is preferred for clarity. Single-threaded JS guarantees the guard is checked synchronously with every iteration, with no interleaving possible.
+- **Parser guard placement**: In `spawnCopilot`, at the top of the existing inline `child.stdout?.on('data', (chunk: string) => { ... })` handler. Inside the `for (const line of lines)` loop, the guard goes **before** `parseJsonlLine(line)` (not before `events.push(event)`) so a cancelled task does not pay the parse cost on already-buffered lines: `if (task.status !== 'running') break;`. The partial-line buffer update (`lines.pop()`) runs _before_ the loop, so `break` and `return` would behave identically here — `break` is preferred for clarity. Single-threaded JS guarantees the guard is checked synchronously with every iteration, with no interleaving possible.
 - **Status-mutation refactor (terminal-state-preserving)**: The current `src/runtime/subprocess.ts` mutates `task.status` inline at three sites — line 59 (`finalizeTask`, on subprocess `close` event), line 143 (abort listener), and line 153 (spawn `error` event). This plan introduces a `setStatus(task, newStatus, options?)` helper that wraps the assignment and the `removePidEntry` cleanup as a single atomic-from-the-caller's-perspective operation. **The helper is idempotent on terminal state**: if `task.status` is already terminal (`complete | failed | cancelled`) and `newStatus` is also terminal, `setStatus` no-ops and returns. This preserves the existing `finalizeTask` invariant `if (task.status !== 'cancelled') task.status = ...` automatically: when the subprocess `close` event fires after the abort listener has already set `cancelled`, `setStatus(task, 'complete' | 'failed', ...)` is a no-op. Future contributors don't need to remember the guard. The three sites become `setStatus(task, 'complete' | 'failed' | 'cancelled', { pidFilePath })` calls. Centralizes lifecycle plumbing, prevents the cleanup hook from being forgotten, and gives Unit 4's parser guard a stable invariant to read.
 
 ## Open Questions
@@ -141,15 +142,15 @@ tests/
 **Execution note:** Test-first per AGENTS.md mandate.
 
 **Test scenarios:**
-- *Happy path:* `appendPidEntry` to a fresh path → file exists with one tab-separated `<pid>\t<comm>\t<lstart>` line; mode is `0o600`; parent dir mode is `0o700`.
-- *Happy path:* `appendPidEntry` 3 times sequentially → file has 3 lines in spawn order.
-- *Happy path:* `removePidEntry(pid)` on a file with 3 entries removes only the matching one; remaining order preserved.
-- *Edge case:* `appendPidEntry` to a non-existent parent dir → dir created with `0o700`; file written.
-- *Edge case:* `removePidEntry` for a PID not in the file → no-op, no error.
-- *Edge case:* `removePidEntry` on a missing file → no-op, no error.
-- *Concurrency:* `appendPidEntry` invoked 10x concurrently → file ends with **exactly 10 entries**, all well-formed (the in-process `Promise`-chain serialization queue orders the writes so no append is lost). This is a stronger guarantee than the v0.1 plan's 1..N expectation — verified test scenario.
-- *Path resolution:* `resolveInstancePidFilePath()` returns `<state-dir>/orphans/<process.pid>.pids` regardless of environment (plugin PID is the only key).
-- *Mode:* After both append and remove, file mode remains `0o600`.
+- _Happy path:_ `appendPidEntry` to a fresh path → file exists with one tab-separated `<pid>\t<comm>\t<lstart>` line; mode is `0o600`; parent dir mode is `0o700`.
+- _Happy path:_ `appendPidEntry` 3 times sequentially → file has 3 lines in spawn order.
+- _Happy path:_ `removePidEntry(pid)` on a file with 3 entries removes only the matching one; remaining order preserved.
+- _Edge case:_ `appendPidEntry` to a non-existent parent dir → dir created with `0o700`; file written.
+- _Edge case:_ `removePidEntry` for a PID not in the file → no-op, no error.
+- _Edge case:_ `removePidEntry` on a missing file → no-op, no error.
+- _Concurrency:_ `appendPidEntry` invoked 10x concurrently → file ends with **exactly 10 entries**, all well-formed (the in-process `Promise`-chain serialization queue orders the writes so no append is lost). This is a stronger guarantee than the v0.1 plan's 1..N expectation — verified test scenario.
+- _Path resolution:_ `resolveInstancePidFilePath()` returns `<state-dir>/orphans/<process.pid>.pids` regardless of environment (plugin PID is the only key).
+- _Mode:_ After both append and remove, file mode remains `0o600`.
 
 **Verification:** All scenarios pass; `bun run typecheck` + `bun run lint` clean.
 
@@ -191,25 +192,25 @@ tests/
 **Execution note:** Test-first per AGENTS.md mandate.
 
 **Test scenarios:**
-- *Happy path:* Empty `pidFileDir` → `{ reaped: 0, skipped: 0, scannedFiles: 0, deletedFiles: 0 }`; no error.
-- *Happy path:* Current instance's file with one alive PID whose live `comm` and `lstart` match recorded → `killProcessTree` called once; `{ reaped: 1, skipped: 0, scannedFiles: 1, deletedFiles: 0 }`; current-instance file truncated.
-- *Happy path (foreign file, dead spawner):* `<dir>/<own-pid>.pids` (current, empty) + `<dir>/9999.pids` (foreign, plugin PID 9999 dead per `isPluginAlive`, 1 entry: alive matching child). Reap kills the orphaned child; foreign file is **deleted** post-reap; `{ reaped: 1, skipped: 0, scannedFiles: 2, deletedFiles: 1 }`.
-- *Happy path (foreign file, live spawner):* `<dir>/<own-pid>.pids` + `<dir>/8888.pids` (foreign, plugin PID 8888 alive per `isPluginAlive`, 2 entries with live matching children). Reap **skips** the foreign file entirely; `killProcessTree` NOT called for those children; foreign file left intact; `{ reaped: 0, skipped: 0, scannedFiles: 2, deletedFiles: 0 }` (foreign-skip does not count as scanned-and-processed).
-- *Edge case (foreign file, EPERM on probe):* `process.kill(<foreign-pid>, 0)` throws `EPERM` (process exists, we lack permission) → treated as alive; foreign file skipped.
-- *Edge case (foreign filename non-numeric):* `<dir>/garbage.pids` → skipped + logged warning; not deleted, not processed.
-- *Edge case (foreign file, dead spawner, all entries dead):* foreign file with 3 entries all `process.kill(pid, 0)` throwing → no kills; file deleted post-reap.
-- *Edge case (foreign file, dead spawner, mismatched identity):* foreign file with alive PID whose `comm` differs → not killed (identity gate fail); skipped; file deleted (all entries processed, dead spawner).
-- *Edge case (mixed):* current file (1 alive-match, 1 dead) + foreign-alive file (skipped) + foreign-dead file (1 alive-match killed) → `{ reaped: 2, skipped: 0, scannedFiles: 3, deletedFiles: 1 }`.
-- *Edge case (PID dead):* `process.kill(pid, 0)` throws → not killed; counted as skipped; current file truncated post-reap.
-- *Edge case (`comm` mismatch):* Alive PID, but live `comm` differs from recorded → not killed (PID reuse or unrelated process); skipped + warned.
-- *Edge case (`lstart` mismatch):* Alive PID, matching `comm`, but live `lstart` differs from recorded → not killed (PID reuse); skipped + warned.
-- *Edge case (`args` substring red herring):* Alive PID whose `args` *contains* `copilot` (e.g., `cat /tmp/copilot-output.log`) but whose `comm` is `cat`, not `copilot` → not killed (defends the false-positive class). Verified by spawning a stub process with a tailored `argv[0]`/comm distinction.
-- *Concurrency:* 5 worker-pool cap respected: at 10 PIDs, no more than 5 concurrent `ps` shellouts in flight at any moment (assert via spy on the `ps` shellout counter).
-- *Latency:* Total reap with 10 alive-but-skipped entries completes in under 200ms on the dev host (soft target; not a hard assertion).
-- *Error path:* Malformed line → skipped silently; valid lines still processed.
-- *Error path:* `killProcessTree` throws (injected) → caught, counted as skipped; loop continues across remaining entries.
-- *Error path:* `getPidStartTime` returns `null` for an alive PID (race) → skipped, no kill.
-- *Error path:* `fs.readdir(pidFileDir)` throws (dir missing) → returns `{ reaped: 0, skipped: 0, scannedFiles: 0 }`; no error propagation.
+- _Happy path:_ Empty `pidFileDir` → `{ reaped: 0, skipped: 0, scannedFiles: 0, deletedFiles: 0 }`; no error.
+- _Happy path:_ Current instance's file with one alive PID whose live `comm` and `lstart` match recorded → `killProcessTree` called once; `{ reaped: 1, skipped: 0, scannedFiles: 1, deletedFiles: 0 }`; current-instance file truncated.
+- _Happy path (foreign file, dead spawner):_ `<dir>/<own-pid>.pids` (current, empty) + `<dir>/9999.pids` (foreign, plugin PID 9999 dead per `isPluginAlive`, 1 entry: alive matching child). Reap kills the orphaned child; foreign file is **deleted** post-reap; `{ reaped: 1, skipped: 0, scannedFiles: 2, deletedFiles: 1 }`.
+- _Happy path (foreign file, live spawner):_ `<dir>/<own-pid>.pids` + `<dir>/8888.pids` (foreign, plugin PID 8888 alive per `isPluginAlive`, 2 entries with live matching children). Reap **skips** the foreign file entirely; `killProcessTree` NOT called for those children; foreign file left intact; `{ reaped: 0, skipped: 0, scannedFiles: 2, deletedFiles: 0 }` (foreign-skip does not count as scanned-and-processed).
+- _Edge case (foreign file, EPERM on probe):_ `process.kill(<foreign-pid>, 0)` throws `EPERM` (process exists, we lack permission) → treated as alive; foreign file skipped.
+- _Edge case (foreign filename non-numeric):_ `<dir>/garbage.pids` → skipped + logged warning; not deleted, not processed.
+- _Edge case (foreign file, dead spawner, all entries dead):_ foreign file with 3 entries all `process.kill(pid, 0)` throwing → no kills; file deleted post-reap.
+- _Edge case (foreign file, dead spawner, mismatched identity):_ foreign file with alive PID whose `comm` differs → not killed (identity gate fail); skipped; file deleted (all entries processed, dead spawner).
+- _Edge case (mixed):_ current file (1 alive-match, 1 dead) + foreign-alive file (skipped) + foreign-dead file (1 alive-match killed) → `{ reaped: 2, skipped: 0, scannedFiles: 3, deletedFiles: 1 }`.
+- _Edge case (PID dead):_ `process.kill(pid, 0)` throws → not killed; counted as skipped; current file truncated post-reap.
+- _Edge case (`comm` mismatch):_ Alive PID, but live `comm` differs from recorded → not killed (PID reuse or unrelated process); skipped + warned.
+- _Edge case (`lstart` mismatch):_ Alive PID, matching `comm`, but live `lstart` differs from recorded → not killed (PID reuse); skipped + warned.
+- _Edge case (`args` substring red herring):_ Alive PID whose `args` _contains_ `copilot` (e.g., `cat /tmp/copilot-output.log`) but whose `comm` is `cat`, not `copilot` → not killed (defends the false-positive class). Verified by spawning a stub process with a tailored `argv[0]`/comm distinction.
+- _Concurrency:_ 5 worker-pool cap respected: at 10 PIDs, no more than 5 concurrent `ps` shellouts in flight at any moment (assert via spy on the `ps` shellout counter).
+- _Latency:_ Total reap with 10 alive-but-skipped entries completes in under 200ms on the dev host (soft target; not a hard assertion).
+- _Error path:_ Malformed line → skipped silently; valid lines still processed.
+- _Error path:_ `killProcessTree` throws (injected) → caught, counted as skipped; loop continues across remaining entries.
+- _Error path:_ `getPidStartTime` returns `null` for an alive PID (race) → skipped, no kill.
+- _Error path:_ `fs.readdir(pidFileDir)` throws (dir missing) → returns `{ reaped: 0, skipped: 0, scannedFiles: 0 }`; no error propagation.
 
 **Verification:** All scenarios pass; manual smoke on macOS dev host: spawn `sleep 60`, write its PID + recorded start time, simulate plugin re-init, confirm sleep is killed. Smoke on Linux dev host: same.
 
@@ -244,6 +245,7 @@ tests/
   - Line 153 (`child.once('error', ...)`): `task.status = 'failed'` becomes `setStatus(task, 'failed', { pidFilePath })`.
 - Path injection: `pidFilePath` is constructed once in `src/index.ts` via `resolveInstancePidFilePath()` (Unit 1) and passed through to the registry / subprocess wiring.
 - In `src/index.ts`, before the plugin factory returns its `Hooks` object:
+
   ```
   const pidFileDir = path.dirname(resolveInstancePidFilePath())
   const currentInstancePath = resolveInstancePidFilePath()
@@ -255,25 +257,26 @@ tests/
   }
   return { ...hooks }
   ```
+
   (Pseudo-code only; actual import/path style follows existing code conventions.)
 
 **Execution note:** Test-first per AGENTS.md mandate.
 
 **Test scenarios:**
-- *Unit (`setStatus`):* `setStatus(task, 'complete', { pidFilePath })` from running state → `task.status === 'complete'`; `removePidEntry` invoked with `task.pid`.
-- *Unit (`setStatus` terminal-state guard):* `task.status === 'cancelled'`; call `setStatus(task, 'complete', { pidFilePath })` → `task.status` remains `'cancelled'`; `removePidEntry` NOT invoked. **This is the exact invariant the existing `finalizeTask` guard protects** — directly verifies the cancel survives the close-after-abort sequence.
-- *Unit (`setStatus` terminal-state guard):* `task.status === 'failed'`; call `setStatus(task, 'cancelled')` → `task.status` remains `'failed'` (terminal-state idempotent in both directions).
-- *Unit (`setStatus`):* `setStatus(task, 'running')` (non-terminal new status) → `task.status === 'running'`; `removePidEntry` NOT invoked.
-- *Unit (`setStatus`):* `setStatus(task, 'failed')` without `options` → status set from running; `removePidEntry` NOT invoked (path optional).
-- *Unit (`setStatus`):* `removePidEntry` rejection is swallowed; no propagation.
-- *Integration:* Spawn a task via `createTask` → PID file contains one entry with `<pid>\t<comm>\t<lstart>`; `comm` matches the spawned binary's name.
-- *Integration:* Task `close` (exit 0) → `setStatus(task, 'complete')` called from line 59; PID file no longer contains the entry.
-- *Integration:* Abort signal → `setStatus(task, 'cancelled')` called from line 143; PID file no longer contains the entry.
-- *Integration:* Spawn `error` → `setStatus(task, 'failed')` called from line 153; PID file no longer contains the entry.
-- *Integration (cancel-then-close ordering):* Abort signal fires first (line 143 → `setStatus` sets `cancelled`); subsequent subprocess `close` event fires (line 59 → `setStatus(task, 'complete' | 'failed', ...)`); final `task.status` is `'cancelled'`, not `'complete'`/`'failed'`. Verifies the terminal-state guard end-to-end at the call sites, not just at the helper level. PID file removal happens once (on the cancellation), idempotent on the `close` event.
-- *Edge case:* PID-file write throws (injected mock) → task creation still succeeds; status transition still happens; no exception propagates.
-- *Lifecycle:* Plugin init invokes `reapOrphans` exactly once before returning Hooks; reap throw is caught.
-- *Lifecycle:* `pidFileDir` is created with `mode: 0o700` if it doesn't exist.
+- _Unit (`setStatus`):_ `setStatus(task, 'complete', { pidFilePath })` from running state → `task.status === 'complete'`; `removePidEntry` invoked with `task.pid`.
+- _Unit (`setStatus` terminal-state guard):_ `task.status === 'cancelled'`; call `setStatus(task, 'complete', { pidFilePath })` → `task.status` remains `'cancelled'`; `removePidEntry` NOT invoked. **This is the exact invariant the existing `finalizeTask` guard protects** — directly verifies the cancel survives the close-after-abort sequence.
+- _Unit (`setStatus` terminal-state guard):_ `task.status === 'failed'`; call `setStatus(task, 'cancelled')` → `task.status` remains `'failed'` (terminal-state idempotent in both directions).
+- _Unit (`setStatus`):_ `setStatus(task, 'running')` (non-terminal new status) → `task.status === 'running'`; `removePidEntry` NOT invoked.
+- _Unit (`setStatus`):_ `setStatus(task, 'failed')` without `options` → status set from running; `removePidEntry` NOT invoked (path optional).
+- _Unit (`setStatus`):_ `removePidEntry` rejection is swallowed; no propagation.
+- _Integration:_ Spawn a task via `createTask` → PID file contains one entry with `<pid>\t<comm>\t<lstart>`; `comm` matches the spawned binary's name.
+- _Integration:_ Task `close` (exit 0) → `setStatus(task, 'complete')` called from line 59; PID file no longer contains the entry.
+- _Integration:_ Abort signal → `setStatus(task, 'cancelled')` called from line 143; PID file no longer contains the entry.
+- _Integration:_ Spawn `error` → `setStatus(task, 'failed')` called from line 153; PID file no longer contains the entry.
+- _Integration (cancel-then-close ordering):_ Abort signal fires first (line 143 → `setStatus` sets `cancelled`); subsequent subprocess `close` event fires (line 59 → `setStatus(task, 'complete' | 'failed', ...)`); final `task.status` is `'cancelled'`, not `'complete'`/`'failed'`. Verifies the terminal-state guard end-to-end at the call sites, not just at the helper level. PID file removal happens once (on the cancellation), idempotent on the `close` event.
+- _Edge case:_ PID-file write throws (injected mock) → task creation still succeeds; status transition still happens; no exception propagates.
+- _Lifecycle:_ Plugin init invokes `reapOrphans` exactly once before returning Hooks; reap throw is caught.
+- _Lifecycle:_ `pidFileDir` is created with `mode: 0o700` if it doesn't exist.
 
 **Verification:** All scenarios pass; existing task-registry and subprocess tests still pass.
 
@@ -293,16 +296,16 @@ tests/
 
 **Approach:**
 - Locate the existing `child.stdout?.on('data', (chunk: string) => { ... })` callback inside `spawnCopilot`. Inside the `for (const line of lines)` loop, place the guard **before** `parseJsonlLine(line)` (not before `events.push`) so a cancelled task does not pay the parse cost on buffered lines: `if (task.status !== 'running') break;`.
-- The partial-line buffer update (`lines.pop()`) runs *before* the loop body, so `break` and `return` are equivalent at this point — `break` is the natural choice for an in-loop early-exit.
+- The partial-line buffer update (`lines.pop()`) runs _before_ the loop body, so `break` and `return` are equivalent at this point — `break` is the natural choice for an in-loop early-exit.
 - Single-threaded JS guarantees: the guard is checked synchronously with every iteration; once `task.status` flips, no subsequent loop iteration in this or future `data` ticks will parse or append.
 - This is a 1-2 line change; the test scenario carries the weight.
 
 **Execution note:** Test-first per AGENTS.md mandate.
 
 **Test scenarios:**
-- *Edge case (cancel race):* Spawn a fake subprocess that emits 5 JSONL lines slowly. After line 2 is parsed, set `task.status = 'cancelled'` (simulating the abort listener). Allow the remaining 3 lines to drain through the parser. Assert: `task.events.length === 2`; the 3 post-cancel events are NOT appended.
-- *Happy path (no regression):* Without cancel, all 5 events parse and append normally.
-- *Edge case (cancel before any events):* Set `status = 'cancelled'` before the first `data` callback fires. Assert: `task.events.length === 0`.
+- _Edge case (cancel race):_ Spawn a fake subprocess that emits 5 JSONL lines slowly. After line 2 is parsed, set `task.status = 'cancelled'` (simulating the abort listener). Allow the remaining 3 lines to drain through the parser. Assert: `task.events.length === 2`; the 3 post-cancel events are NOT appended.
+- _Happy path (no regression):_ Without cancel, all 5 events parse and append normally.
+- _Edge case (cancel before any events):_ Set `status = 'cancelled'` before the first `data` callback fires. Assert: `task.events.length === 0`.
 
 **Verification:** All scenarios pass; existing `subprocess.test.ts` scenarios still pass; no regressions in `tests/tools.test.ts`.
 
@@ -325,17 +328,17 @@ tests/
 
 ## Risks & Dependencies
 
-| Risk | Mitigation |
-|------|------------|
-| `ps -p <pid> -o {comm,lstart}=` portability across BSD vs GNU `ps`, including minimal images (Alpine busybox) | Implementation-time smoke test on dev hosts. `comm` and `lstart` are both widely supported on mainstream macOS / Linux. If unavailable, the reaper logs and skips — does not crash. Document POSIX `ps` dependency in README. |
-| PID file write fails on disk-full or signal mid-rename | Atomic rename ensures no partial reads. Worst case: missed-remove → extra reap attempt of an already-dead PID, which is tested and idempotent. |
-| Malicious PID file injection on shared machines | File perms `0o600` + `0o700` parent dir as primary defense. Identity gate combines exact `comm` match AND exact `lstart` match AND PID liveness — forging requires write access to the protected file. |
-| Parser guard's `break` placement subtle (must not skip the partial-line buffer update) | Implementation reads the actual handler structure first; the `lines.pop()` partial-line buffer update happens *before* the loop body, so `break` and `return` are equivalent. Test scenario asserts post-cancel events are not appended and the buffer is preserved. |
-| Reap blocks plugin init at `MAX_CONCURRENT = 10` historical entries | Parallel per-PID probes with a worker-pool concurrency cap of 5. Each PID's check is two `ps` shellouts (`comm` + `lstart`) plus a liveness probe. Soft target: total reap time under 200ms on a typical dev host. Verified by Unit 2's latency test scenario. |
-| Cross-instance file clobbering (shared single PID file would silently drop live PIDs across concurrent OpenCode sessions) | **Resolved by per-instance file design**: each instance writes to `<state-dir>/orphans/<plugin-pid>.pids` and only truncates its own file. Reap reads the entire directory so foreign-instance survivors are still recovered. |
-| Cross-instance kill of a live foreign instance's child (identity gate alone is insufficient — a live foreign instance's subprocesses pass `comm`+`lstart` match) | **Resolved by spawner-liveness gate**: each foreign file's owning plugin PID is parsed from the filename and probed via `process.kill(<pid>, 0)`. Alive (or `EPERM`) → skip the entire file. Dead → reap entries and delete the file. |
-| `<state-dir>/orphans/` directory grows without bound across many sessions | **Resolved by post-reap deletion**: after a successful reap of a foreign file (dead spawner), the file itself is deleted. Long-lived dev hosts see one transient file per active plugin instance, not historical accumulation. |
-| `setStatus` refactor introduces regression in existing 3 status-mutation sites | Three sites are explicit and enumerated by line number (subprocess.ts:59, :143, :153). Helper enforces terminal-state idempotency (preserves `cancelled` if `close` fires after abort) so the existing `finalizeTask` `if (task.status !== 'cancelled')` invariant is preserved automatically rather than being re-implemented at the call site. Test scenarios per site verify both the status transition and the cleanup hook fire; an explicit `cancelled → complete` no-op test directly verifies the invariant. Existing subprocess tests continue passing as a regression gate. |
+| Risk                                                                                                                                                             | Mitigation                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            |
+| ---------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `ps -p <pid> -o {comm,lstart}=` portability across BSD vs GNU `ps`, including minimal images (Alpine busybox)                                                    | Implementation-time smoke test on dev hosts. `comm` and `lstart` are both widely supported on mainstream macOS / Linux. If unavailable, the reaper logs and skips — does not crash. Document POSIX `ps` dependency in README.                                                                                                                                                                                                                                                                                                                                                         |
+| PID file write fails on disk-full or signal mid-rename                                                                                                           | Atomic rename ensures no partial reads. Worst case: missed-remove → extra reap attempt of an already-dead PID, which is tested and idempotent.                                                                                                                                                                                                                                                                                                                                                                                                                                        |
+| Malicious PID file injection on shared machines                                                                                                                  | File perms `0o600` + `0o700` parent dir as primary defense. Identity gate combines exact `comm` match AND exact `lstart` match AND PID liveness — forging requires write access to the protected file.                                                                                                                                                                                                                                                                                                                                                                                |
+| Parser guard's `break` placement subtle (must not skip the partial-line buffer update)                                                                           | Implementation reads the actual handler structure first; the `lines.pop()` partial-line buffer update happens _before_ the loop body, so `break` and `return` are equivalent. Test scenario asserts post-cancel events are not appended and the buffer is preserved.                                                                                                                                                                                                                                                                                                                  |
+| Reap blocks plugin init at `MAX_CONCURRENT = 10` historical entries                                                                                              | Parallel per-PID probes with a worker-pool concurrency cap of 5. Each PID's check is two `ps` shellouts (`comm` + `lstart`) plus a liveness probe. Soft target: total reap time under 200ms on a typical dev host. Verified by Unit 2's latency test scenario.                                                                                                                                                                                                                                                                                                                        |
+| Cross-instance file clobbering (shared single PID file would silently drop live PIDs across concurrent OpenCode sessions)                                        | **Resolved by per-instance file design**: each instance writes to `<state-dir>/orphans/<plugin-pid>.pids` and only truncates its own file. Reap reads the entire directory so foreign-instance survivors are still recovered.                                                                                                                                                                                                                                                                                                                                                         |
+| Cross-instance kill of a live foreign instance's child (identity gate alone is insufficient — a live foreign instance's subprocesses pass `comm`+`lstart` match) | **Resolved by spawner-liveness gate**: each foreign file's owning plugin PID is parsed from the filename and probed via `process.kill(<pid>, 0)`. Alive (or `EPERM`) → skip the entire file. Dead → reap entries and delete the file.                                                                                                                                                                                                                                                                                                                                                 |
+| `<state-dir>/orphans/` directory grows without bound across many sessions                                                                                        | **Resolved by post-reap deletion**: after a successful reap of a foreign file (dead spawner), the file itself is deleted. Long-lived dev hosts see one transient file per active plugin instance, not historical accumulation.                                                                                                                                                                                                                                                                                                                                                        |
+| `setStatus` refactor introduces regression in existing 3 status-mutation sites                                                                                   | Three sites are explicit and enumerated by line number (subprocess.ts:59, :143, :153). Helper enforces terminal-state idempotency (preserves `cancelled` if `close` fires after abort) so the existing `finalizeTask` `if (task.status !== 'cancelled')` invariant is preserved automatically rather than being re-implemented at the call site. Test scenarios per site verify both the status transition and the cleanup hook fire; an explicit `cancelled → complete` no-op test directly verifies the invariant. Existing subprocess tests continue passing as a regression gate. |
 
 
 ## Documentation / Operational Notes

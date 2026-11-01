@@ -1,4 +1,5 @@
 ---
+
 title: Centralized Terminal-State Idempotency for Task Lifecycle
 date: 2026-04-28
 category: best-practices
@@ -7,17 +8,18 @@ problem_type: best_practice
 component: development_workflow
 severity: medium
 applies_when:
-  - Managing task status transitions
-  - Ensuring idempotent terminal state changes
-  - Coupling task state with cleanup hooks
-  - Avoiding duplicate status mutations
-tags:
-  - task-lifecycle
-  - idempotency
-  - status-management
-  - terminal-states
-  - cleanup-hooks
-  - state-guards
+- Managing task status transitions
+- Ensuring idempotent terminal state changes
+- Coupling task state with cleanup hooks
+- Avoiding duplicate status mutations
+  tags:
+- task-lifecycle
+- idempotency
+- status-management
+- terminal-states
+- cleanup-hooks
+- state-guards
+
 ---
 
 # Centralized Terminal-State Idempotency for Task Lifecycle
@@ -204,11 +206,11 @@ That layout is brittle: one callsite remembered the guard, two did not, and a fo
 **Close path — `src/runtime/subprocess.ts:65-70`**
 
 ```ts
-  flushBufferedStdout(task)
-  task.endedAt = Date.now()
-  task.exitCode = exitCode ?? undefined
+flushBufferedStdout(task)
+task.endedAt = Date.now()
+task.exitCode = exitCode ?? undefined
 
-  setStatus(task, exitCode === 0 ? 'complete' : 'failed', { pidFilePath })
+setStatus(task, exitCode === 0 ? 'complete' : 'failed', { pidFilePath })
 ```
 
 **Abort path — `src/runtime/subprocess.ts:149-154`**

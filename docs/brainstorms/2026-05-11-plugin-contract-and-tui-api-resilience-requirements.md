@@ -1,4 +1,5 @@
 ---
+
 date: 2026-05-11
 topic: plugin-contract-and-tui-api-resilience
 ---
@@ -72,34 +73,40 @@ After R1–R6 land, the plugin must:
 ## Acceptance Examples
 
 ### AE1. TUI registration on OpenCode 1.14.44+
+
 **When** the TUI plugin loads under OpenCode 1.14.44 or later (`api.keymap.registerLayer` exists, `api.command.register` is a deprecated shim),
 **then** registration uses `keymap.registerLayer({ commands: [{ namespace: 'palette', name: 'copilot-status', title: 'Copilot Status', ... }], bindings: [] })`, the `/copilot-status` command appears in the slash menu, and `onSelect`/`run` invokes `openList()`.
-*Covers R1.*
+_Covers R1._
 
 ### AE2. TUI registration on OpenCode 1.14.41
+
 **When** the TUI plugin loads under OpenCode 1.14.41 (`api.keymap.registerLayer` is undefined, `api.command.register` is the only API),
 **then** registration falls through to `api.command.register(() => [{ title: 'Copilot Status', value: '/copilot-status', slash: { name: 'copilot-status' }, onSelect: ... }])`, and the slash command continues to work.
-*Covers R1, R2 (the lower-bound peerDependency).*
+_Covers R1, R2 (the lower-bound peerDependency)._
 
 ### AE3. CI gate catches a stowaway export
+
 **When** a contributor adds `export const helper = ...` to `src/index.ts` and opens a PR,
 **then** the CI Node-ESM smoke test fails with a message that includes the actual export list (e.g., `["default", "helper"]`), references the OpenCode loader behavior, and points to `src/lib/` as the correct home for helpers.
-*Covers R3, R4.*
+_Covers R3, R4._
 
 ### AE4. Build artifact loads under Node
+
 **When** `bun scripts/build.ts` runs after R5 lands and `node --input-type=module -e "import('./dist/index.js')"` is invoked,
 **then** the import succeeds with exit code 0 and `Object.keys(imported).sort()` equals `['default']`.
-*Covers R3, R5.*
+_Covers R3, R5._
 
 ### AE5. Duplicate factory invocation still produces empty hooks
+
 **When** the same OpenCode process invokes the plugin factory twice (e.g., the plugin is listed in both user-level and project-level `opencode.json`),
 **then** the first invocation runs `initializePlugin` and returns real hooks; the second invocation triggers `onDuplicate`, returns `{}`, and emits a warning log identifying the duplicate source.
-*Covers the singleton behavior that motivates R6.*
+_Covers the singleton behavior that motivates R6._
 
 ### AE6. Singleton rationale is documented
+
 **When** a maintainer reads `src/runtime/plugin-singleton.ts` or this brainstorm doc,
 **then** they find a note cross-referencing Systematic PR #352 / PR #355 and explaining why `plugInOnce` stays in this repo.
-*Covers R6.*
+_Covers R6._
 
 ---
 
@@ -115,12 +122,12 @@ After R1–R6 land, the plugin must:
 ## Scope Boundaries
 
 **In scope (one or two PRs, planner's call):**
-- TUI API dual-path migration (R1, R2) — *user-facing fix; can ship as its own PR ahead of the structural work if velocity matters*
-- Plugin entry default-only export refactor (R3) — *must ship with R4 + R5*
-- CI Node-ESM export-shape smoke test (R4) — *must ship with R3 + R5; requires adding a Node setup step to CI (the current pipeline is Bun-only)*
-- Build target switch for plugin entry (R5) — *prerequisite for R4 (Node smoke test cannot run against a Bun-only artifact)*
-- Singleton design rationale recorded (R6) — *implementation note; lands wherever the other R6-touching file lands, or in either PR*
-- Regression-test verification (R7) — *applies to whichever PR(s) ship*
+- TUI API dual-path migration (R1, R2) — _user-facing fix; can ship as its own PR ahead of the structural work if velocity matters_
+- Plugin entry default-only export refactor (R3) — _must ship with R4 + R5_
+- CI Node-ESM export-shape smoke test (R4) — _must ship with R3 + R5; requires adding a Node setup step to CI (the current pipeline is Bun-only)_
+- Build target switch for plugin entry (R5) — _prerequisite for R4 (Node smoke test cannot run against a Bun-only artifact)_
+- Singleton design rationale recorded (R6) — _implementation note; lands wherever the other R6-touching file lands, or in either PR_
+- Regression-test verification (R7) — _applies to whichever PR(s) ship_
 
 Dependencies: R3 → R5 (smoke test needs Node-loadable build) → R4. R1/R2 are independent. Planner may bundle all six in one PR for atomicity or split into (R1/R2) + (R3/R4/R5/R6/R7).
 
@@ -135,12 +142,12 @@ Dependencies: R3 → R5 (smoke test needs Node-loadable build) → R4. R1/R2 are
 
 ## Key Decisions
 
-| Decision | Choice | Rationale |
-|---|---|---|
+| Decision         | Choice                                                         | Rationale                                                                                                                                                        |
+| ---------------- | -------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | TUI API strategy | Dual-path runtime feature-detect with pinned-to-1.14.44+ tests | Magic Context's pattern is already validated against the same gap; pinning to 1.14.44+ tests against the canonical API while the fallback supports 1.14.41 users |
-| Named export fix | Move helper to `src/lib/`, add CI gate | Mirror PR #355 exactly. The CI gate is what makes the constraint enforceable, not just documented |
-| Build target | Plugin = `target: 'node'`, TUI = `target: 'bun'` | Plugin has no Bun-specific deps; TUI's `@opentui/solid/preload` is Bun-specific. Different runtimes, different targets |
-| Singleton design | Keep `plugInOnce` + `onDuplicate → {}` | RPC server + PID file have N-instance side effects that the marker-based per-load model can't address |
+| Named export fix | Move helper to `src/lib/`, add CI gate                         | Mirror PR #355 exactly. The CI gate is what makes the constraint enforceable, not just documented                                                                |
+| Build target     | Plugin = `target: 'node'`, TUI = `target: 'bun'`               | Plugin has no Bun-specific deps; TUI's `@opentui/solid/preload` is Bun-specific. Different runtimes, different targets                                           |
+| Singleton design | Keep `plugInOnce` + `onDuplicate → {}`                         | RPC server + PID file have N-instance side effects that the marker-based per-load model can't address                                                            |
 
 ---
 
