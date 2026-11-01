@@ -36,12 +36,12 @@ bun run build     # Bundle + declaration emit
 
 ## Module Boundaries
 
-| Module | Owns | Must Not |
-|--------|------|----------|
-| `src/tools/` | Tool definitions, schema, execute functions | Import from other tools |
-| `src/runtime/` | Subprocess management, task registry, JSONL parsing, notifications | Reference OpenCode plugin/tool APIs directly |
-| `src/discovery/` | Agent file discovery, description builder | Depend on runtime or tools |
-| `src/index.ts` | Plugin entrypoint, wiring | Contain business logic |
+| Module           | Owns                                                               | Must Not                                     |
+| ---------------- | ------------------------------------------------------------------ | -------------------------------------------- |
+| `src/tools/`     | Tool definitions, schema, execute functions                        | Import from other tools                      |
+| `src/runtime/`   | Subprocess management, task registry, JSONL parsing, notifications | Reference OpenCode plugin/tool APIs directly |
+| `src/discovery/` | Agent file discovery, description builder                          | Depend on runtime or tools                   |
+| `src/index.ts`   | Plugin entrypoint, wiring                                          | Contain business logic                       |
 
 ## Persisting Architectural Memory
 

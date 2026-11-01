@@ -1,4 +1,5 @@
 ---
+
 title: Hardening Two-Entrypoint RPC/TUI Plugin Integration
 date: 2026-05-01
 category: integration-issues
@@ -6,17 +7,18 @@ module: copilot-status-tui-foundation
 problem_type: integration_issue
 component: tooling
 symptoms:
-  - server tools could fail to register when the TUI RPC server could not start
-  - the packaged plugin could expose a broken ./tui entrypoint or omit the built TUI bundle
-  - the TUI could render stale async results after cleanup or hold stale task selection during cancel flows
-  - cancellation progress was not visible through RPC/TUI while a cancel was in flight
-root_cause: incomplete_setup
-resolution_type: code_fix
-severity: high
-related_components:
-  - development_workflow
-  - testing_framework
-tags: [copilot-status, tui, rpc, two-entrypoint, packaging, cancellation, localhost-auth, port-file]
+- server tools could fail to register when the TUI RPC server could not start
+- the packaged plugin could expose a broken ./tui entrypoint or omit the built TUI bundle
+- the TUI could render stale async results after cleanup or hold stale task selection during cancel flows
+- cancellation progress was not visible through RPC/TUI while a cancel was in flight
+  root_cause: incomplete_setup
+  resolution_type: code_fix
+  severity: high
+  related_components:
+- development_workflow
+- testing_framework
+  tags: [copilot-status, tui, rpc, two-entrypoint, packaging, cancellation, localhost-auth, port-file]
+
 ---
 
 # Hardening Two-Entrypoint RPC/TUI Plugin Integration
@@ -104,10 +106,13 @@ Startup cleanup should delete only stale port-file artifacts, not the session di
 
 ```ts
 const stalePortFiles = entries.filter(
-  (entry) => entry === 'server-port.json' || entry.startsWith('server-port.json.tmp.'),
+  (entry) =>
+    entry === 'server-port.json' || entry.startsWith('server-port.json.tmp.'),
 )
 
-await Promise.all(stalePortFiles.map((entry) => rm(join(portFileDir, entry), { force: true })))
+await Promise.all(
+  stalePortFiles.map((entry) => rm(join(portFileDir, entry), { force: true })),
+)
 ```
 
 Cancellation uses an internal transition state. RPC/TUI can show `cancelling`, while the public `copilot_output` envelope keeps the existing `cancelled` contract:

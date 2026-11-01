@@ -1,20 +1,22 @@
 ---
+
 title: opencode-copilot-delegate v0.2.x — ideation
 date: 2026-04-27
 status: ranked
 focus: |
-  Two streams: (a) plugin features seeded by docs/research/copilot-cli-capabilities-2026-04-27.md;
-  (b) TUI/desktop visibility for in-flight delegations — render JSONL event stream like an
-  OpenCode subagent session, surfaced via slash commands like /copilot-status (cf. Magic
-  Context's /ctx-status modal).
+Two streams: (a) plugin features seeded by docs/research/copilot-cli-capabilities-2026-04-27.md;
+(b) TUI/desktop visibility for in-flight delegations — render JSONL event stream like an
+OpenCode subagent session, surfaced via slash commands like /copilot-status (cf. Magic
+Context's /ctx-status modal).
 volume: default (~30 raw, ~22 deduped, 7 survivors)
 frames: pain & friction · inversion/automation · assumption-breaking · leverage/compounding
 handoff: ce:brainstorm on a single chosen survivor
 related:
-  - docs/research/copilot-cli-capabilities-2026-04-27.md
-  - docs/plans/2026-04-21-copilot-delegate-plugin.md (closed, all T1–T11 ticked)
-  - docs/solutions/best-practices/reliable-cli-integration-testing-2026-04-26.md
-  - docs/solutions/developer-experience/opencode-debug-diagnostics-2026-04-26.md
+- docs/research/copilot-cli-capabilities-2026-04-27.md
+- docs/plans/2026-04-21-copilot-delegate-plugin.md (closed, all T1–T11 ticked)
+- docs/solutions/best-practices/reliable-cli-integration-testing-2026-04-26.md
+- docs/solutions/developer-experience/opencode-debug-diagnostics-2026-04-26.md
+
 ---
 
 # v0.2.x Ideation — opencode-copilot-delegate
@@ -191,21 +193,21 @@ risk preflight (rolled in as one diagnostic surface).
 
 Each rejection is one-line — preserved for future reconsideration.
 
-| Idea                                                          | Frame | Reason                                                                                                                                |
-| ------------------------------------------------------------- | ----- | ------------------------------------------------------------------------------------------------------------------------------------- |
-| **Hook-based push to delete `copilot_output`** (F2.1, F2.4)   | F2    | Copilot user-level hooks fire for ALL spawned subprocesses, not just plugin-owned ones — wrong layer for a clean push API. Roll into S7's hook awareness instead. |
-| **OTel telemetry zero-instrumentation** (F4.10)               | F4    | Pre-mature for a 0.x plugin with no telemetry users. Comes free if S1's event bus ships; defer the OTel subscriber.                                                |
-| **Composable delegation pipelines / DAGs** (F3.3)             | F3    | Speculative; OpenCode itself orchestrates. Premature complexity.                                                                                                  |
-| **Bidirectional `--ask_user` relay** (F3.5)                   | F3    | Inverts the unattended-delegation value prop; introduces a deadlock-prone session-injection contract. Defer.                                                      |
-| **Plan-mode → OpenCode todos integration** (F3.9)             | F3    | Blurs the OpenCode-orchestrates / Copilot-delegates boundary. Niche.                                                                                              |
-| **Hook-driven auto-delegation on session events** (F3.10)     | F3    | Intrusive. Conflicts with explicit-invocation preference.                                                                                                          |
-| **Default-deny secrets + risk preflight** (F1.5, F2.9)        | F1/F2 | Documenting `--secret-env-vars` in README and forwarding the flag is enough; UI preflight is niche. Roll into S7.                                                  |
-| **Hook-awareness quarantine mode** (F1.6)                     | F1    | Hook-side-effects-on-spawn is a Copilot CLI design, not the plugin's job to "quarantine." Document; don't gate.                                                    |
-| **Non-interactive safety profile** (F1.8)                     | F1    | The plugin already passes `--no-ask-user --allow-all-tools`. Just naming the existing default.                                                                     |
-| **Auto-inferred `--add-dir` for workspace** (F2.7)            | F2    | Error-prone; sibling repos may pull in unrelated work, security boundary risk. Manual `--add-dir` is fine.                                                         |
-| **Agent fs.watch caching** (F2.8)                             | F2    | Per-spawn discovery is fast (one readdir); fs.watch adds cleanup and rename/delete edge cases. Premature.                                                          |
-| **Parameterized prompt macros** (F2.10)                       | F2    | OpenCode itself can do template expansion in user-space; not the plugin's role.                                                                                    |
-| **Workspace continuity guard for resume** (F1.9)              | F1    | Folded into S2: `CopilotProcess.resume` re-applies the original `--add-dir` set automatically.                                                                     |
+| Idea                                                        | Frame | Reason                                                                                                                                                            |
+| ----------------------------------------------------------- | ----- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Hook-based push to delete `copilot_output`** (F2.1, F2.4) | F2    | Copilot user-level hooks fire for ALL spawned subprocesses, not just plugin-owned ones — wrong layer for a clean push API. Roll into S7's hook awareness instead. |
+| **OTel telemetry zero-instrumentation** (F4.10)             | F4    | Pre-mature for a 0.x plugin with no telemetry users. Comes free if S1's event bus ships; defer the OTel subscriber.                                               |
+| **Composable delegation pipelines / DAGs** (F3.3)           | F3    | Speculative; OpenCode itself orchestrates. Premature complexity.                                                                                                  |
+| **Bidirectional `--ask_user` relay** (F3.5)                 | F3    | Inverts the unattended-delegation value prop; introduces a deadlock-prone session-injection contract. Defer.                                                      |
+| **Plan-mode → OpenCode todos integration** (F3.9)           | F3    | Blurs the OpenCode-orchestrates / Copilot-delegates boundary. Niche.                                                                                              |
+| **Hook-driven auto-delegation on session events** (F3.10)   | F3    | Intrusive. Conflicts with explicit-invocation preference.                                                                                                         |
+| **Default-deny secrets + risk preflight** (F1.5, F2.9)      | F1/F2 | Documenting `--secret-env-vars` in README and forwarding the flag is enough; UI preflight is niche. Roll into S7.                                                 |
+| **Hook-awareness quarantine mode** (F1.6)                   | F1    | Hook-side-effects-on-spawn is a Copilot CLI design, not the plugin's job to "quarantine." Document; don't gate.                                                   |
+| **Non-interactive safety profile** (F1.8)                   | F1    | The plugin already passes `--no-ask-user --allow-all-tools`. Just naming the existing default.                                                                    |
+| **Auto-inferred `--add-dir` for workspace** (F2.7)          | F2    | Error-prone; sibling repos may pull in unrelated work, security boundary risk. Manual `--add-dir` is fine.                                                        |
+| **Agent fs.watch caching** (F2.8)                           | F2    | Per-spawn discovery is fast (one readdir); fs.watch adds cleanup and rename/delete edge cases. Premature.                                                         |
+| **Parameterized prompt macros** (F2.10)                     | F2    | OpenCode itself can do template expansion in user-space; not the plugin's role.                                                                                   |
+| **Workspace continuity guard for resume** (F1.9)            | F1    | Folded into S2: `CopilotProcess.resume` re-applies the original `--add-dir` set automatically.                                                                    |
 
 ## Cross-cutting note
 

@@ -59,31 +59,31 @@ The plugin logs the resolved auth source (not the token value) at delegation sta
 
 ### `copilot_delegate`
 
-| Arg | Type | Description |
-|-----|------|-------------|
-| `prompt` | `string` | Required. The prompt to send to Copilot. |
-| `agent` | `string?` | Optional. Copilot agent name (see tool description for available agents). |
-| `model` | `string?` | Optional. Model override (e.g. `claude-haiku-4.5`). |
-| `add_dir` | `string[]?` | Optional. Additional directories to allow Copilot to read. |
-| `allow_tool` | `string[]?` | Optional. Tool patterns to allow. |
-| `deny_tool` | `string[]?` | Optional. Tool patterns to deny. |
+| Arg          | Type        | Description                                                               |
+| ------------ | ----------- | ------------------------------------------------------------------------- |
+| `prompt`     | `string`    | Required. The prompt to send to Copilot.                                  |
+| `agent`      | `string?`   | Optional. Copilot agent name (see tool description for available agents). |
+| `model`      | `string?`   | Optional. Model override (e.g. `claude-haiku-4.5`).                       |
+| `add_dir`    | `string[]?` | Optional. Additional directories to allow Copilot to read.                |
+| `allow_tool` | `string[]?` | Optional. Tool patterns to allow.                                         |
+| `deny_tool`  | `string[]?` | Optional. Tool patterns to deny.                                          |
 
 Returns `{ task_id: string }` — a `cpl_`-prefixed UUID.
 
 ### `copilot_output`
 
-| Arg | Type | Description |
-|-----|------|-------------|
-| `task_id` | `string` | Required. Task ID from `copilot_delegate`. |
-| `block` | `boolean?` | Optional. Wait for completion before returning. Default `false`. |
-| `timeout_ms` | `number?` | Optional. Max wait ms when `block: true`. Default `30000`, max `120000`. |
+| Arg          | Type       | Description                                                              |
+| ------------ | ---------- | ------------------------------------------------------------------------ |
+| `task_id`    | `string`   | Required. Task ID from `copilot_delegate`.                               |
+| `block`      | `boolean?` | Optional. Wait for completion before returning. Default `false`.         |
+| `timeout_ms` | `number?`  | Optional. Max wait ms when `block: true`. Default `30000`, max `120000`. |
 
 Returns a structured envelope with `status`, `final_message`, `tokens`, `tool_calls_summary`, and more.
 
 ### `copilot_cancel`
 
-| Arg | Type | Description |
-|-----|------|-------------|
+| Arg       | Type     | Description                  |
+| --------- | -------- | ---------------------------- |
 | `task_id` | `string` | Required. Task ID to cancel. |
 
 Returns `{ cancelled: boolean; was_running: boolean }`.

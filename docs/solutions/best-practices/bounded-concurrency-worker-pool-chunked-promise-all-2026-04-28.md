@@ -1,4 +1,5 @@
 ---
+
 title: Bounded-Concurrency Worker Pool via Chunked Promise.all
 date: 2026-04-28
 category: best-practices
@@ -7,17 +8,18 @@ problem_type: best_practice
 component: development_workflow
 severity: medium
 applies_when:
-  - Implementing bounded parallel processing
-  - Processing lists with concurrent tasks
-  - Trading simplicity for head-of-line blocking
-  - When individual tasks have bounded latency
-tags:
-  - bounded-concurrency
-  - promise-all
-  - chunking
-  - worker-pool
-  - parallel-processing
-  - head-of-line-blocking
+- Implementing bounded parallel processing
+- Processing lists with concurrent tasks
+- Trading simplicity for head-of-line blocking
+- When individual tasks have bounded latency
+  tags:
+- bounded-concurrency
+- promise-all
+- chunking
+- worker-pool
+- parallel-processing
+- head-of-line-blocking
+
 ---
 
 # Bounded-Concurrency Worker Pool via Chunked Promise.all
