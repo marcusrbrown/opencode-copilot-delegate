@@ -8,6 +8,7 @@ problem_type: workflow_issue
 component: development_workflow
 severity: medium
 applies_when:
+
 - Bootstrapping the first release of a new npm package using changesets/action and Trusted Publishing
 - A version is manually published to npm before changesets/action runs for that version
 - Auditing a release pipeline that skipped a version's GitHub Release or git tag

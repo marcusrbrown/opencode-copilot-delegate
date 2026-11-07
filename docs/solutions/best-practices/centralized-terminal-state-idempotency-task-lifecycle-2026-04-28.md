@@ -8,6 +8,7 @@ problem_type: best_practice
 component: development_workflow
 severity: medium
 applies_when:
+
 - Managing task status transitions
 - Ensuring idempotent terminal state changes
 - Coupling task state with cleanup hooks

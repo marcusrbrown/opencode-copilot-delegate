@@ -9,6 +9,7 @@ runtime_minutes: 5
 premium_requests: 7.5
 purpose: Seed ideation for opencode-copilot-delegate v0.2.x feature work.
 errata:
+
 - "§9 'Prompts visible in ps': the suggested temp-file wrapper does not address argv leakage. Copilot CLI 1.0.36 has no documented stdin or @file prompt mode; treat that bullet as 'no known workaround in 1.0.36' until upstream exposes one."
 
 ---
@@ -172,6 +173,7 @@ For the plugin: hooks are a viable injection point for telemetry/audit on every 
 **Headers (HTTP/SSE):** `--header "K: V"` repeatable; `--timeout <ms>`; `--tools "*"|csv|""`.
 
 **Tool naming for `--allow-tool`/`--deny-tool`:** `<server-name>(<tool-name>?)`. Examples: `github(create_issue)`, `notion`. The bundled `github-mcp-server` is the only built-in MCP. Toolset granularity controlled by:
+
 - `--add-github-mcp-tool <name>` (repeatable; `*` for all)
 - `--add-github-mcp-toolset <toolset>` (repeatable; `all` for all)
 - `--enable-all-github-mcp-tools` (overrides the two above)
@@ -185,11 +187,13 @@ Default exposed surface is a curated CLI subset; opt-in beyond it.
 **Default sandbox:** CWD + all subdirectories + system tempdir (the latter removable with `--disallow-temp-dir`). Anything outside (sibling repos, `~/Documents`, `/etc`, etc.) is denied without a flag.
 
 **Expansion ladder:**
+
 1. `--add-dir <abs-path>` (repeatable) — surgical; whitelist exact roots. Preferred for cross-repo work.
 2. `--allow-all-paths` — disable verification entirely. Required when paths are unknown ahead of time.
 3. `--allow-all` / `--yolo` — superset (also enables tools and URLs).
 
 **Cross-repo patterns:**
+
 - _Coordinated dependency bump across N repos:_
 
   ```bash
@@ -236,6 +240,7 @@ Common envelope fields: `type`, `data`, `id` (uuid), `timestamp` (ISO-8601), `pa
 **CI auto-detection** (suppresses auto-update): one of `CI`, `BUILD_NUMBER`, `RUN_ID`, `SYSTEM_COLLECTIONURI` set. Belt-and-braces: also pass `--no-auto-update` and set `COPILOT_AUTO_UPDATE=false`.
 
 **Common CI invocation:**
+
 ```bash
 COPILOT_GITHUB_TOKEN="$FG_PAT" copilot \
   -p "$PROMPT" --allow-all-tools --no-ask-user \

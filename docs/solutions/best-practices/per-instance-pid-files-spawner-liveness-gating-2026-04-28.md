@@ -8,6 +8,7 @@ problem_type: best_practice
 component: development_workflow
 severity: high
 applies_when:
+
 - Managing subprocess lifecycles in plugins
 - Preventing PID reuse of unrelated processes
 - Handling cross-instance orphan cleanup

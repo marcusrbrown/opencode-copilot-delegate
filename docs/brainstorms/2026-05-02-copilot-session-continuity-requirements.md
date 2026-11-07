@@ -7,6 +7,7 @@ scope: deep
 topic: copilot-session-continuity
 ideation_source: docs/ideation/2026-04-27-copilot-delegate-v0.2.md (S2)
 related:
+
 - docs/research/copilot-cli-capabilities-2026-04-27.md
 - docs/brainstorms/2026-04-27-copilot-status-tui-requirements.md
   handoff: ce:plan
@@ -59,6 +60,7 @@ This is not just a convenience gap. The Copilot CLI already exposes continuity p
 ## Requirements
 
 **Continuity model**
+
 - R1. The first S2 slice must treat resume and connect as first-class continuity actions rather than as hidden flags on fresh delegation.
 - R2. S2 must accept raw Copilot session identities as first-class targets for continuity actions, not only plugin `cpl_*` task IDs.
 - R3. When the plugin already knows a matching local task or session record, the continuity flow should prefer that record as the default path while still allowing direct raw-ID targeting.
@@ -66,12 +68,14 @@ This is not just a convenience gap. The Copilot CLI already exposes continuity p
 - R5. ACP is deferred from the first S2 slice; the requirements assume continuity is built on existing Copilot CLI session-targeting capabilities rather than a long-lived ACP server.
 
 **Workspace continuity and safety**
+
 - R6. When the plugin knows prior workspace metadata for a target session, continuity actions must re-apply that working context, including the prior `cwd` and any captured `--add-dir` set.
 - R7. When the user targets a raw session identity that the plugin cannot map to prior workspace metadata, the flow must make that missing context explicit and require the user to supply the needed workspace inputs instead of silently continuing with partial access.
 - R8. The product surface must distinguish resume and connect in user-facing copy and action labels so users do not need to infer Copilot semantics from raw CLI flags.
 - R9. If a requested continuity action is invalid, unreachable, or incompatible with the target session, the plugin must fail with a structured, specific explanation rather than silently falling back to a fresh delegation.
 
 **User-facing surfaces**
+
 - R10. The first S2 slice must ship dedicated user-facing continuity tools rather than requiring callers to encode raw continuity flags through `copilot_delegate`.
 - R11. Continuity actions must return a current-process plugin task handle so existing output, cancel, notification, and status flows continue to work against the resulting live action. Continuity-derived tasks share the existing `TaskState` shape, distinguished by an `origin: 'spawn' | 'resume' | 'connect'` discriminator; where the current process did not originate the underlying Copilot session, the registry treats borrowed-process state explicitly so cancel, output, and notify behave truthfully rather than silently no-op.
 - R12. `/copilot-status` must act as an action launcher for continuity, not only as a passive status list.
@@ -79,6 +83,7 @@ This is not just a convenience gap. The Copilot CLI already exposes continuity p
 - R14. Continuity actions launched from `/copilot-status` must produce a live result that is immediately visible and controllable through the existing status surface.
 
 **Compatibility and slice discipline**
+
 - R15. The first S2 slice must compose with the existing S1 TUI/status foundation rather than requiring a new always-visible panel or a separate continuity-specific UI surface.
 - R16. The first S2 slice must work without introducing persistent plugin-owned task storage as a prerequisite.
 - R17. The first S2 slice must not require transcript replay, watchdog behavior, or ACP-mediated long-lived sessions to deliver its continuity value.

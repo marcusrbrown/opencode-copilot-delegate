@@ -8,6 +8,7 @@ problem_type: best_practice
 component: development_workflow
 severity: medium
 applies_when:
+
 - Implementing atomic file mutations
 - Handling concurrent appends to shared files
 - Ensuring crash-safe PID file writes

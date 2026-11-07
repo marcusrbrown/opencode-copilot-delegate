@@ -6,6 +6,7 @@ status: ready-for-planning
 scope: standard
 ideation_source: docs/ideation/2026-04-27-copilot-delegate-v0.2.md (S1)
 related:
+
 - docs/research/copilot-cli-capabilities-2026-04-27.md
 - docs/plans/2026-04-21-copilot-delegate-plugin.md (closed)
   layout_reference:
@@ -170,6 +171,7 @@ These resolve the design-lens-reviewer findings for v0.2.0. Drilled-view + concu
 ## v0.2.1 — preview (out of scope for this brainstorm)
 
 Drilled fullscreen view with live event streaming, mirroring OpenCode's native subagent shape (see frontmatter `layout_reference` for the captured static post-completion layout). Re-brainstormed when v0.2.0 is shipped and reviewed; that brainstorm will resolve:
+
 - Drilled view layout for the _streaming_ state (the captured reference is post-completion only).
 - Arrow-key consistency between list view (`↑` = previous item) and drilled view (`↑` = parent up).
 - Per-task event buffer caps (memory budget) for the focused delegation. (Pull-from-registry transport is already locked at prerequisite #4.)
@@ -184,13 +186,16 @@ Recent-history surface, expandable output cards, concurrent ←/→ navigation i
 ### v0.2.0
 
 **User-perceived value**:
+
 - A user running `/copilot-status` while a delegation is in flight sees the delegation in the list within one RPC round-trip (≤250ms over localhost HTTP).
 - A user can identify which of their running delegations is which (model, agent, elapsed, tool-call count) within 3 seconds of opening the list.
 
 **Performance**:
+
 - Pressing `c` on a running delegation, then confirming, results in the subprocess being killed within one second. The row visibly transitions to `cancelling` (intermediate state); once the subprocess actually dies and the existing system-reminder fires, the row reaches `cancelled` and is then removed from the list per the v0.2.0 running-only rule.
 
 **Compatibility**:
+
 - The plugin continues to work when the TUI plugin half is not installed: `copilot_delegate` / `copilot_output` / `copilot_cancel` and existing toasts/system-reminders continue. Only `/copilot-status` is unavailable.
 - The plugin continues to work when the TUI plugin half is _installed but fails to load_ (RPC unreachable, opentui mismatch, etc.): `/copilot-status` shows the spec'd RPC error state rather than throwing or blocking the session.
 - After a plugin reload while delegations are running, the PID workaround (see prerequisite #3) reaps the orphaned subprocesses on plugin re-init before any RPC requests are served; the modal then accurately reflects the registry state (no stale "running" rows).

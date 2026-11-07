@@ -241,6 +241,7 @@ The plugin is strong at spawning fresh delegations and weak at picking useful wo
 **Dependencies:** None.
 
 **Files:**
+
 - Modify: `src/runtime/task-registry.ts`
 - Modify: `src/runtime/subprocess.ts`
 - Modify: `src/runtime/envelope.ts`
@@ -250,6 +251,7 @@ The plugin is strong at spawning fresh delegations and weak at picking useful wo
 - Test: `tests/subprocess.test.ts`
 
 **Approach:**
+
 - Add to `TaskState` and `CreateTaskInput`: `origin: 'spawn' | 'resume' | 'connect'`, `copilotSessionId?: string`, `addDirs?: string[]`, `psIdentity?: { comm: string; lstart: string }`. `psIdentity` is captured AT SPAWN TIME (synchronous with PID assignment in `subprocess.ts`) for connect-origin tasks; not at first-event time.
 - Update single existing `createTask` call site in `delegate.ts` to pass `origin: 'spawn'` + `addDirs: args.add_dir`.
 - Capture `copilotSessionId` in `subprocess.ts`: the `result` event arrives at session-end (it's the terminal usage event per `jsonl-parser.ts:37`), so capture happens inside the existing `finalizeTask` flow alongside `assignFinalMessage`. Adequate for resume use cases (registry lookup); insufficient as an attach-time validation signal for connect (handled in Unit 3a).
@@ -257,10 +259,12 @@ The plugin is strong at spawning fresh delegations and weak at picking useful wo
 - Update test fixtures that construct `CreateTaskInput` by hand (~3 sites in `task-registry.test.ts`) to include `origin: 'spawn'`.
 
 **Patterns to follow:**
+
 - `assignFinalMessage` in `src/runtime/subprocess.ts` for the `result`-event capture pattern.
 - `CreateTaskInput` extraction pattern (TypeScript `Omit<...>`) already in the file.
 
 **Test scenarios:**
+
 - Happy path: `createTask` accepts `origin: 'spawn' | 'resume' | 'connect'` and stores it on `TaskState`. — registry
 - Happy path: `createTask` defaults `origin` to `'spawn'` when omitted from input. — registry
 - Happy path: `subprocess.ts` writes `copilotSessionId` to the task when a `result` event with `sessionId` arrives. — subprocess
@@ -269,6 +273,7 @@ The plugin is strong at spawning fresh delegations and weak at picking useful wo
 - Happy path: `buildEnvelope` includes `origin: 'spawn'` for tasks built by the existing fixtures (back-compat). — envelope
 
 **Verification:**
+
 - All existing tests pass with the new additive fields.
 - `OutputEnvelope` consumers (output tool tests) see `origin` populated.
 - Type-check + lint clean.
@@ -284,6 +289,7 @@ The plugin is strong at spawning fresh delegations and weak at picking useful wo
 **Dependencies:** Unit 1.
 
 **Files:**
+
 - Modify: `src/runtime/notify.ts`
 - Modify: `src/runtime/cancel-helper.ts`
 - Modify: `src/tools/cancel.ts`
@@ -292,6 +298,7 @@ The plugin is strong at spawning fresh delegations and weak at picking useful wo
 - Test: `tests/cancel-helper.test.ts`
 
 **Approach:**
+
 - Extract `attachCompletionPipeline(task, spawnResult, client, origin)` in `notify.ts`: encapsulates `void task.completionPromise.then(...)` + the existing `Object.assign(task, ...)` back-patch + `notifyCompletion(...)`. Existing `delegate.ts:177-204` becomes one call to this helper. **Helper signature includes `spawnResult` separately** because `task` and `spawnResult` are distinct objects after `createTask` (the registry destructures spawn fields into a fresh object); the back-patch of late-arriving fields (`exitCode`, `endedAt`, `finalMessage`, `errorText`) is load-bearing and must not silently drop.
 - Branch `buildNotificationText` on `origin` for the section header and action-required text. Three text variants per the table in the High-Level Technical Design section.
 - Cancel-helper origin branching is done in the **tool wrappers** (`cancel.ts`), not in `cancel-helper.ts` itself. The helper continues to return `{ cancelled, error? }`; `cancel.ts` reads `task.origin` post-call and translates to `{ disconnected: true, was_running: <bool> }` for connect or `{ cancelled: true, was_running: <bool> }` otherwise. Avoids the `was_running`-fabrication contract change at the helper level.
@@ -302,10 +309,12 @@ The plugin is strong at spawning fresh delegations and weak at picking useful wo
 **Execution note:** Refactor delegate.ts to use the extracted helper as a no-behavior-change first step; verify tests stay green; then add origin branching.
 
 **Patterns to follow:**
+
 - Existing `notifyCompletion` structure in `src/runtime/notify.ts`.
 - Existing in-flight counter logic — origin-agnostic; do not change.
 
 **Test scenarios:**
+
 - Happy path: existing spawn-origin completion pipeline behaves identically after refactor (regression — includes verifying late-arriving fields like `exitCode` and `finalMessage` are written through to the registry task). — notify
 - Happy path: `buildNotificationText` returns the resume header for `origin: 'resume'` and the connect header for `origin: 'connect'`. — notify
 - Happy path: `notifySpawn` toast for connect origin includes the silent-fallback warning text. — notify
@@ -316,6 +325,7 @@ The plugin is strong at spawning fresh delegations and weak at picking useful wo
 - Edge case: confirm-card renders connect copy for connect-origin rows. — confirm-card (covered in Unit 5 test set; cross-referenced)
 
 **Verification:**
+
 - All existing tools.test.ts spawn-origin tests stay green.
 - New cancel-from-connect test asserts the disconnected response shape.
 - Type-check + lint clean.
@@ -331,16 +341,19 @@ The plugin is strong at spawning fresh delegations and weak at picking useful wo
 **Dependencies:** Units 1 and 2.
 
 **Files:**
+
 - Create: `tests/fixtures/connect-attach.jsonl` (real capture against a known-bad ID; PII-scrubbed)
 - Create: `tests/fixtures/connect-mismatch.jsonl` (real capture of the silent-fallback case if reproducible)
 - Update: `docs/research/copilot-cli-capabilities-2026-04-27.md` §10.12 with the empirical finding
 
 **Approach:**
+
 - Spawn `copilot --connect=00000000-0000-0000-0000-000000000000 --output-format json -s --allow-all-tools --no-ask-user --no-remote -p "noop"` and capture full stdout + stderr.
 - Inspect events for any pre-`result` event carrying session identity (look for `assistant.message`, `tool.execution_start`, or other `*.start` events containing `sessionId` in raw payload).
 - Document findings in the capabilities reference doc; pick the validation strategy for Unit 3c based on what the capture shows.
 
 **Decision tree based on findings:**
+
 | Finding                                                            | Validation strategy for Unit 3c                                                                                                                                    |
 | ------------------------------------------------------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | Early event carries `sessionId`                                    | Validate against that event; abort connect on mismatch BEFORE any tool calls fire                                                                                  |
@@ -350,6 +363,7 @@ The plugin is strong at spawning fresh delegations and weak at picking useful wo
 **Test scenarios:** none (this unit is research; outputs are fixtures + a doc update).
 
 **Verification:**
+
 - Both fixtures committed; capabilities doc updated; the chosen validation strategy is unambiguous before Unit 3c starts.
 
 ---
@@ -363,12 +377,14 @@ The plugin is strong at spawning fresh delegations and weak at picking useful wo
 **Dependencies:** Unit 3a (the empirical finding may shape `normalizeContinuityError`'s pattern set).
 
 **Files:**
+
 - Create: `src/runtime/continuity-checks.ts` — owns `normalizeContinuityError(stderr): string | null`, `resolveConfigDir(explicit?: string): string`, `isCopilotSessionUuid(value: string): boolean`, `hasLocalCopilotSession(uuid: string, configDir: string): Promise<boolean>`
 - Create: `src/runtime/continuity-validation.ts` — input-validation helpers shared by tools and RPC: `validateTargetId(value: string): { type: 'uuid' | 'name'; value: string } | { error: string }`, `validateAddDirs(values: string[], allowedRoots: string[]): string[] | { error: string }`, `validateCwd(value: string, allowedRoots: string[]): string | { error: string }`
 - Test: `tests/continuity-checks.test.ts`
 - Test: `tests/continuity-validation.test.ts`
 
 **Approach:**
+
 - `resolveConfigDir`: priority order = explicit arg → `process.env.COPILOT_CONFIG_DIR` → `${homedir()}/.copilot`. Returns absolute path, no trailing slash.
 - `hasLocalCopilotSession`: stat `${configDir}/session-state/${uuid}/session.db`; returns `false` on ENOENT (no throws). Path built via `path.join`, then `path.resolve`-checked to stay under `${configDir}/session-state/` (defense against UUID-shaped path-traversal).
 - `validateTargetId`: discriminated return. UUID branch matches `/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i`; name branch matches `/^[A-Za-z0-9._-]{1,128}$/` (deliberately conservative; widen if Copilot CLI session names use other characters per future research). Anything else returns `{ error: 'invalid target ID format' }`.
@@ -379,10 +395,12 @@ The plugin is strong at spawning fresh delegations and weak at picking useful wo
 **Execution note:** Pure functions, RED-first.
 
 **Patterns to follow:**
+
 - Existing pure-function helpers in `src/runtime/orphan-reaper.ts` (`parsePsIdentity` is the model).
 - Existing path-containment patterns in `src/runtime/pid-file.ts`.
 
 **Test scenarios:**
+
 - Happy path: `resolveConfigDir(undefined)` returns `${homedir()}/.copilot`. — checks
 - Happy path: `resolveConfigDir('explicit')` returns the explicit value (resolved). — checks
 - Happy path: `resolveConfigDir(undefined)` honors `COPILOT_CONFIG_DIR` env when set. — checks
@@ -401,6 +419,7 @@ The plugin is strong at spawning fresh delegations and weak at picking useful wo
 - Edge case: `normalizeContinuityError` returns null for unrecognized stderr. — checks
 
 **Verification:**
+
 - All helpers covered; no I/O in any helper except `hasLocalCopilotSession` (which only reads).
 - Containment guards reject every traversal-shaped input the test set throws at them.
 
@@ -415,12 +434,14 @@ The plugin is strong at spawning fresh delegations and weak at picking useful wo
 **Dependencies:** Units 1, 2, 3a, 3b.
 
 **Files:**
+
 - Create: `src/tools/resume.ts` (also exports `launchResume`)
 - Modify: `src/index.ts` (register `copilot_resume` through the existing normalization + plugInOnce pipeline)
 - Test: `tests/tools.test.ts` (extend tool-catalog assertion to 4 tools; extend schema-walk cases to include resume args)
 - Test: `tests/resume.test.ts`
 
 **Approach:**
+
 - `resume.ts` argv: `['--resume=<targetId>', '--output-format', 'json', '-s', '--allow-all-tools', '--no-ask-user']` + `appendRepeatedFlag` for `--add-dir`. Pre-flight: `validateTargetId` first; if `type === 'uuid'`, call `hasLocalCopilotSession(value, resolveConfigDir(args.configDir))`; if false, return `{ error: "No local session found for UUID <id>" }` without spawning. **Resume does NOT accept a `prompt` argument** (semantic alignment: resume + new prompt is fork; not part of this release). Schema: `{ targetId: string, cwd?: string, addDirs?: string[], configDir?: string }`.
 - The tool calls `validateAddDirs(args.addDirs, allowedRoots)` and `validateCwd(args.cwd, allowedRoots)` before assembling argv. Validation failures return structured `{ error }` without spawning.
 - Lookup-by-known-task (R3): scan `getAllTasks()` for any task whose `copilotSessionId === targetId`; if found, reuse its captured `addDirs` as workspace context (re-validated through `validateAddDirs`). The lookup returns workspace metadata only — resume always creates a new `TaskState`, never aliases to a prior task handle.
@@ -431,12 +452,14 @@ The plugin is strong at spawning fresh delegations and weak at picking useful wo
 **Execution note:** Test-first for the tool factories using the existing fake-binary pattern from `tests/tools.test.ts`. Validation helpers from Unit 3b already covered; here we only test wiring + argv assembly + pre-flight gating + happy/sad paths.
 
 **Patterns to follow:**
+
 - `src/tools/delegate.ts` for tool factory shape, argv assembly, `appendRepeatedFlag`, registry write.
 - `src/runtime/cancel-helper.ts` for the shared-helper pattern called by both tool and RPC route.
 - `tests/tools.test.ts` fake-binary approach for the new tests.
 - `getPidIdentity` from `src/runtime/orphan-reaper.ts` for the connect identity capture.
 
 **Test scenarios:**
+
 - Happy path (resume): target = known plugin task's `copilotSessionId`; tool reuses captured `addDirs`, spawns `copilot --resume=<id> --add-dir <dir1> ...`, returns `{ task_id }`. — resume
 - Happy path (resume): target = raw UUID with local session-state present; spawns and returns task handle. — resume
 - Error path (resume): target = valid UUID with no local `session.db`; returns `{ error: "No local session found for UUID <id>" }` without spawning. — resume
@@ -450,6 +473,7 @@ The plugin is strong at spawning fresh delegations and weak at picking useful wo
 - Edge case: `normalizeContinuityError` returns null for stderr it does not recognize. — continuity-errors
 
 **Verification:**
+
 - 4 tools registered; tool catalog test passes.
 - All schema-walk cases pass after extension.
 - Resume-mode tasks DO create an orphan-ledger entry (regression check that resume keeps the existing spawn ownership behavior).
@@ -465,6 +489,7 @@ The plugin is strong at spawning fresh delegations and weak at picking useful wo
 **Dependencies:** Unit 3c (the route handlers call `launchResume` / `launchConnect`).
 
 **Files:**
+
 - Modify: `src/runtime/rpc-contract.ts`
 - Modify: `src/runtime/rpc-server.ts`
 - Modify: `src/tui/rpc-client.ts`
@@ -472,6 +497,7 @@ The plugin is strong at spawning fresh delegations and weak at picking useful wo
 - Test: `src/tui/__tests__/rpc-client.test.ts`
 
 **Approach:**
+
 - `rpc-contract.ts`: add three schema pairs.
   - `TasksResumeRequestSchema`: `{ targetId: string (length 1–128), cwd?: string (length ≤ 4096), addDirs?: string[] (max 32 entries, each length ≤ 4096), configDir?: string (length ≤ 4096) }`. Length caps come from input-validation primitives; full semantic validation lives in Unit 3b helpers, called inside the route handler.
   - `TasksConnectRequestSchema`: same shape minus `configDir` semantics specific to local resume (or include for symmetry; document the difference).
@@ -487,11 +513,13 @@ The plugin is strong at spawning fresh delegations and weak at picking useful wo
 - `rpc-client.ts`: add `tasksResume(input)`, `tasksConnect(input)`, `tasksRecentSessions(input)` methods using the existing `request({ ... })` wrapper (per-request timeout + dispose composition already there).
 
 **Patterns to follow:**
+
 - Existing `tasksCancel` round-trip in `rpc-contract.ts` / `rpc-server.ts` / `rpc-client.ts`.
 - `parseValidatedJsonBody` and `validateBody` helpers in `rpc-server.ts` for input validation.
 - Top-level `try/catch → structured 500` guard already in `handleRpcRequest`.
 
 **Test scenarios:**
+
 - Happy path: `POST /tasks/resume` with a valid payload returns 200 with `{ taskId }`. — rpc-server
 - Error path: `POST /tasks/resume` with a malformed payload returns 400 with structured Zod errors. — rpc-server
 - Error path: `POST /tasks/resume` with a path-traversal-shaped `targetId` returns 200 with `{ error: 'invalid target ID format' }` (validation primitive rejects). — rpc-server
@@ -510,6 +538,7 @@ The plugin is strong at spawning fresh delegations and weak at picking useful wo
 - Client: `tasksRecentSessions` round-trips to a stubbed server. — rpc-client
 
 **Verification:**
+
 - New routes appear in the route table and respond to authorized requests.
 - Schema validation rejects malformed bodies before they reach the launcher.
 - All existing RPC tests stay green.
@@ -525,6 +554,7 @@ The plugin is strong at spawning fresh delegations and weak at picking useful wo
 **Dependencies:** Unit 4 (the form/list submit via the new RPC routes).
 
 **Files:**
+
 - Modify: `src/tui/components/modal-list.tsx` (add focus model, action band; current modal has no focus management)
 - Create: `src/tui/components/recent-sessions-view.tsx` (new dialog body)
 - Create: `src/tui/components/raw-id-input.tsx` (new dialog body — minimal one-input form)
@@ -537,6 +567,7 @@ The plugin is strong at spawning fresh delegations and weak at picking useful wo
 - Test: `src/tui/__tests__/index.test.ts` (extend existing fetch-stub end-to-end coverage for the new flows)
 
 **Approach:**
+
 - **Footer keyboard hints**: extend modal-list footer from `Esc close` to `Esc close · R Resume · C Connect`. Single convention across all surfaces: footer hints carry keyboard shortcuts; inline buttons carry verb labels. No mixed conventions.
 - **Focus model in modal-list**: rows take focus first (vertical list nav with up/down); from-rows the user can press R or C to jump to actions; from-actions the user navigates left/right between actions; Tab not used (TUI minimalism). Implements the focus model from scratch since modal-list currently has none. Reuses `useRenderer().keyInput` pattern from confirm-card.
 - **Recent Sessions view** (resume primary):
@@ -557,12 +588,14 @@ The plugin is strong at spawning fresh delegations and weak at picking useful wo
 **Execution note:** Implement components in isolation with stubbed RPC clients; wire to real clients only after each component's keyboard + focus + submit + error states pass tests independently. Implement the focus model in modal-list as a discrete first sub-step (separate commit if useful) before adding the Recent Sessions / raw-ID flows on top.
 
 **Patterns to follow:**
+
 - `confirm-card.tsx` for focus ring, keyboard handling, `onMouseUp` patterns, `KeyEvent` matching helpers.
 - `modal-list.tsx` existing layout primitives (`<box>`, `<text>`, `BoxRenderable` typed refs).
 - `api.ui.dialog.replace(() => <Component />)` swap pattern from `tui/index.tsx`.
 - `InputRenderable` from `@opentui/core` for the single-input form (paste handling settled empirically; document any quirks).
 
 **Test scenarios:**
+
 - Happy path: pressing `R` from modal-list opens the Recent Sessions view; pressing `C` opens the raw-ID input form in connect mode. — index
 - Happy path: Recent Sessions view renders rows from `tasksRecentSessions` response sorted by mtime descending. — recent-sessions
 - Happy path: selecting a Recent Sessions row submits `tasksResume({ targetId: <full-uuid> })` and replaces back to modal-list on success. — recent-sessions
@@ -578,6 +611,7 @@ The plugin is strong at spawning fresh delegations and weak at picking useful wo
 - Integration: focus model navigates rows (up/down), jumps to actions on R/C, navigates actions (left/right), wraps within each region but does not cross. — modal-list
 
 **Verification:**
+
 - New affordances visible in the modal; keyboard shortcut + click both work.
 - Form roundtrips through both new RPC routes successfully.
 - No regression on existing modal flows (cancel, list display, refresh).
@@ -593,12 +627,14 @@ The plugin is strong at spawning fresh delegations and weak at picking useful wo
 **Dependencies:** Units 1-5 functionally complete.
 
 **Files:**
+
 - Modify: `AGENTS.md`
 - Modify: `README.md`
 - Modify: `src/tools/output.ts` (extend tool description to mention `origin` field and the connect-disconnect / user-cancel asymmetry)
 - Create: `.changeset/<slug>.md` (`minor` bump)
 
 **Approach:**
+
 - `AGENTS.md`: update "What This Project Is" section to list 5 tools (3 → 5). Add a new "Borrowed sessions" subsection under Design Decisions describing the connect-mode rule (local connector PID owned, remote session borrowed, no orphan ledger entry for connect, `disconnected` cancel response, captured `psIdentity` for safety, identity gate before destructive action). Add a "RPC token authority" subsection noting that after this slice, the port-file Bearer token grants subprocess-spawn authority bounded by input validation + per-session launch quota; same-UID local-attacker model unchanged but impact-of-compromise grows. Update the architecture tree to list `src/tools/resume.ts`, `src/tools/connect.ts`, `src/runtime/continuity-checks.ts`, `src/runtime/continuity-validation.ts`, `src/tui/components/recent-sessions-view.tsx`, `src/tui/components/raw-id-input.tsx`. Note: `notify.ts` in-flight-counter discipline behaves identically across all origins (no per-origin counter changes).
 - `README.md`: add a "Resume and connect" section describing the two new tools, the Recent Sessions view, raw-ID input fallback, and the after-restart raw-ID contract (no plugin-side catalog; Recent Sessions view reads Copilot CLI's own state). Document the connect silent-fallback gotcha ("invalid IDs may silently start a fresh session in your repo") prominently.
 - `output.ts` description: add a paragraph explaining that for connect-origin tasks, `status` will be `'cancelled'` on disconnect with `origin: 'connect'` carrying the truth; consumers wanting to distinguish should branch on `origin`, not `status`.
@@ -607,13 +643,16 @@ The plugin is strong at spawning fresh delegations and weak at picking useful wo
 **Execution note:** none — pure documentation pass.
 
 **Test scenarios:**
+
 - Test expectation: none — pure documentation pass with no executable behavior.
 
 **Patterns to follow:**
+
 - Existing AGENTS.md structure and tone.
 - Existing changeset bodies for feature additions (e.g., the v0.7.0+ ones).
 
 **Verification:**
+
 - Lint passes on the changeset.
 - AGENTS.md tree matches the actual `src/` layout after the implementation lands.
 
@@ -642,6 +681,7 @@ The new RPC routes accept user-supplied target IDs and workspace paths and forwa
 **`psIdentity` capture timing**: at spawn time (synchronously with PID assignment in `subprocess.ts`), NOT after the first JSONL event. Captured `psIdentity` is verified before any later destructive action (cancel of connect-origin task) by re-calling `getPidIdentity(task.pid)` and comparing. Mismatch → log warning, skip kill, still transition to terminal state.
 
 **Threat model under same-UID local-attacker assumption (unchanged from existing model):**
+
 - An attacker reading the port file at `~/.cache/opencode/copilot-delegate/<session>/server-port.json` can POST to the RPC routes. Before this slice, that gave them list-and-cancel authority; after this slice, that gives them spawn-arbitrary-Copilot-subprocess authority bounded by the input validation contracts above and the per-session launch quota.
 - The port file is created mode `0o600` in a directory mode `0o700`; existing posture is correct. This slice does not change file permissions but documents the elevated authority of the token in `AGENTS.md` (Unit 6).
 - Per-session launch quota (5 concurrent, 20-per-minute) caps the blast radius of a compromised token even within the validated input contract.

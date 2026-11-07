@@ -4,6 +4,7 @@ title: Copilot CLI memory experiment — `store_memory` tool surface
 type: research
 date: 2026-05-03
 related:
+
 - docs/research/copilot-cli-capabilities-2026-04-27.md
   status: empirical
 
