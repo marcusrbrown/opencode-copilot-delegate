@@ -137,12 +137,14 @@ None — every decision resolves at planning time.
 **Dependencies:** None — independent of PR-2
 
 **Files:**
+
 - Modify: `src/tui/index.tsx` (replace lines 48–57's `api.command.register` block with a dual-path helper)
 - Modify: `package.json` (devDep `@opencode-ai/plugin`: bump to latest `1.14.4x`; peerDep: narrow to `>=1.14.41`)
 - Modify: `bun.lock` / `bun.lockb` (regenerate via `bun install --lockfile-only` after package.json edit)
 - Test: `src/tui/__tests__/index.test.ts` (extend stubs to cover both registration paths)
 
 **Approach:**
+
 - Extract a helper inside `src/tui/index.tsx` (e.g., `registerCommands(api, openList)`) that takes the api object and the openList callback
 - Inside the helper, runtime-feature-detect: `if (typeof api.keymap?.registerLayer === 'function')` → use `keymap.registerLayer({ commands: [...], bindings: [] })`; `else if (typeof api.command?.register === 'function')` → fall back to `api.command.register(() => [...])`; `else` → log a warning via `client.app.log` (or `console.warn` if client unavailable) and return
 - The keymap path's command shape uses `namespace: 'palette'`, `name: 'copilot-status'`, `title: 'Copilot Status'`, `category: 'Copilot'`, `run() { openList() }` (mirrors Magic Context's exact field set from commit `5fe1c4f`)
@@ -150,10 +152,12 @@ None — every decision resolves at planning time.
 - The helper returns an `unregister` function that calls the path-appropriate cleanup. The existing `api.lifecycle.onDispose(() => { rpc.dispose(); unregister() })` block stays.
 
 **Patterns to follow:**
+
 - Magic Context `5fe1c4f` runtime feature-detect pattern (verified in brainstorm Phase 3.5)
 - Existing TUI test pattern at `src/tui/__tests__/index.test.ts:88` (stubs the api surface)
 
 **Test scenarios:**
+
 - Happy path: when `api.keymap.registerLayer` exists and `api.command.register` does NOT, registration calls `keymap.registerLayer` exactly once with a `commands` array containing one entry whose `name === 'copilot-status'` and `run` callback invokes `openList()`
 - Happy path: when `api.command.register` exists and `api.keymap.registerLayer` does NOT, registration calls `command.register` with a function that returns one entry whose `value === '/copilot-status'` and `onSelect` callback invokes `openList()`
 - Edge case: when BOTH `api.keymap.registerLayer` and `api.command.register` exist (the 1.14.44+ shim era), the keymap path is preferred and `command.register` is NOT called
@@ -161,6 +165,7 @@ None — every decision resolves at planning time.
 - Integration: dispose callback unregisters via the path that was used to register (the test verifies the correct unregister was returned)
 
 **Verification:**
+
 - `bun test src/tui/__tests__/index.test.ts` passes with the new scenarios
 - `bun run typecheck` passes against the new `@opencode-ai/plugin` types
 - Manual verification optional but recommended: launch OpenCode with the local plugin path; confirm `/copilot-status` appears in the slash menu and opens the modal list
@@ -178,11 +183,13 @@ None — every decision resolves at planning time.
 **Dependencies:** None within PR-2 (this is the foundation)
 
 **Files:**
+
 - Create: `src/lib/rpc-cleanup.ts` (the relocated `wireRpcServerCleanup` function and its closures)
 - Modify: `src/index.ts` (remove the `export` keyword + function body at lines 27–59; import from `./lib/rpc-cleanup`)
 - Modify: any test file that imports `wireRpcServerCleanup` from `src/index.ts` directly (grep first; if there is a test importing from the entry path, update its import to point at `src/lib/rpc-cleanup`)
 
 **Approach:**
+
 - Move the entire `wireRpcServerCleanup` function verbatim — including its `closeOnce`, `onBeforeExit`, `onSigterm` inner closures and the `process.on`/`process.once` wiring — into `src/lib/rpc-cleanup.ts`
 - Export it as `export function wireRpcServerCleanup(...)` from the new file
 - Update the import block in `src/index.ts` to add `import { wireRpcServerCleanup } from './lib/rpc-cleanup'`
@@ -190,16 +197,19 @@ None — every decision resolves at planning time.
 - No behavioral change to the function itself
 
 **Patterns to follow:**
+
 - Systematic PR #355's `src/lib/bootstrap.ts` relocation of `applyBootstrapContent` (commit `10660cd` in the Systematic repo, which became `183b459` on `main`)
 - The `src/lib/` directory already exists in this repo (e.g., `src/lib/kill-tree.ts`, `src/lib/normalize-tool-arg-schemas.ts`) — follow that naming and structure
 
 **Test scenarios:**
+
 - Happy path: existing tests that exercise `wireRpcServerCleanup` indirectly through the plugin's RPC lifecycle continue to pass without modification
 - Happy path: if any test imports `wireRpcServerCleanup` directly, the new import path resolves and the test's expectations are preserved
 - Edge case: `bun run typecheck` succeeds — no orphaned import, no name collision in `src/lib/`
 - Test expectation: no new unit tests required if the function's coverage is already adequate through integration paths; an explicit "behavioral surface didn't change" assertion is the existing test suite passing unchanged
 
 **Verification:**
+
 - `bun run typecheck` passes
 - `bun run lint` passes
 - All existing unit tests pass without modification
@@ -216,9 +226,11 @@ None — every decision resolves at planning time.
 **Dependencies:** Unit 2 (the gate from U4 only adds value once the export shape is correct, which U2 produces)
 
 **Files:**
+
 - Modify: `scripts/build.ts` (change `target: 'bun'` to `target: 'node'` on the plugin-entry build options at line 18; TUI entry block at lines 22–33 stays unchanged)
 
 **Approach:**
+
 - Before changing the target, run `grep -rE "import.meta.(require|main)" src/` to verify no source code depends on Bun-specific `import.meta` extensions
 - Also `grep -rE "Bun\." src/` to verify no source uses the Bun global (only test files should, if any)
 - If grep reveals Bun-specific usage in the plugin entry's direct import graph, fix only the local swap needed for Node compatibility; if the change would ripple beyond that, stop and split a follow-up task
@@ -227,10 +239,12 @@ None — every decision resolves at planning time.
 - Run `node --input-type=module -e "import('./dist/index.js').then(m => console.log(Object.keys(m).sort()))"` and verify it loads with output `['default']` (U2 produces the default-only export; the load itself is what this unit enables)
 
 **Patterns to follow:**
+
 - Sister Systematic repo's `package.json` build script uses `--target bun` for a specific reason (`jsonc-parser` UMD resolution); this repo has no such dep, so `target: 'node'` is the correct default
 - The TUI entry's `target: 'bun'` is justified by `@opentui/solid/preload` — keep that as-is
 
 **Test scenarios:**
+
 - Happy path: `bun scripts/build.ts` succeeds with no errors
 - Integration: after build, `node --input-type=module -e "import('./dist/index.js')"` exits 0
 - Integration: after build, `bun --input-type=module -e "import('./dist/index.js')"` still exits 0 (OpenCode runtime stays compatible)
@@ -238,6 +252,7 @@ None — every decision resolves at planning time.
 - Edge case: existing tests under `tests/` and `src/**/__tests__/` still pass — they run under Bun where both targets work, so source-level coverage is unaffected
 
 **Verification:**
+
 - `dist/index.js` loads under Node ESM
 - `dist/index.js` still loads under Bun
 - All existing tests pass
@@ -254,9 +269,11 @@ None — every decision resolves at planning time.
 **Dependencies:** Unit 2 (default-only export must exist for the gate to pass on this PR), Unit 3 (Node-loadable artifact required for the gate to run)
 
 **Files:**
+
 - Modify: `.github/workflows/ci.yaml` (add Node setup step + smoke test step inside `jobs.check`, after the existing Build step and before Unit tests; mirror Systematic's `.github/workflows/main.yaml` structure)
 
 **Approach:**
+
 - Add `actions/setup-node@<pinned-sha>` step with `node-version: 24` (matching Systematic's pin) between the existing build step and any subsequent test/release steps in the relevant job
 - Add a "Verify plugin loads in Node.js" step that runs the same Node ESM smoke pattern Systematic uses, adapted to this repo's symbol set (no `plugin.config()` call — this plugin doesn't expose a `config` hook; instead exercise the `tool` hook surface and assert the four `copilot_*` tools are registered)
 - The export-shape assertion is the gate's central value: `if (JSON.stringify(Object.keys(m).sort()) !== JSON.stringify(['default'])) { throw new Error('...') }`
@@ -269,15 +286,18 @@ None — every decision resolves at planning time.
 - Then exercise the plugin factory: `const plugin = await m.default({ client: { app: { log: async () => {} } }, directory: process.cwd() })` and assert `typeof plugin.tool.copilot_delegate.execute === 'function'`, same for `copilot_output`, `copilot_cancel`, `copilot_resume`
 
 **Patterns to follow:**
+
 - Systematic `.github/workflows/main.yaml` (build job, "Verify plugin loads in Node.js" step) — adapt the structure to this repo's CI but mirror the assertion logic verbatim
 
 **Test scenarios:**
+
 - Integration: CI smoke step passes on this branch (current code has default-only export + four tools registered)
 - Integration: CI smoke step fails fast with the explanatory error if a contributor adds `export const helper = ...` to `src/index.ts`
 - Integration: CI smoke step fails with a clear "default is not a function" error if `src/index.ts` removes the default export
 - Integration: CI smoke step verifies all four `copilot_*` tools' `execute` is a function (catches accidental tool-surface regressions)
 
 **Verification:**
+
 - The new CI step passes on this PR's branch
 - A manual local-dry-run of the smoke test (`node --input-type=module -e "..."` with the assertion code) passes against the current `dist/index.js`
 - A manual local-dry-run with a deliberately-added second export fails with the expected error message
@@ -294,10 +314,12 @@ None — every decision resolves at planning time.
 **Dependencies:** Unit 4 (the CI gate enforces R3/R4; this unit closes out R6)
 
 **Files:**
+
 - Modify: `src/runtime/plugin-singleton.ts` (add a header comment block at the top of the file, between the file's `import` block and its first exported symbol)
 - No test changes
 
 **Approach:**
+
 - The header comment is one paragraph plus a cross-reference. Content:
   - State the design: `plugInOnce` returns real hooks on the first invocation and `{}` (empty hooks) on duplicates, so the OpenCode host registers tools exactly once per process even when the plugin is listed in both user-level and project-level `opencode.json`
   - State why this design stays in this codebase: `initializePlugin` binds an RPC server to a localhost port and writes a PID file under XDG state dir for orphan reaping. Both side effects must run once per process; per-load registration would compete for the port and corrupt orphan tracking
@@ -305,13 +327,16 @@ None — every decision resolves at planning time.
   - Link to Systematic's docs/solutions doc: `docs/solutions/integration-issues/opencode-plugin-factory-duplicate-registration-2026-05-04.md` (the original justification, written when both repos shared the model)
 
 **Patterns to follow:**
+
 - The existing comment in Systematic's `src/lib/bootstrap.ts` (lines 7–11) — short, explanatory, cross-references future-pain it prevents
 
 **Test scenarios:**
+
 - Test expectation: none — this is a documentation-only change with no behavioral surface
 - Regression verification is covered by U4's PR-2 regression check
 
 **Verification:**
+
 - No additional verification beyond U4's PR-2 regression check
 
 ## System-Wide Impact

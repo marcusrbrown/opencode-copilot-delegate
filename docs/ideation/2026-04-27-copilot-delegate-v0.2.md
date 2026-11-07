@@ -12,6 +12,7 @@ volume: default (~30 raw, ~22 deduped, 7 survivors)
 frames: pain & friction · inversion/automation · assumption-breaking · leverage/compounding
 handoff: ce:brainstorm on a single chosen survivor
 related:
+
 - docs/research/copilot-cli-capabilities-2026-04-27.md
 - docs/plans/2026-04-21-copilot-delegate-plugin.md (closed, all T1–T11 ticked)
 - docs/solutions/best-practices/reliable-cli-integration-testing-2026-04-26.md

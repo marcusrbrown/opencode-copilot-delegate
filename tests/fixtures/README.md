@@ -10,6 +10,7 @@ Captured from live `copilot` CLI output for testing the JSONL parser.
 | `connect-mismatch.jsonl`, `resume-mismatch.jsonl`           | 1.0.40      | 2026-05-02   | Continuity-feature research captures (Unit 3a)         |
 
 **Command patterns:**
+
 - Original (1.0.34): `copilot -p "<prompt>" --output-format json -s --allow-all-tools --no-ask-user --model <model>`
 - Continuity (1.0.40): `copilot --connect=<id>` or `--resume=<id>` plus the same flags, with `--no-remote` added.
 

@@ -8,6 +8,7 @@ problem_type: best_practice
 component: development_workflow
 severity: high
 applies_when:
+
 - Verifying process ownership securely
 - Preventing PID reuse and tampering
 - Using kernel-tracked process identity

@@ -45,6 +45,7 @@ The TUI plugin must register the `/copilot-status` slash command using `api.keym
 ### R4. CI export-shape gate
 
 The CI workflow must include a Node-ESM smoke test that:
+
 1. Imports `./dist/index.js` under Node (not Bun)
 2. Asserts `Object.keys(m).sort()` equals `['default']`
 3. On failure, throws an error whose message explains that the plugin entry must export `default` only and references the loader-iterates-named-exports behavior
@@ -62,6 +63,7 @@ The brainstorm doc (this file) is the primary record of the decision to keep `pl
 ### R7. Existing functionality preserved
 
 After R1–R6 land, the plugin must:
+
 - Load successfully in OpenCode 1.14.41 (current pin) and `>=1.14.44` (new target)
 - Register all four tools: `copilot_delegate`, `copilot_output`, `copilot_cancel`, `copilot_resume`
 - Show the `/copilot-status` slash command in the TUI
@@ -122,6 +124,7 @@ _Covers R6._
 ## Scope Boundaries
 
 **In scope (one or two PRs, planner's call):**
+
 - TUI API dual-path migration (R1, R2) — _user-facing fix; can ship as its own PR ahead of the structural work if velocity matters_
 - Plugin entry default-only export refactor (R3) — _must ship with R4 + R5_
 - CI Node-ESM export-shape smoke test (R4) — _must ship with R3 + R5; requires adding a Node setup step to CI (the current pipeline is Bun-only)_
@@ -132,6 +135,7 @@ _Covers R6._
 Dependencies: R3 → R5 (smoke test needs Node-loadable build) → R4. R1/R2 are independent. Planner may bundle all six in one PR for atomicity or split into (R1/R2) + (R3/R4/R5/R6/R7).
 
 **Out of scope (deferred):**
+
 - Per-load registration model port from Systematic — explicitly rejected (R6 captures the rationale)
 - TUI entry build target changes — stays `target: 'bun'` because `@opentui/solid/preload` is Bun-specific
 - Renaming any tools, adding new tools, or changing tool argument schemas

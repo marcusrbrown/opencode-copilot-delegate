@@ -8,6 +8,7 @@ problem_type: best_practice
 component: testing_framework
 severity: medium
 applies_when:
+
 - Building integration tests for an OpenCode plugin that exercises tool execution end-to-end
 - Choosing between an SDK harness (`opencode serve` + `createOpencodeClient`) and a CLI subprocess
 - Diagnosing test timeouts that look like plugin-loading or tool-calling regressions

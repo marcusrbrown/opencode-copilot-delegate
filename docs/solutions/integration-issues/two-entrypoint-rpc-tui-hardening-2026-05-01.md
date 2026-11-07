@@ -7,6 +7,7 @@ module: copilot-status-tui-foundation
 problem_type: integration_issue
 component: tooling
 symptoms:
+
 - server tools could fail to register when the TUI RPC server could not start
 - the packaged plugin could expose a broken ./tui entrypoint or omit the built TUI bundle
 - the TUI could render stale async results after cleanup or hold stale task selection during cancel flows

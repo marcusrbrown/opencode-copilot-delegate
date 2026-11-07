@@ -128,10 +128,12 @@ tests/
 **Dependencies:** None.
 
 **Files:**
+
 - Create: `src/runtime/pid-file.ts`
 - Create: `tests/pid-file.test.ts`
 
 **Approach:**
+
 - Export `appendPidEntry(filePath, pid, comm, startTimeString) → Promise<void>` and `removePidEntry(filePath, pid) → Promise<void>`. Also export `resolveInstancePidFilePath(): string` that builds `<state-dir>/orphans/<process.pid>.pids` (uses the host plugin's PID; deliberately not `OPENCODE_SESSION_ID` — see Key Decisions for the spawner-liveness rationale).
 - Append: read existing content (or empty if missing), construct new content with the appended `<pid>\t<comm>\t<startTime>` tab-separated line, write to `<path>.tmp.<random>` with `fs.constants.O_EXCL | O_CREAT | O_WRONLY` and `mode: 0o600`, `fs.rename` to final path, `fs.chmod(path, 0o600)` for belt-and-braces.
 - Remove: same flow, but compute new content by filtering out the matching `<pid>\t` prefix.
@@ -142,6 +144,7 @@ tests/
 **Execution note:** Test-first per AGENTS.md mandate.
 
 **Test scenarios:**
+
 - _Happy path:_ `appendPidEntry` to a fresh path → file exists with one tab-separated `<pid>\t<comm>\t<lstart>` line; mode is `0o600`; parent dir mode is `0o700`.
 - _Happy path:_ `appendPidEntry` 3 times sequentially → file has 3 lines in spawn order.
 - _Happy path:_ `removePidEntry(pid)` on a file with 3 entries removes only the matching one; remaining order preserved.
@@ -165,10 +168,12 @@ tests/
 **Dependencies:** Unit 1.
 
 **Files:**
+
 - Create: `src/runtime/orphan-reaper.ts`
 - Create: `tests/orphan-reaper.test.ts`
 
 **Approach:**
+
 - Export `reapOrphans({ pidFileDir, currentInstancePath, killProcessTree, getPidComm, getPidStartTime, isPluginAlive }) → Promise<{ reaped: number, skipped: number, scannedFiles: number, deletedFiles: number }>`. Inject all process-shellouts and the plugin-liveness probe for testability. Default `isPluginAlive = (pid) => { try { process.kill(pid, 0); return true } catch (e) { return e.code === 'EPERM' } }`.
 - `getPidComm(pid)`: `spawn('ps', ['-p', String(pid), '-o', 'comm='])` with no shell. Return trimmed stdout, or `null` on non-zero exit / process gone.
 - `getPidStartTime(pid)`: `spawn('ps', ['-p', String(pid), '-o', 'lstart='])` with no shell. Return trimmed stdout, or `null`.
@@ -192,6 +197,7 @@ tests/
 **Execution note:** Test-first per AGENTS.md mandate.
 
 **Test scenarios:**
+
 - _Happy path:_ Empty `pidFileDir` → `{ reaped: 0, skipped: 0, scannedFiles: 0, deletedFiles: 0 }`; no error.
 - _Happy path:_ Current instance's file with one alive PID whose live `comm` and `lstart` match recorded → `killProcessTree` called once; `{ reaped: 1, skipped: 0, scannedFiles: 1, deletedFiles: 0 }`; current-instance file truncated.
 - _Happy path (foreign file, dead spawner):_ `<dir>/<own-pid>.pids` (current, empty) + `<dir>/9999.pids` (foreign, plugin PID 9999 dead per `isPluginAlive`, 1 entry: alive matching child). Reap kills the orphaned child; foreign file is **deleted** post-reap; `{ reaped: 1, skipped: 0, scannedFiles: 2, deletedFiles: 1 }`.
@@ -225,6 +231,7 @@ tests/
 **Dependencies:** Units 1, 2.
 
 **Files:**
+
 - Create: `src/runtime/task-status.ts` (the `setStatus` helper)
 - Create: `tests/task-status.test.ts`
 - Modify: `src/runtime/task-registry.ts` (call `appendPidEntry` after spawn)
@@ -233,6 +240,7 @@ tests/
 - Modify: `tests/task-registry.test.ts`, `tests/subprocess.test.ts`
 
 **Approach:**
+
 - `src/runtime/task-status.ts`: export `setStatus(task, newStatus, options?: { pidFilePath?: string })`.
   - **Terminal-state guard**: if `task.status` is already terminal (`complete | failed | cancelled`) AND `newStatus` is terminal, the helper no-ops and returns. This preserves the existing `finalizeTask` `if (task.status !== 'cancelled')` invariant: when the subprocess `close` event fires after the abort listener has set `cancelled`, `setStatus(task, 'complete' | 'failed', ...)` is a no-op and `cancelled` is preserved.
   - **Status assignment**: otherwise, `task.status = newStatus`.
@@ -263,6 +271,7 @@ tests/
 **Execution note:** Test-first per AGENTS.md mandate.
 
 **Test scenarios:**
+
 - _Unit (`setStatus`):_ `setStatus(task, 'complete', { pidFilePath })` from running state → `task.status === 'complete'`; `removePidEntry` invoked with `task.pid`.
 - _Unit (`setStatus` terminal-state guard):_ `task.status === 'cancelled'`; call `setStatus(task, 'complete', { pidFilePath })` → `task.status` remains `'cancelled'`; `removePidEntry` NOT invoked. **This is the exact invariant the existing `finalizeTask` guard protects** — directly verifies the cancel survives the close-after-abort sequence.
 - _Unit (`setStatus` terminal-state guard):_ `task.status === 'failed'`; call `setStatus(task, 'cancelled')` → `task.status` remains `'failed'` (terminal-state idempotent in both directions).
@@ -291,10 +300,12 @@ tests/
 **Dependencies:** None (independent of Units 1–3).
 
 **Files:**
+
 - Modify: `src/runtime/subprocess.ts`
 - Modify: `tests/subprocess.test.ts`
 
 **Approach:**
+
 - Locate the existing `child.stdout?.on('data', (chunk: string) => { ... })` callback inside `spawnCopilot`. Inside the `for (const line of lines)` loop, place the guard **before** `parseJsonlLine(line)` (not before `events.push`) so a cancelled task does not pay the parse cost on buffered lines: `if (task.status !== 'running') break;`.
 - The partial-line buffer update (`lines.pop()`) runs _before_ the loop body, so `break` and `return` are equivalent at this point — `break` is the natural choice for an in-loop early-exit.
 - Single-threaded JS guarantees: the guard is checked synchronously with every iteration; once `task.status` flips, no subsequent loop iteration in this or future `data` ticks will parse or append.
@@ -303,6 +314,7 @@ tests/
 **Execution note:** Test-first per AGENTS.md mandate.
 
 **Test scenarios:**
+
 - _Edge case (cancel race):_ Spawn a fake subprocess that emits 5 JSONL lines slowly. After line 2 is parsed, set `task.status = 'cancelled'` (simulating the abort listener). Allow the remaining 3 lines to drain through the parser. Assert: `task.events.length === 2`; the 3 post-cancel events are NOT appended.
 - _Happy path (no regression):_ Without cancel, all 5 events parse and append normally.
 - _Edge case (cancel before any events):_ Set `status = 'cancelled'` before the first `data` callback fires. Assert: `task.events.length === 0`.
@@ -339,7 +351,6 @@ tests/
 | Cross-instance kill of a live foreign instance's child (identity gate alone is insufficient — a live foreign instance's subprocesses pass `comm`+`lstart` match) | **Resolved by spawner-liveness gate**: each foreign file's owning plugin PID is parsed from the filename and probed via `process.kill(<pid>, 0)`. Alive (or `EPERM`) → skip the entire file. Dead → reap entries and delete the file.                                                                                                                                                                                                                                                                                                                                                 |
 | `<state-dir>/orphans/` directory grows without bound across many sessions                                                                                        | **Resolved by post-reap deletion**: after a successful reap of a foreign file (dead spawner), the file itself is deleted. Long-lived dev hosts see one transient file per active plugin instance, not historical accumulation.                                                                                                                                                                                                                                                                                                                                                        |
 | `setStatus` refactor introduces regression in existing 3 status-mutation sites                                                                                   | Three sites are explicit and enumerated by line number (subprocess.ts:59, :143, :153). Helper enforces terminal-state idempotency (preserves `cancelled` if `close` fires after abort) so the existing `finalizeTask` `if (task.status !== 'cancelled')` invariant is preserved automatically rather than being re-implemented at the call site. Test scenarios per site verify both the status transition and the cleanup hook fire; an explicit `cancelled → complete` no-op test directly verifies the invariant. Existing subprocess tests continue passing as a regression gate. |
-
 
 ## Documentation / Operational Notes
 

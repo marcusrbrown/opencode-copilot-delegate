@@ -76,6 +76,7 @@ docs/
 ### Formatting and Linting
 
 Biome handles both. Configuration in `biome.json`:
+
 - 2-space indent, single quotes, no semicolons (ASI)
 - Recommended lint rules enabled
 

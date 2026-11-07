@@ -40,6 +40,7 @@ From the origin brainstorm — foundation-phase functional requirements (R8 move
 **R8 is in the runtime hardening plan** (see `prerequisite_plan` frontmatter). This plan assumes the orphan reaper has already shipped and the runtime parser is guarded; both are independent runtime correctness fixes that don't depend on the TUI architecture.
 
 Performance / compatibility success criteria from the origin doc:
+
 - List populates within one localhost-HTTP round-trip (≤250ms target).
 - Cancel kills subprocess within 1 second of confirm.
 - Plugin keeps working when TUI half is not installed; graceful RPC-error state when installed-but-unreachable.
@@ -69,6 +70,7 @@ Performance / compatibility success criteria from the origin doc:
 ### Relevant Code and Patterns
 
 **This repo (existing surfaces to integrate with):**
+
 - `src/index.ts` — current plugin entrypoint exporting `CopilotDelegatePlugin`. Add RPC server startup; spawn-toast wiring is in `src/tools/delegate.ts`.
 - `src/tools/delegate.ts` — `createDelegateTool`. Add the spawn-toast call here after `createTask` succeeds, before returning `{ task_id }`.
 - `src/tools/cancel.ts` — `createCancelTool`. Currently 23 lines, only calls `task.abortController.abort()`. The actual kill chain lives in `subprocess.ts`'s abort listener. Unit 4 extracts the cancel call into a shared helper that both this tool and the RPC server's cancel handler can invoke.
@@ -82,6 +84,7 @@ Performance / compatibility success criteria from the origin doc:
 - `tests/` — bun-test files at top level (`*.test.ts`). New work follows the same shape; TUI-component tests live alongside source under `src/tui/__tests__/`.
 
 **Magic Context precedent (read-only reference, not a dependency):**
+
 - `node_modules/@cortexkit/opencode-magic-context-tui/src/index.tsx` — TUI plugin shell; `api.command.register`, `api.ui.dialog.replace`, `api.ui.toast`, `api.lifecycle.onDispose` patterns; SolidJS render via `<Render onDismiss={...} />`.
 - `node_modules/@cortexkit/opencode-magic-context-tui/src/api.ts` — TUI-side HTTP RPC client over `fetch`. (Their notification poller is not needed in the foundation phase.)
 - `node_modules/@cortexkit/opencode-magic-context-tui/package.json` — `oc-plugin: ["tui"]`, `exports["./tui"]: ./src/index.tsx`, opentui + solid-js as direct deps, `@opencode-ai/plugin` as peer.
@@ -243,12 +246,14 @@ tests/
 **Dependencies:** None.
 
 **Files:**
+
 - Modify: `package.json`
 - Modify: `tsconfig.json`
 - Create: `.changeset/<random>.md` (minor bump per `0.x` policy)
 - Create: `src/tui/.gitkeep` (placeholder until Unit 5 lands the source)
 
 **Approach:**
+
 - Add `oc-plugin: ["server", "tui"]` to `package.json`.
 - Add `exports["."]: { types: "./dist/index.d.ts", import: "./dist/index.js" }` (preserve current default-import semantics — required because once `exports` is present, Node ESM ignores `"main"`).
 - Add `exports["./plugin"]: { types: "./dist/index.d.ts", import: "./dist/index.js" }` (explicit alias for callers that want it).
@@ -260,13 +265,16 @@ tests/
 - Single minor changeset for the whole foundation PR ("TUI foundation: plugin half + RPC + spawn toast"), not per-unit.
 
 **Patterns to follow:**
+
 - Magic Context's TUI package.json `oc-plugin` + `exports` shape.
 - Existing `package.json`'s ordering and quote style (Biome normalizes).
 
 **Test scenarios:**
+
 - _Test expectation: none — pure config + dep changes; downstream units validate via typecheck/build/lint._
 
 **Verification:**
+
 - `bun install` succeeds; `bun run typecheck` passes (will be re-verified after Unit 5); `bun run build` produces unchanged `dist/index.js`; `bun run lint` clean.
 - `import 'opencode-copilot-delegate'` still resolves to `dist/index.js` (verify in a small node `--input-type=module` shell after `bun run build`).
 - `node -e "console.log(require('./package.json').exports)"` prints `["."]`, `["./plugin"]`, and `["./tui"]` entries.
@@ -282,10 +290,12 @@ tests/
 **Dependencies:** Unit 1.
 
 **Files:**
+
 - Create: `src/runtime/rpc-contract.ts`
 - Create: `tests/rpc-contract.test.ts`
 
 **Approach:**
+
 - Export Zod schemas: `HealthResponseSchema`, `TasksListResponseSchema`, `TasksCancelRequestSchema`, `TasksCancelResponseSchema`, plus a `PortFileSchema` describing the on-disk shape (`{ port, pid, token }`).
 - `TasksListResponseSchema` carries: `{ tasks: Array<{ taskId, status, agent, model, elapsedMs, toolCallCount, startedAt }> }`. Status enum is `"running"` only in the foundation phase (the running-only rule); add other variants now to make the drilled-view phase a no-schema-change addition.
 - `TasksCancelRequestSchema`: `{ taskId: string }` with `cpl_*` prefix regex.
@@ -296,9 +306,11 @@ tests/
 **Execution note:** Test-first per AGENTS.md mandate.
 
 **Patterns to follow:**
+
 - Existing tool-input schemas in `src/tools/*.ts` use the same Zod-then-infer pattern.
 
 **Test scenarios:**
+
 - _Happy path:_ `TasksListResponseSchema.parse({ tasks: [] })` succeeds.
 - _Happy path:_ Round-trip a fully-populated row through `JSON.parse(JSON.stringify(parsed))` and re-validate.
 - _Edge case:_ `taskId` must match `cpl_*` prefix; missing prefix fails.
@@ -308,6 +320,7 @@ tests/
 - _Error path:_ Strict-mode rejection of unknown extra fields on every schema.
 
 **Verification:**
+
 - All scenarios pass via `bun test tests/rpc-contract.test.ts`.
 
 ---
@@ -321,10 +334,12 @@ tests/
 **Dependencies:** Unit 2. Unit 4 (cancel-helper) lands alongside; the server takes `cancelTaskById` as an injected dependency so unit-test isolation is clean.
 
 **Files:**
+
 - Create: `src/runtime/rpc-server.ts`
 - Create: `tests/rpc-server.test.ts`
 
 **Approach:**
+
 - Export `startRpcServer({ taskRegistry, cancelTaskById, portFileBaseDir, sessionDiscriminator }) → Promise<{ port, token, close() }>`.
 - Resolve port-file path: `<portFileBaseDir>/<sessionDiscriminator>/server-port.json`. Default `portFileBaseDir` = `<XDG_CACHE_HOME or ~/.cache>/opencode/copilot-delegate`. Default `sessionDiscriminator` = `process.env.OPENCODE_SESSION_ID ?? String(process.pid)`.
 - Generate auth token at startup: `crypto.randomBytes(32).toString('base64url')`.
@@ -343,9 +358,11 @@ tests/
 **Execution note:** Test-first per AGENTS.md mandate.
 
 **Patterns to follow:**
+
 - Magic Context's `node_modules/@cortexkit/opencode-magic-context/src/server.js` for server lifecycle + port-file pattern. Adapt to TS + auth + per-session path.
 
 **Test scenarios:**
+
 - _Happy path:_ `startRpcServer` returns a port > 0 and a non-empty token; port file exists at `<dir>/<discriminator>/server-port.json` with `mode === 0o600` (verify via `fs.stat`).
 - _Happy path:_ `GET /health` returns 200 with `{ ok: true, version }` and does NOT require auth.
 - _Happy path:_ `POST /tasks/list` with correct `Authorization: Bearer <token>` returns the running tasks; completed/failed tasks are filtered out (server uses `listRunning()` projection).
@@ -364,6 +381,7 @@ tests/
 - _Integration:_ Spawn an actual `copilot` subprocess via `taskRegistry`, list it via `/tasks/list`, cancel it via `/tasks/cancel`, observe the abort-listener triggers `killProcessTree`.
 
 **Verification:**
+
 - All scenarios pass; no port leaks between tests (each test uses a fresh temp dir for port file); zero zombie processes after the integration scenario.
 
 ---
@@ -377,6 +395,7 @@ tests/
 **Dependencies:** Units 1, 2, 3.
 
 **Files:**
+
 - Create: `src/runtime/cancel-helper.ts`
 - Create: `tests/cancel-helper.test.ts`
 - Modify: `src/tools/cancel.ts` (refactor to call the helper)
@@ -387,6 +406,7 @@ tests/
 - Modify: `src/index.ts` (start RPC server + best-effort cleanup wiring)
 
 **Approach:**
+
 - `src/runtime/cancel-helper.ts`: export `cancelTaskById(taskRegistry, taskId): { cancelled: boolean, error?: string }`. Implementation: look up task; if missing, return `{ cancelled: false, error: "no such task" }`; if found, call `task.abortController.abort()` and return `{ cancelled: true }`. The existing abort listener in `subprocess.ts` already handles the kill — no changes there.
 - Refactor `src/tools/cancel.ts` `createCancelTool` to delegate to `cancelHelper.cancelTaskById`. Behavior and return shape unchanged from the tool's perspective.
 - `src/runtime/notify.ts`: add `notifySpawn(client, taskId)` next to `notifyCompletion`. Body: `await client.tui.showToast({ body: { message: \`Copilot delegation ${taskId} started\`, variant: 'info' } })`. **Important: use the `body:`wrapper** — the existing`NotifyClient` API requires it. Same try/catch swallow on failure.
@@ -396,10 +416,12 @@ tests/
 **Execution note:** Test-first per AGENTS.md mandate.
 
 **Patterns to follow:**
+
 - Existing `notifyCompletion` shape in `src/runtime/notify.ts` (preserves the `body:` wrapper).
 - Existing `createDelegateTool` post-spawn flow in `src/tools/delegate.ts`.
 
 **Test scenarios:**
+
 - _Happy path (cancel-helper):_ Known running task → `task.abortController.abort()` invoked; returns `{ cancelled: true }`.
 - _Edge case (cancel-helper):_ Unknown task ID → returns `{ cancelled: false, error: "no such task" }` without throwing.
 - _Happy path (notifySpawn):_ Stub client's `tui.showToast` called once with `{ body: { message: 'Copilot delegation cpl_abc started', variant: 'info' } }`.
@@ -409,6 +431,7 @@ tests/
 - _Lifecycle:_ Plugin init starts the RPC server; `process.on('beforeExit', ...)` calls `server.close()` (verify via spy).
 
 **Verification:**
+
 - All scenarios pass; existing 90+ unit tests still pass; `bun run typecheck` + `bun run lint` + `bun run build` clean.
 
 ---
@@ -422,11 +445,13 @@ tests/
 **Dependencies:** Units 1, 2, 3 (RPC server must exist for the client to call). Independent of Unit 4 in code (can be developed against a stub server).
 
 **Files:**
+
 - Create: `src/tui/index.tsx`
 - Create: `src/tui/rpc-client.ts`
 - Create: `src/tui/__tests__/rpc-client.test.ts`
 
 **Approach:**
+
 - `src/tui/index.tsx`: default-export the TUI plugin factory. File-pragma `/** @jsxImportSource @opentui/solid */` at the top. Register one command via `api.command.register`. **Field-name verification**: Magic Context's source uses `trigger`; if the installed `@opencode-ai/plugin/tui` types disagree, switch to `value`. Document the chosen field in `AGENTS.md`. On invoke, mount `<ModalList api={api} rpc={rpcClient} />` via `api.ui.dialog.replace`.
 - `src/tui/rpc-client.ts`: locate the per-session port file using the same discriminator logic as the server (`process.env.OPENCODE_SESSION_ID ?? String(process.pid)`); read and validate against `PortFileSchema`. Expose `health()`, `tasksList()`, `tasksCancel(taskId)`. Each is a `fetch` carrying `Authorization: Bearer <token>` and returning the parsed Zod-validated response.
 - Typed errors: `RpcUnreachableError` (port file missing, fetch failure), `RpcServerError` (non-2xx with status), `RpcAuthError` (401), `RpcValidationError` (schema mismatch).
@@ -435,10 +460,12 @@ tests/
 **Execution note:** Test-first per AGENTS.md mandate.
 
 **Patterns to follow:**
+
 - `node_modules/@cortexkit/opencode-magic-context-tui/src/index.tsx` for the plugin factory shape.
 - `node_modules/@cortexkit/opencode-magic-context-tui/src/api.ts` for the RPC-client shape (without the notification poller).
 
 **Test scenarios:**
+
 - _Happy path:_ `tasksList()` against a stub HTTP server returns parsed `{ tasks: [...] }`; the request includes `Authorization: Bearer <token>`.
 - _Happy path:_ `tasksCancel('cpl_x')` against a stub returning `{ cancelled: true }` resolves with `cancelled === true`.
 - _Edge case:_ Per-session port file does not exist → `health()` rejects with `RpcUnreachableError`.
@@ -450,6 +477,7 @@ tests/
 - _Integration:_ Slash command registers with the verified field name (`trigger` or `value`). Stub the API and assert exactly one registration call.
 
 **Verification:**
+
 - All scenarios pass; `bun run typecheck` clean (verifies tsconfig JSX setup works); the TUI plugin loads without crashing when imported from a Node REPL via the source file.
 
 ---
@@ -463,6 +491,7 @@ tests/
 **Dependencies:** Units 2, 5.
 
 **Files:**
+
 - Create: `src/tui/components/modal-list.tsx`
 - Create: `src/tui/components/row.tsx`
 - Create: `src/tui/components/empty-state.tsx`
@@ -471,6 +500,7 @@ tests/
 - Create: `src/tui/__tests__/modal-list.test.tsx`
 
 **Approach:**
+
 - Stateful SolidJS component. On mount, calls `rpc.tasksList()` (Unit 5). State machine: `loading` → (`populated` | `empty` | `error`).
 - **Header**: `<n> running · 0 recent` (recent count is always 0 in the foundation phase; field reserved for the third phase). During loading, header reads `Loading delegations…` instead. During error, header reads `Status unavailable.`. The header component is owned by the modal-list root, not by the per-state child components — this keeps header behavior consistent across states.
 - Row: 6 columns from the brainstorm spec; status badge `●` prefix when `running`; focused row uses inverse video.
@@ -493,9 +523,11 @@ tests/
 **Execution note:** Test-first per AGENTS.md mandate (component tests use opentui's testing utilities).
 
 **Patterns to follow:**
+
 - Magic Context's TUI components for SolidJS-on-opentui idioms.
 
 **Test scenarios:**
+
 - _Happy path:_ Mount with 3 running tasks → 3 rows render; first row is focused (inverse video applied); header reads `3 running · 0 recent`; footer reads `↑↓ navigate · c cancel · Esc close`.
 - _Happy path:_ `↓` keypress moves focus to row 2.
 - _Happy path:_ `↑` from row 0 wraps to last row.
@@ -511,6 +543,7 @@ tests/
 - _Edge case (last-row cancel → empty):_ List has exactly 1 running task. Cancel via `c` → confirm → row reaches `cancelled` and is removed by the running-only filter → list transitions to the empty-state component (header `0 running · 0 recent`, empty-state body, footer `Esc close`). Verify focus index does not crash on the empty list.
 
 **Verification:**
+
 - All scenarios pass; component `tsc --noEmit` clean; visual smoke (manual at implementation time) shows the modal opens via `/copilot-status` against a session with running delegations.
 
 ---
@@ -524,11 +557,13 @@ tests/
 **Dependencies:** Units 5, 6.
 
 **Files:**
+
 - Create: `src/tui/components/confirm-card.tsx`
 - Create: `src/tui/__tests__/confirm-card.test.tsx`
 - Modify: `src/tui/components/modal-list.tsx` (wire `c` keybind to render the card; on confirm, call `rpc.tasksCancel`; on cancel/dismiss, return to list with focus retained)
 
 **Approach:**
+
 - `<ConfirmCard taskId message buttons onConfirm onCancel onDismissAfterError />`. Two button widgets in the normal state; transitions to a single `Dismiss` button after an RPC error.
 - Header: `Cancel Copilot delegation cpl_xxxxxxxx?` (full task ID, not abbreviated).
 - Buttons (normal state): `Cancel Task` (destructive, default focus), `Keep Running` (secondary).
@@ -542,9 +577,11 @@ tests/
 **Execution note:** Test-first per AGENTS.md mandate.
 
 **Patterns to follow:**
+
 - Magic Context's two-button dialog patterns where applicable; otherwise base on opentui's `<dialog>` examples.
 
 **Test scenarios:**
+
 - _Happy path:_ Mount with `taskId='cpl_abc'` → header reads `Cancel Copilot delegation cpl_abc?`; default focus on `Cancel Task`.
 - _Happy path:_ `Enter` on `Cancel Task` invokes `rpc.tasksCancel('cpl_abc')` and fires `onConfirm`.
 - _Happy path:_ `→` then `Enter` fires `onCancel` (focus moved to `Keep Running`).
@@ -555,6 +592,7 @@ tests/
 - _Integration:_ From modal-list, `c` keypress on focused row mounts the card; `Enter` confirms; `onConfirm` triggers the modal-list refetch.
 
 **Verification:**
+
 - All scenarios pass; manual smoke at implementation time: in a real session with a running delegation, `/copilot-status` → `c` on the row → `Enter` → row transitions to `cancelling` then disappears; `copilot_output cpl_xxx` confirms `cancelled` status from the server side.
 
 ---
