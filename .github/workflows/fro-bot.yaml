@@ -193,8 +193,7 @@ jobs:
               || ''
             }}
           token: ${{ secrets.FRO_BOT_PAT }}
-          persist-credentials: >-
-            ${{ !contains(fromJSON('["pull_request", "issue_comment", "issues"]'), github.event_name) }}
+          persist-credentials: false
 
       - name: Setup Bun
         uses: oven-sh/setup-bun@0c5077e51419868618aeaa5fe8019c62421857d6 # v2.2.0
@@ -221,3 +220,4 @@ jobs:
           model: ${{ vars.FRO_BOT_MODEL }}
           prompt: ${{ env.PROMPT }}
           opencode-config: ${{ secrets.OPENCODE_CONFIG }}
+          isolate-agent: "true"
