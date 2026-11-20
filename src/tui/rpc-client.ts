@@ -1,5 +1,4 @@
 import { readFile } from 'node:fs/promises'
-import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { ZodIssue, ZodType } from 'zod'
 import {
@@ -13,6 +12,10 @@ import {
   type TasksListResponse,
   TasksListResponseSchema,
 } from '../runtime/rpc-contract'
+import {
+  defaultPortFileBaseDir,
+  defaultSessionDiscriminator,
+} from '../runtime/rpc-paths'
 
 type CreateRpcClientOptions = {
   baseDir?: string
@@ -83,20 +86,9 @@ export class RpcAuthError extends RpcServerError {
   }
 }
 
-function defaultBaseDir(): string {
-  const cacheHome =
-    process.env.XDG_CACHE_HOME ?? join(process.env.HOME ?? homedir(), '.cache')
-
-  return join(cacheHome, 'opencode', 'copilot-delegate')
-}
-
-function defaultSessionDiscriminator(): string {
-  return process.env.OPENCODE_SESSION_ID ?? String(process.pid)
-}
-
 function resolvePortFilePath(options: CreateRpcClientOptions): string {
   return join(
-    options.baseDir ?? defaultBaseDir(),
+    options.baseDir ?? defaultPortFileBaseDir(),
     options.sessionDiscriminator ?? defaultSessionDiscriminator(),
     'server-port.json',
   )
