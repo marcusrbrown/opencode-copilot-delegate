@@ -617,7 +617,14 @@ exit 1
       process.env.PATH = `${binDir}:${process.env.PATH ?? ''}`
 
       const client = makeMockClient()
-      const tool = createResumeTool({ client, directory: cwd })
+      // The fake CLI exits immediately; a window far beyond any scheduling
+      // delay means the subprocess exit (a real signal), not the probe timer,
+      // always decides the race.
+      const tool = createResumeTool({
+        client,
+        directory: cwd,
+        failureWindowMs: 60_000,
+      })
 
       const raw = await tool.execute(
         { target_id: 'no-match-name' },

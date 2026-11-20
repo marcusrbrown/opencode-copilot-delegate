@@ -82,6 +82,12 @@ export type LaunchResumeOptions = {
   addDirs?: string[]
   configDir?: string
   pidFilePath?: string
+  /**
+   * Fast-fail probe window for name/prefix targets. Defaults to
+   * `NAME_TARGET_FAILURE_WINDOW_MS`; injectable so tests can decide the race
+   * with the subprocess exit instead of a wall-clock timer.
+   */
+  failureWindowMs?: number
 }
 
 export type LaunchResumeResult = { task_id: string } | { error: string }
@@ -286,14 +292,19 @@ export async function launchResume(
     return { task_id: task.taskId }
   }
 
-  const timeout = new Promise<'timeout'>((resolve) =>
-    setTimeout(() => resolve('timeout'), NAME_TARGET_FAILURE_WINDOW_MS),
-  )
+  let windowTimer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<'timeout'>((resolve) => {
+    windowTimer = setTimeout(
+      () => resolve('timeout'),
+      opts.failureWindowMs ?? NAME_TARGET_FAILURE_WINDOW_MS,
+    )
+  })
 
   const raceResult = await Promise.race([
     spawnResult.completionPromise.then(() => 'done' as const),
     timeout,
   ])
+  clearTimeout(windowTimer)
 
   if (raceResult !== 'timeout') {
     const noMatch =
@@ -317,6 +328,7 @@ type ResumeToolOptions = {
   client: PluginInput['client']
   directory: string
   pidFilePath?: string
+  failureWindowMs?: number
 }
 
 const TOOL_DESCRIPTION = [
@@ -379,6 +391,7 @@ export function createResumeTool(options: ResumeToolOptions) {
         cwd: args.cwd,
         addDirs: args.add_dir,
         configDir: args.config_dir,
+        failureWindowMs: options.failureWindowMs,
       })
 
       return JSON.stringify(result)
