@@ -26,6 +26,8 @@
   "files": [
     "dist",
     "src/tui",
+    "!src/tui/__tests__",
+    "!dist/**/__tests__",
     "README.md",
     "LICENSE",
     "CHANGELOG.md"
