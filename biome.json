@@ -31,6 +31,13 @@
     }
   },
   "files": {
-    "includes": ["**", "!dist", "!node_modules", "!.changeset", "!.context"]
+    "includes": [
+      "**",
+      "!dist",
+      "!node_modules",
+      "!.changeset",
+      "!.context",
+      "!docs/research/opencode-v2-host-contract-2026-11.md"
+    ]
   }
 }
