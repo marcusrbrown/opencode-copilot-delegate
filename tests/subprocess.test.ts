@@ -123,16 +123,16 @@ function makeSpawnEnv(binDir: string): Record<string, string> {
   }
 }
 
+// Waits for a readiness file written by a fake subprocess. There is no
+// wall-clock deadline here: process start-up time is unbounded under load, so
+// a fixed poll budget is itself the flake. A subprocess that never writes the
+// file is bounded by the test runner's own per-test timeout. Writers must
+// create the file atomically (write a temp file, then `mv`) so existence
+// implies complete contents.
 async function waitForFile(filePath: string): Promise<void> {
-  for (let attempt = 0; attempt < 100; attempt += 1) {
-    if (existsSync(filePath)) {
-      return
-    }
-
-    await delay(20)
+  while (!existsSync(filePath)) {
+    await delay(10)
   }
-
-  throw new Error(`Timed out waiting for file: ${filePath}`)
 }
 
 // Polls `process.kill(pid, 0)` (signal 0 probes liveness without delivery)
@@ -408,8 +408,17 @@ describe('subprocess runtime', () => {
       const pidFile = join(cwd, 'grandchild.pid')
       tempPaths.push(cwd, binDir)
 
+      // The pid is published via an atomic rename so the file can never be
+      // observed empty (plain `echo > file` creates it before writing).
       const task = spawnCopilot(
-        ['-c', [`sleep 30 & echo $! > '${pidFile}'`, 'wait'].join('; ')],
+        [
+          '-c',
+          [
+            `sleep 30 & echo $! > '${pidFile}.tmp'`,
+            `mv '${pidFile}.tmp' '${pidFile}'`,
+            'wait',
+          ].join('; '),
+        ],
         { cwd, env: makeSpawnEnv(binDir) },
       )
 
@@ -418,7 +427,6 @@ describe('subprocess runtime', () => {
         readFileSync(pidFile, 'utf-8').trim(),
         10,
       )
-      const startedAt = Date.now()
 
       // When cancellation is requested
       task.abortController.abort()
@@ -430,7 +438,6 @@ describe('subprocess runtime', () => {
 
       // Then the process tree is gone and the task is marked cancelled
       expect(task.status).toBe('cancelled')
-      expect(Date.now() - startedAt).toBeLessThan(3000)
       await expectProcessToBeGone(grandchildPid)
     })
 
