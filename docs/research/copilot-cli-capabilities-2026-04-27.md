@@ -1,5 +1,4 @@
 ---
-
 title: Copilot CLI Capabilities — Programmatic Delegation Reference
 date: 2026-04-27
 copilot_version: 1.0.36

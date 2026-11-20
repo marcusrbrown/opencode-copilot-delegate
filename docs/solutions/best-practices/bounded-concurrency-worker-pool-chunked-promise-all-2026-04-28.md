@@ -1,5 +1,4 @@
 ---
-
 title: Bounded-Concurrency Worker Pool via Chunked Promise.all
 date: 2026-04-28
 category: best-practices

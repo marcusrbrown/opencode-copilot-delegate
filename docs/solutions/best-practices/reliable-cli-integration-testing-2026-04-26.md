@@ -1,5 +1,4 @@
 ---
-
 title: Reliable integration testing for OpenCode plugins via CLI invocations
 date: 2026-04-26
 category: best-practices

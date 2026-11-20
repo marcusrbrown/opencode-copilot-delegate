@@ -32,5 +32,13 @@
   },
   "files": {
     "includes": ["**", "!dist", "!node_modules", "!.changeset", "!.context"]
-  }
+  },
+  "overrides": [
+    {
+      "includes": ["docs/**/*.md"],
+      "formatter": {
+        "enabled": false
+      }
+    }
+  ]
 }

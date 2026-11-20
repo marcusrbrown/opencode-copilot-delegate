@@ -1,5 +1,4 @@
 ---
-
 title: Re-entrant dialog close froze /copilot-status on Escape
 date: 2026-05-02
 category: ui-bugs
