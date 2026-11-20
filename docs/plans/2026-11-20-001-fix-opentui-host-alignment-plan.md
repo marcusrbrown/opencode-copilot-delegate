@@ -9,7 +9,7 @@ date: 2026-11-20
 
 ## Overview
 
-Upgrade `@opentui/core` and `@opentui/solid` from `0.2.7` to `0.4.5`, the version the OpenCode V1 host (`@opencode-ai/plugin` / `opencode-ai` 1.19.6) builds its own TUI against. Pin a single `@opentui/core` copy with an `overrides` entry. Clear the high `brace-expansion` advisory that reaches the shipped dependency tree through `@opentui/solid`. This lands in one coordinated PR that supersedes the stale #335 and #135. It is the first step before the dual-host V2 plan (`docs/plans/2026-11-20-002-feat-opencode-v2-dual-host-plan.md`), which moves OpenTUI to the `>=0.8.4` line V2 requires.
+Upgrade `@opentui/core` and `@opentui/solid` from `0.2.7` to `0.4.5`, the version the OpenCode V1 host (`@opencode-ai/plugin` / `opencode-ai` 1.19.6) builds its own TUI against. Pin a single `@opentui/core` copy with an `overrides` entry. Clear the high `brace-expansion` advisory that reaches the shipped dependency tree through `@opentui/solid`. This lands in one coordinated PR that supersedes the stale #335 and #135. Both are closed once it merges. It is the first step before the dual-host V2 plan (`docs/plans/2026-11-20-002-feat-opencode-v2-dual-host-plan.md`), which moves OpenTUI to the `>=0.8.4` line V2 requires.
 
 ## Problem Frame
 
@@ -20,10 +20,10 @@ Upgrade `@opentui/core` and `@opentui/solid` from `0.2.7` to `0.4.5`, the versio
 ## Requirements Trace
 
 - R1. `@opentui/core` and `@opentui/solid` resolve to exactly `0.4.5`, with one `@opentui/core` copy in the install tree.
-- R2. `brace-expansion` resolves to a version outside all three advisory ranges (`>=2.1.7`) on the `@opentui/solid` path, and `bun audit` no longer lists it there.
+- R2. `brace-expansion` resolves to `>=2.1.8` (the latest 2.x, outside all three advisory ranges) on the `@opentui/solid` path, and `bun audit` no longer lists it there.
 - R3. No behavior regression in the TUI half: `/copilot-status` opens, lists tasks, confirms cancel, and closes on Esc without the freeze recorded in `docs/solutions/ui-bugs/re-entrant-dialog-close-froze-copilot-status-on-escape-2026-05-02.md`.
 - R4. All quality gates stay green: typecheck, lint, build, ESM export-shape smoke test, `test:unit`, `test:tui`, and `npm pack --dry-run` file list unchanged apart from versions.
-- R5. #335 and #135 are superseded with links, and Renovate does not immediately reopen a divergent OpenTUI PR.
+- R5. #335 and #135 are closed with successor links. If Renovate later opens a split `@opentui/solid`-only PR, that triggers the grouping proposal under Deferred to Implementation.
 
 ## Scope Boundaries
 
@@ -35,13 +35,13 @@ Upgrade `@opentui/core` and `@opentui/solid` from `0.2.7` to `0.4.5`, the versio
 ### Deferred to Separate Tasks
 
 - OpenTUI `>=0.8.4` (likely `0.9.x`) for V2: `docs/plans/2026-11-20-002-feat-opencode-v2-dual-host-plan.md`.
-- Wall-clock-sensitive unit tests surfaced during #530 work (resume no-match window, tools timeout race, subprocess grandchild pid). This is a separate test-hygiene fix, not part of this upgrade.
+- Wall-clock-sensitive unit tests surfaced during #530 work (resume no-match window, tools timeout race, subprocess grandchild pid). This is a separate test-hygiene fix, not part of this upgrade. It is tracked in an issue to be opened before the V2 plan's CI matrix (Unit 5).
 
 ## Context & Research
 
 ### Relevant Code and Patterns
 
-- `package.json`: `dependencies` (`@opentui/core`, `@opentui/solid`, `solid-js`), `overrides` (currently `zod` only; the security PR #556 updates it), and the `test:tui` script with `--preload @opentui/solid/preload`.
+- `package.json`: `dependencies` (`@opentui/core`, `@opentui/solid`, `solid-js`), `overrides` (currently a `zod` entry, which security PR #556 raises to `^4.6.7`), and the `test:tui` script with `--preload @opentui/solid/preload`.
 - `scripts/build.ts`: `@opentui/solid/bun-plugin` transform; `@opentui/core`, `@opentui/solid`, and `solid-js` are externals.
 - `src/tui/components/confirm-card.tsx`, `src/tui/components/modal-list.tsx`, `src/tui/index.tsx`: use `KeyEvent`, `TextAttributes`, `TextRenderable`, `BoxRenderable`, `useRenderer`, `renderer.keyInput`, `requestRender()`, and JSX `<box>`/`<text>`. All of these are present and unchanged at 0.4.5.
 - `src/tui/__tests__/*`: `testRender` with `useThread: false`, `captureCharFrame`, `mockInput`, and `@opentui/solid/runtime-plugin-support`. All are still valid at 0.4.5.
@@ -76,8 +76,9 @@ Upgrade `@opentui/core` and `@opentui/solid` from `0.2.7` to `0.4.5`, the versio
   "candidates": [
     {
       "path_or_symbol": "PR #335 (chore/opentui-0.4.5)",
-      "description": "Same target version and core override; lockfile now conflicts with main",
-      "disposition": "extend"
+      "description": "Same target version and core override; used as the reference diff",
+      "disposition": "insufficient",
+      "insufficiency_reason": "Lockfile conflicts with main after #554; recreated from origin/main rather than rebased"
     },
     {
       "path_or_symbol": "PR #135 (renovate/opentui-solid-0.x)",
@@ -98,7 +99,7 @@ Upgrade `@opentui/core` and `@opentui/solid` from `0.2.7` to `0.4.5`, the versio
 
 - **Target 0.4.5 exactly, not the latest 0.9.7.** It matches the V1 host catalog and peer floor, needs zero test rewrites, and #335 already showed its gates passing on it. The jump to 0.9.x is deferred to the V2 plan, where the host requires it.
 - **Pin `@opentui/core` with an override.** `@opentui/solid` depends on `@opentui/core` as a regular dependency. Without the pin, two core copies can coexist and `TextRenderable`/`KeyEvent` identities diverge. The host uses the same pattern.
-- **Clear `brace-expansion` with an override, scoped to the 2.x line if Bun supports it.** Prefer a nested or package-scoped override that touches only the `@opentui/solid` path. Fall back to a global `brace-expansion` override only after confirming every resolved node is on the 2.x line (`rimraf`'s path resolves a separate 5.x copy that a global `>=2.1.8` range must not force down or across majors).
+- **Clear `brace-expansion` with an override, scoped to the 2.x line if Bun supports it.** Prefer a nested or package-scoped override that touches only the `@opentui/solid` path. Fall back to a global `brace-expansion` override only if the `rimraf` path's separate 5.x copy stays on 5.x (Unit 2 edge case). A global range must never force a node across majors.
 - **Recreate rather than rebase #335.** Branch from current `origin/main` and regenerate `bun.lock` with `bun install`. Never hand-merge a lockfile. Close #335 (fro-bot, untouched) and #135 (Renovate) with links to the successor.
 - **Changeset: `patch`.** It is a shipped dependency alignment and security fix with no feature change.
 
@@ -107,7 +108,7 @@ Upgrade `@opentui/core` and `@opentui/solid` from `0.2.7` to `0.4.5`, the versio
 ### Resolved During Planning
 
 - Does a newer `@opentui/solid` drop the vulnerable path? No. 0.4.5–0.9.7 all depend on `babel-plugin-module-resolver 5.0.2`, and its latest (5.0.3) still requires `glob ^9.3.3`.
-- Does the plugin's OpenTUI copy matter at runtime, or does the host provide its own? The V2 plan's research is investigating this. For this plan, matching the host version removes the skew whichever copy loads.
+- Does the plugin's OpenTUI copy matter at runtime, or does the host provide its own? For this plan's scope it doesn't matter: matching the host version removes the skew whichever copy loads. The general question is a V2 plan Unit 1 probe.
 
 ### Deferred to Implementation
 
@@ -122,7 +123,7 @@ Upgrade `@opentui/core` and `@opentui/solid` from `0.2.7` to `0.4.5`, the versio
 
 **Requirements:** R1, R4
 
-**Dependencies:** None. Land after #556 (the zod `overrides` change) to avoid a trivial `package.json` conflict.
+**Dependencies:** #556 merged, so `overrides` doesn't hit a trivial `package.json` conflict.
 
 **Files:**
 
@@ -176,16 +177,16 @@ Upgrade `@opentui/core` and `@opentui/solid` from `0.2.7` to `0.4.5`, the versio
 
 **Requirements:** R3, R5
 
-**Dependencies:** Units 1–2 merged or ready to merge.
+**Dependencies:** Units 1–2 complete on the PR branch. The live check runs before merge, and the stale PRs are closed after it.
 
 **Files:**
 
-- None in the repository. Record the live-check results in the PR body.
+- None in the repository. Record the live-check results in the PR body before merge.
 
 **Approach:**
 
 - With OpenCode `1.19.6` (the `mise.toml` pin) and the plugin installed from the branch build, open `/copilot-status`. Navigate the list, open and confirm cancel, then press Esc from each view. Check the modal layout visually.
-- Close #335 and #135 with links to the merged PR.
+- After merge, close #335 and #135 with links to the successor PR. Watch for a split Renovate OpenTUI PR (R5).
 
 **Test scenarios:**
 
@@ -204,12 +205,12 @@ Upgrade `@opentui/core` and `@opentui/solid` from `0.2.7` to `0.4.5`, the versio
 | Risk                                                                                                 | Mitigation                                                                                                                                               |
 | ---------------------------------------------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Duplicate `@opentui/core` copies break type identity                                                 | Core override, plus a resolved-tree check in Unit 1                                                                                                      |
-| Host ships `solid-js 1.9.10`, we ship `1.9.19`; `@opentui/solid@0.4.5` peers exact `solid-js 1.9.12` | Same skew exists on main today. Accept the peer warning and keep watching it in the live check. Revisit in the V2 plan once module sharing is understood |
-| Override does not reach the nested path in Bun                                                       | Fall back to a global 2.x-safe override after verifying every resolved node, or record it under Needs Human Attention                                    |
+| Host ships `solid-js 1.9.10`, we ship `1.9.19`; `@opentui/solid@0.4.5` peers exact `solid-js 1.9.12` | Same skew exists on main today. Accept the peer warning and keep watching it in the live check. The V2 plan's Unit 7 decides `solid-js` alignment with both hosts |
+| Override does not reach the nested path in Bun                                                       | Fall back to a global override only if `rimraf`'s 5.x copy stays on 5.x. Otherwise stop and record the blocker in the PR for a maintainer decision                                    |
 | Renovate reopens a split `@opentui/solid`-only PR                                                    | Watch after merge. Propose a grouping rule (ask-first config change) only if it happens                                                                  |
 
 ## Sources & References
 
-- Related PRs/issues: #335, #135, #556 (zod `overrides` precedent), #558 (daily report Agent Note on `brace-expansion`)
+- Related PRs/issues: #335, #135, #556 (security fix that raises the `zod` entry in `overrides`), #558 (daily report Agent Note on `brace-expansion`)
 - Related past work: `docs/plans/2026-05-11-001-feat-plugin-contract-and-tui-api-resilience-plan.md`, recorded as completed. That plan hardened the TUI host-API dual path. This plan changes only the OpenTUI library version beneath it.
 - External: anomalyco/opentui releases; anomalyco/opencode `v1.19.6` `package.json`; GitHub Advisory Database entries listed above.
