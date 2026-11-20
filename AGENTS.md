@@ -41,9 +41,10 @@ src/
 │   ├── normalize-tool-arg-schemas.ts # Patches Zod `toJSONSchema` so tool arg descriptions survive the host/plugin zod split
 │   └── rpc-cleanup.ts                # `wireRpcServerCleanup` — runs RPC server close once on `beforeExit`/`SIGTERM`
 ├── tui/
-│   ├── index.tsx         # TUI plugin entrypoint — registers /copilot-status
-│   ├── rpc-client.ts     # Reads per-session port file + calls RPC server
-│   └── components/       # OpenTUI/Solid modal list + confirm card
+│   ├── index.tsx         # TUI plugin entrypoint — registers /copilot-status (palette + slash)
+│   ├── status-dialogs.tsx # /copilot-status flow on host DialogSelect/DialogConfirm/DialogAlert (host owns theming, keys, close)
+│   ├── status-format.ts  # Pure formatting helpers for task option text (status, elapsed, tool calls)
+│   └── rpc-client.ts     # Reads per-session port file + calls RPC server
 ├── discovery/
 │   ├── agents.ts         # Discovers .agent.md files from Copilot agent directories
 │   └── description.ts    # Builds copilot_delegate tool description from discovered agents
@@ -70,7 +71,8 @@ docs/
 - **Agent discovery**: builtin agents (bundled with Copilot CLI) cannot be overridden by user or repo agents
 - **Structured errors**: tools return `{ error: string }` objects, never throw exceptions
 - **Two-entrypoint architecture**: package exports the existing server plugin at `.` and `./plugin`, plus the TUI source entrypoint at `./tui`. The server half owns subprocesses, task registry, notifications, and the localhost RPC server. The TUI half is opt-in and talks to the server through the per-session authenticated port file.
-- **TUI command registration**: `api.command.register` uses the `value` field for `/copilot-status` on the installed `@opencode-ai/plugin/tui` types.
+- **TUI command registration**: `api.keymap.registerLayer` registers a `palette` command with `slashName: 'copilot-status'` and `desc`; the legacy `api.command.register` fallback uses the `value` field plus `slash` for hosts without the keymap surface.
+- **TUI dialogs**: `/copilot-status` is built only from host components (`api.ui.DialogSelect`, `DialogConfirm`, `DialogAlert`) so theming and keys come from the host. Never call `api.ui.dialog.clear()` or pass `onClose` to `dialog.replace`, and open follow-up dialogs on a deferred tick (the host clears `DialogConfirm`/`DialogAlert` itself after `onConfirm`/`onCancel`). See `docs/solutions/ui-bugs/re-entrant-dialog-close-froze-copilot-status-on-escape-2026-05-02.md`.
 - **TUI JSX mode**: `tsconfig.json` keeps `jsx: "preserve"`; TUI `.tsx` files use `/** @jsxImportSource @opentui/solid */` pragmas.
 
 ## Coding Standards

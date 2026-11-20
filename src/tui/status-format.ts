@@ -1,6 +1,6 @@
-import type { TasksListResponse } from '../../runtime/rpc-contract'
+import type { TasksListResponse } from '../runtime/rpc-contract'
 
-export type ModalListTask = TasksListResponse['tasks'][number]
+export type StatusTask = TasksListResponse['tasks'][number]
 
 export function displayValue(value: string): string {
   const trimmed = value.trim()
@@ -26,7 +26,7 @@ export function formatElapsed(elapsedMs: number): string {
   return `${totalSeconds}s`
 }
 
-function formatStatus(status: ModalListTask['status']): string {
+export function formatStatus(status: StatusTask['status']): string {
   return status === 'running' ? `● ${status}` : status
 }
 
@@ -34,8 +34,12 @@ export function formatToolCalls(toolCallCount: number): string {
   return `${toolCallCount} ${toolCallCount === 1 ? 'call' : 'calls'}`
 }
 
-export function formatRowText(task: ModalListTask, nowMs: number): string {
-  const elapsed = Math.max(0, nowMs - task.startedAt)
+/** Secondary line of a list option: who is running it and how busy it is. */
+export function formatTaskDescription(task: StatusTask): string {
+  return `${displayValue(task.agent)} · ${displayValue(task.model)} · ${formatToolCalls(task.toolCallCount)}`
+}
 
-  return `${formatStatus(task.status)}  ${task.taskId}  ${displayValue(task.agent)}  ${displayValue(task.model)}  ${formatElapsed(elapsed)}  ${formatToolCalls(task.toolCallCount)}`
+/** Right-hand footer of a list option: status and elapsed time. */
+export function formatTaskFooter(task: StatusTask, nowMs: number): string {
+  return `${formatStatus(task.status)} · ${formatElapsed(Math.max(0, nowMs - task.startedAt))}`
 }
