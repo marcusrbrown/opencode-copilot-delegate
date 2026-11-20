@@ -76,7 +76,7 @@
     "test:integration": "bun test tests/integration/",
     "lint": "biome check .",
     "fix": "biome check . --write",
-    "prepublishOnly": "bun run build",
+    "prepublishOnly": "bun run typecheck && bun run build",
     "version-changesets": "changeset version && bun install --lockfile-only",
     "publish-changesets": "bun run build && changeset publish"
   },
