@@ -26,15 +26,21 @@ import plugin from '../src/index'
 import { _resetPluginSingleton } from '../src/runtime/plugin-singleton'
 import { cleanupAll } from '../src/runtime/task-registry'
 import { createResumeTool } from '../src/tools/resume'
+import { overrideEnv } from './helpers/env'
 
 type ToolResultObject = Record<string, unknown>
 
 const tempPaths: string[] = []
-const originalPath = process.env.PATH
-const originalHome = process.env.HOME
-const originalXdgCacheHome = process.env.XDG_CACHE_HOME
-const originalSessionId = process.env.OPENCODE_SESSION_ID
-const originalCopilotConfigDir = process.env.COPILOT_CONFIG_DIR
+const ENV_KEYS = [
+  'PATH',
+  'HOME',
+  'XDG_CACHE_HOME',
+  'XDG_STATE_HOME',
+  'OPENCODE_SESSION_ID',
+  'COPILOT_CONFIG_DIR',
+] as const
+let restoreEnv: (() => void) | undefined
+let xdgStateHome = ''
 
 const VALID_UUID = '123e4567-e89b-12d3-a456-426614174000'
 
@@ -43,11 +49,18 @@ beforeEach(() => {
 
   const homeDir = mkdtempSync(join(tmpdir(), 'resume-test-home-'))
   const xdgCacheHome = mkdtempSync(join(tmpdir(), 'resume-test-cache-'))
-  tempPaths.push(homeDir, xdgCacheHome)
-  process.env.HOME = homeDir
-  process.env.XDG_CACHE_HOME = xdgCacheHome
-  process.env.OPENCODE_SESSION_ID = 'resume-test-session'
-  delete process.env.COPILOT_CONFIG_DIR
+  // Plugin init resolves its PID-file dir from XDG_STATE_HOME (else
+  // os.homedir(), which Bun does not re-read after an in-process HOME change),
+  // so without this the suite writes to the developer's real state dir.
+  xdgStateHome = mkdtempSync(join(tmpdir(), 'resume-test-state-'))
+  tempPaths.push(homeDir, xdgCacheHome, xdgStateHome)
+  restoreEnv = overrideEnv(ENV_KEYS, {
+    HOME: homeDir,
+    XDG_CACHE_HOME: xdgCacheHome,
+    XDG_STATE_HOME: xdgStateHome,
+    OPENCODE_SESSION_ID: 'resume-test-session',
+    COPILOT_CONFIG_DIR: undefined,
+  })
 })
 
 afterEach(async () => {
@@ -55,15 +68,8 @@ afterEach(async () => {
   await delay(0)
   await cleanupAll()
 
-  process.env.PATH = originalPath
-  process.env.HOME = originalHome
-  process.env.XDG_CACHE_HOME = originalXdgCacheHome
-  process.env.OPENCODE_SESSION_ID = originalSessionId
-  if (originalCopilotConfigDir === undefined) {
-    delete process.env.COPILOT_CONFIG_DIR
-  } else {
-    process.env.COPILOT_CONFIG_DIR = originalCopilotConfigDir
-  }
+  restoreEnv?.()
+  restoreEnv = undefined
 
   for (const p of tempPaths.splice(0)) {
     rmSync(p, { force: true, recursive: true })
@@ -611,7 +617,14 @@ exit 1
       process.env.PATH = `${binDir}:${process.env.PATH ?? ''}`
 
       const client = makeMockClient()
-      const tool = createResumeTool({ client, directory: cwd })
+      // The fake CLI exits immediately; a window far beyond any scheduling
+      // delay means the subprocess exit (a real signal), not the probe timer,
+      // always decides the race.
+      const tool = createResumeTool({
+        client,
+        directory: cwd,
+        failureWindowMs: 60_000,
+      })
 
       const raw = await tool.execute(
         { target_id: 'no-match-name' },
@@ -722,6 +735,20 @@ describe('plugin tool catalog with copilot_resume', () => {
       'copilot_output',
       'copilot_resume',
     ])
+  })
+
+  it('roots the orphans directory under the temp XDG_STATE_HOME', async () => {
+    // Given the suite's isolated XDG_STATE_HOME
+    expect(process.env.XDG_STATE_HOME).toBe(xdgStateHome)
+    expect(xdgStateHome.startsWith(tmpdir())).toBe(true)
+
+    // When the plugin is loaded
+    await plugin(makePluginInput(process.cwd()))
+
+    // Then init created its state under the temp dir, not the real home
+    expect(
+      existsSync(join(xdgStateHome, 'opencode-copilot-delegate', 'orphans')),
+    ).toBe(true)
   })
 
   it('schema-walk covers copilot_resume target_id and add_dir args', async () => {
