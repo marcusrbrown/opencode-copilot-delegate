@@ -31,6 +31,13 @@
     }
   },
   "files": {
-    "includes": ["**", "!dist", "!node_modules", "!.changeset", "!.context"]
+    "includes": [
+      "**",
+      "!dist",
+      "!node_modules",
+      "!.changeset",
+      "!.context",
+      "!CHANGELOG.md"
+    ]
   }
 }
