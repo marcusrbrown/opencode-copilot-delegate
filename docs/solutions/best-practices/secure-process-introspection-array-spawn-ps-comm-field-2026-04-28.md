@@ -7,12 +7,11 @@ problem_type: best_practice
 component: development_workflow
 severity: high
 applies_when:
-
 - Verifying process ownership securely
 - Preventing PID reuse and tampering
 - Using kernel-tracked process identity
 - Safely spawning system commands
-  tags:
+tags:
 - process-introspection
 - ps-command
 - comm-field
@@ -20,7 +19,6 @@ applies_when:
 - secure-spawning
 - injection-prevention
 - kernel-truth
-
 ---
 
 # Secure Process Introspection with Array-Spawn ps and Comm-Field Identity Gate

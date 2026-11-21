@@ -7,12 +7,11 @@ problem_type: developer_experience
 component: development_workflow
 severity: medium
 applies_when:
-
 - An opencode test or invocation hangs or times out without an obvious local cause
-- "build · model" stalls without progress, or `assistant[]` comes back empty
+- '"build · model" stalls without progress, or `assistant[]` comes back empty'
 - You suspect an upstream regression, plugin-loading bug, or isolation problem
 - Anytime you find yourself forming a theory before reading logs
-  tags:
+tags:
 - opencode
 - debugging
 - print-logs
@@ -20,7 +19,6 @@ applies_when:
 - rate-limit
 - api-errors
 - troubleshooting
-
 ---
 
 # Diagnosing OpenCode failures with debug logs

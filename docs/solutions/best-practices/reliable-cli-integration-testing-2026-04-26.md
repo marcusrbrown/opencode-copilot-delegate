@@ -7,12 +7,11 @@ problem_type: best_practice
 component: testing_framework
 severity: medium
 applies_when:
-
 - Building integration tests for an OpenCode plugin that exercises tool execution end-to-end
 - Choosing between an SDK harness (`opencode serve` + `createOpencodeClient`) and a CLI subprocess
 - Diagnosing test timeouts that look like plugin-loading or tool-calling regressions
 - Selecting a default model for a CI test suite
-  tags:
+tags:
 - opencode
 - integration-testing
 - cli-invocations
@@ -20,7 +19,6 @@ applies_when:
 - isolation
 - spawn-sync
 - model-selection
-
 ---
 
 # Reliable integration testing for OpenCode plugins via CLI invocations

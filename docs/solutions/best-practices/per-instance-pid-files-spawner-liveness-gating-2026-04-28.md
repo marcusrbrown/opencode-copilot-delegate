@@ -7,22 +7,22 @@ problem_type: best_practice
 component: development_workflow
 severity: high
 applies_when:
-
 - Managing subprocess lifecycles in plugins
 - Preventing PID reuse of unrelated processes
 - Handling cross-instance orphan cleanup
 - Ensuring spawner liveness before reaping
-  tags:
+tags:
 - pid-files
 - subprocess-management
 - liveness-probing
 - orphan-reaping
 - process-identity
 - comm-lstart-gate
-
 ---
 
 # Per-Instance PID Files with Spawner-Liveness Gating
+
+> **Update 2026-11-21:** The "no dispose hook" premise now holds only on OpenCode 1.x. On 2.x, `setup` returns a cleanup. The last activation's release cancels running tasks, closes RPC and truncates the ledger through the ref-counted process core (`src/runtime/process-core.ts`). The startup reap remains the crash safety net on both hosts. See [v2-silent-zero-tools-normalize-tool-arg-schemas-2026-11-21.md](../../../docs/solutions/integration-issues/v2-silent-zero-tools-normalize-tool-arg-schemas-2026-11-21.md).
 
 ## Context
 

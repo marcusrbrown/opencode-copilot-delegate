@@ -11,6 +11,8 @@ related:
 
 # Copilot CLI memory experiment — `store_memory` tool surface
 
+> **Update 2026-11-21:** Memory 1 below is stale. `normalizeToolArgSchemas` is V1-only: it is needed below 1.15.1 and breaks V2 tool registration. `plugInOnce` is keyed per directory, and V2 uses no guard. Refresh the stored Copilot memory to match. See [the dual-host learning](../solutions/integration-issues/v2-silent-zero-tools-normalize-tool-arg-schemas-2026-11-21.md).
+
 Empirical investigation of GitHub Copilot's [agentic memory feature](https://docs.github.com/en/copilot/concepts/agents/copilot-memory) as exposed through Copilot CLI 1.0.40 in `-p` non-interactive mode. Carried out 2026-05-03 against the live `marcusrbrown/opencode-copilot-delegate` repository via `copilot_delegate` (claude-sonnet-4.6).
 
 ## Executive summary
