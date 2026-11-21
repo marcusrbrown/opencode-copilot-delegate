@@ -14,7 +14,7 @@ import {
   assertPluginStateDirNotSymlink,
   resolveInstancePidFilePath,
 } from './runtime/pid-file'
-import { plugInOnce } from './runtime/plugin-singleton'
+import { initProcessOnce, plugInOnce } from './runtime/plugin-singleton'
 import { startRpcServer } from './runtime/rpc-server'
 import { getAllTasks, getTask } from './runtime/task-registry'
 import { createCancelTool } from './tools/cancel'
@@ -36,11 +36,30 @@ function getAgentsDirectories(directory: string): {
   }
 }
 
-async function initializePlugin(input: PluginInputWithTestHooks) {
-  const { client, directory } = input
-  const agents = discoverAgents(getAgentsDirectories(directory))
-  const delegateDescription = buildDescription(agents)
+function logBestEffort(
+  client: PluginInput['client'],
+  level: 'info' | 'warn',
+  message: string,
+): void {
+  try {
+    client.app
+      .log({ body: { service: 'copilot-delegate', level, message } })
+      .catch(() => {})
+  } catch {
+    // Logging is best-effort.
+  }
+}
 
+/**
+ * Process-wide setup: orphan reaping, then the RPC server for the TUI. Runs
+ * once per process however many workspaces or config sources load the plugin
+ * (see `initProcessOnce`). It never rejects, so a failure here can't block
+ * tool registration for any workspace.
+ */
+async function initializeProcess(
+  input: PluginInputWithTestHooks,
+): Promise<{ pidFilePath: string }> {
+  const { client } = input
   const currentInstancePath = resolveInstancePidFilePath()
   const pidFileDir = dirname(currentInstancePath)
   try {
@@ -62,42 +81,30 @@ async function initializePlugin(input: PluginInputWithTestHooks) {
   }
 
   // RPC/TUI status is additive. If localhost startup fails, the server plugin
-  // must still register its existing tools.
+  // must still register its existing tools. The registry is process-wide, so
+  // this one server lists and cancels tasks from every workspace.
   try {
     const rpcServer = await startRpcServer({
       taskRegistry: { getAllTasks },
       cancelTaskById: (taskId) => cancelTaskById({ getTask }, taskId),
-      log: (message) => {
-        try {
-          client.app
-            .log({
-              body: { service: 'copilot-delegate', level: 'info', message },
-            })
-            .catch(() => {})
-        } catch {
-          // Logging is best-effort.
-        }
-      },
+      log: (message) => logBestEffort(client, 'info', message),
     })
     const closeRpcServer = wireRpcServerCleanup(rpcServer.close)
     input.__captureRpcCleanup?.(closeRpcServer)
   } catch (error) {
     const message = `[copilot-delegate] failed to start RPC server: ${error}`
     console.warn(message)
-    try {
-      client.app
-        .log({
-          body: {
-            service: 'copilot-delegate',
-            level: 'warn',
-            message,
-          },
-        })
-        .catch(() => {})
-    } catch {
-      // Logging is best-effort; RPC startup failure must not block tools.
-    }
+    logBestEffort(client, 'warn', message)
   }
+
+  return { pidFilePath: currentInstancePath }
+}
+
+/** Per-workspace hooks: the four tools, bound to this input's directory. */
+function buildHooks(input: PluginInput, pidFilePath: string) {
+  const { client, directory } = input
+  const agents = discoverAgents(getAgentsDirectories(directory))
+  const delegateDescription = buildDescription(agents)
 
   return {
     tool: {
@@ -106,44 +113,35 @@ async function initializePlugin(input: PluginInputWithTestHooks) {
           client,
           description: delegateDescription,
           directory,
-          pidFilePath: currentInstancePath,
+          pidFilePath,
         }),
       ),
       copilot_output: normalizeToolArgSchemas(createOutputTool()),
       copilot_cancel: normalizeToolArgSchemas(createCancelTool()),
       copilot_resume: normalizeToolArgSchemas(
-        createResumeTool({
-          client,
-          directory,
-          pidFilePath: currentInstancePath,
-        }),
+        createResumeTool({ client, directory, pidFilePath }),
       ),
     },
   }
 }
 
 const CopilotDelegate: Plugin = async (input) => {
+  const { pidFilePath } = await initProcessOnce(() => initializeProcess(input))
   const result = await plugInOnce({
-    doInit: () => initializePlugin(input),
+    key: input.directory,
+    doInit: async () => buildHooks(input, pidFilePath),
     onDuplicate: (pid) => {
-      const message = `[copilot-delegate] duplicate factory invocation in same process (pid=${pid}); returning empty hooks so the host does not double-register tools. Multiple opencode.json sources may list this plugin.`
+      const message = `[copilot-delegate] duplicate factory invocation for ${input.directory} in the same process (pid=${pid}); returning empty hooks so the host does not double-register tools. Multiple opencode.json sources may list this plugin.`
       console.warn(message)
       // Fire-and-forget so the log call never blocks plugin init.
-      input.client.app
-        .log({
-          body: {
-            service: 'copilot-delegate',
-            level: 'warn',
-            message,
-          },
-        })
-        .catch(() => {})
+      logBestEffort(input.client, 'warn', message)
     },
   })
-  // Return the envelope's hooks. On the first invocation this is the real
-  // hooks object built by `initializePlugin`. On duplicate invocations
-  // this is `{}` so the host registers nothing for the duplicate source —
-  // see plugin-singleton.ts for the empirical justification.
+  // Return the envelope's hooks. On the first invocation for a directory
+  // this is the real hooks object built by `buildHooks`. On duplicate
+  // invocations for the same directory it is `{}`, so the host registers
+  // nothing for the duplicate source; see plugin-singleton.ts for the
+  // empirical justification.
   return result.hooks
 }
 

@@ -1,5 +1,6 @@
 import { randomUUID } from 'node:crypto'
 import { killProcessTree } from '../lib/kill-tree'
+import { processGlobal } from '../lib/process-global'
 import { getPidIdentity } from './orphan-reaper'
 import { appendPidEntry } from './pid-file'
 import type { SpawnCopilotResult } from './subprocess'
@@ -46,7 +47,10 @@ export type CreateTaskInput = Omit<SpawnCopilotResult, 'taskId'> & {
   pidFilePath?: string
 }
 
-const tasks = new Map<string, TaskState>()
+// Process-wide, not module-wide: every module instance (one per config source
+// or workspace directory) must see the same tasks, so the single RPC server
+// lists and cancels tasks from every workspace. See src/lib/process-global.ts.
+const tasks = processGlobal('task-registry', () => new Map<string, TaskState>())
 const TERMINAL_STATUSES = new Set<TaskState['status']>([
   'complete',
   'failed',

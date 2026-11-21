@@ -1,25 +1,35 @@
 /**
- * Per-process register-once guard for the plugin factory.
+ * Register-once guards for the plugin factory.
  *
- * OpenCode invokes the plugin factory more than once per process when the
- * same plugin is referenced by multiple config sources (for example a
- * user-level `~/.config/opencode/opencode.json` AND a project-level
- * `opencode.json`). Each invocation evaluates the plugin module fresh —
- * module-local variables reset between calls — so the guard state must
- * live on `globalThis` to persist across module instances within the
- * same process.
+ * OpenCode invokes the plugin factory more than once per process: once per
+ * config source that lists the plugin (for example a user-level
+ * `~/.config/opencode/opencode.json` AND a project-level `opencode.json`),
+ * and once per workspace directory the server opens. Each invocation may
+ * evaluate the plugin module fresh, so module-local variables reset between
+ * calls. The guard state therefore lives on `globalThis` to persist across
+ * module instances within the same process.
  *
- * On the first invocation `doInit` runs and the resulting hooks promise
- * is cached on `globalThis`; the caller receives `{ isFirst: true, hooks }`.
- * On every subsequent invocation in the same PID `doInit` is skipped, the
- * cached promise is awaited (so sticky rejections still propagate),
- * `onDuplicate` fires exactly once, and the caller receives
- * `{ isFirst: false, hooks: {} as T }`. Across PIDs the guard is treated
- * as absent and init runs fresh — `globalThis` is per-process, but the
- * explicit PID check adds defensive belt-and-suspenders against any
- * state-leakage edge case.
+ * Two guards with different scopes:
  *
- * **Why empty hooks on duplicate invocations.** A whole-hooks singleton
+ * - {@link initProcessOnce} runs process-wide setup (orphan reaping, the RPC
+ *   server and its port file) exactly once per process, whatever the
+ *   directory.
+ * - {@link plugInOnce} hands out real hooks once per `key` (the workspace
+ *   directory). A second invocation for the same key gets `{}`; a different
+ *   key gets its own real hooks. This partially supersedes R6 of the
+ *   2026-05-11 singleton decision, which returned `{}` to every invocation
+ *   after the first. That starved later workspaces of tools (#530 item 2).
+ *
+ * For a given key, the first invocation runs `doInit` and caches its promise
+ * on `globalThis`; the caller receives `{ isFirst: true, hooks }`. Every
+ * later invocation for that key in the same PID skips `doInit`, awaits the
+ * cached promise (so sticky rejections still propagate), fires `onDuplicate`
+ * once, and receives `{ isFirst: false, hooks: {} as T }`. Across PIDs the
+ * guard is treated as absent and init runs fresh. `globalThis` is
+ * per-process, but the explicit PID check is a defensive belt-and-suspenders
+ * against any state-leakage edge case.
+ *
+ * **Why empty hooks on duplicate invocations.**
  * that returns the same hooks reference to both invocations does not
  * deduplicate host-side tool registration: OpenCode iterates each plugin
  * source's returned hook surface and registers every tool entry it finds,
@@ -55,20 +65,27 @@
  * harmless because the second run produces the same registrations as the
  * first.
  *
- * This plugin's init is not idempotent. `doInit` starts an RPC server that
- * binds a TCP port and writes a PID file to a well-known path. A second
- * `doInit` call in the same process would attempt to bind the same port
- * (EADDRINUSE) and overwrite the PID file with a duplicate entry. The
- * singleton pattern is the correct constraint here: exactly one server
- * starts per process, and exactly one PID file entry is written. The
- * paired `wireRpcServerCleanup` helper in `src/lib/rpc-cleanup.ts`
- * enforces the matching invariant on shutdown — the server closes exactly
- * once. Both guards exist because the resource is exclusive to the process.
+ * This plugin's process setup is not idempotent. The RPC server binds an
+ * ephemeral port and writes a port file with a fresh bearer token to a
+ * well-known path. A second server in the same process would not collide on
+ * the port (it is port 0, so the OS picks a new one). It would overwrite the
+ * port file, though, so the TUI would discover only the second server and its
+ * token, and lose sight of tasks the first one serves. Orphan reaping must
+ * also run once, before any task is spawned. {@link initProcessOnce} is the
+ * guard for that process-wide work. Per-directory tool hooks are cheap and
+ * safe to build once per workspace. The paired `wireRpcServerCleanup` helper
+ * in `src/lib/rpc-cleanup.ts` enforces the matching invariant on shutdown:
+ * the server closes exactly once.
  */
 
-const SINGLETON_KEY: unique symbol = Symbol.for(
-  'opencode-copilot-delegate.singleton.v1',
-)
+import { _resetProcessGlobal, processGlobal } from '../lib/process-global'
+
+// Not 'singleton': that `.v1` slot held a single state object in releases
+// before per-directory hooks, and a Map here would collide with it if both
+// versions load in one process.
+const HOOKS_SLOT = 'hook-guards'
+const PROCESS_INIT_SLOT = 'process-init'
+const DEFAULT_KEY = '<default>'
 
 interface SingletonState<T> {
   pid: number
@@ -77,26 +94,31 @@ interface SingletonState<T> {
   warned: boolean
 }
 
-/**
- * Type-safe view onto `globalThis` for our symbol-keyed singleton slot.
- *
- * TypeScript's `declare global { var ... }` augmentation does not accept
- * computed property keys, so a unique-symbol-keyed slot on `globalThis`
- * is reachable only via an intersection cast. The cast is contained at
- * a single point (`globalThis as unknown as GlobalWithSingleton<T>`)
- * and the property type drives subsequent reads and writes — callers do
- * not re-assert the value's shape with additional casts.
- */
-type GlobalWithSingleton<T> = typeof globalThis & {
-  [SINGLETON_KEY]?: SingletonState<T>
+interface ProcessInitState<T> {
+  pid: number
+  promise: Promise<T>
+}
+
+/** Per-key hook guards, shared by every module instance in the process. */
+function hookGuards(): Map<string, SingletonState<unknown>> {
+  return processGlobal(
+    HOOKS_SLOT,
+    () => new Map<string, SingletonState<unknown>>(),
+  )
 }
 
 export interface PlugInOnceOptions<T> {
-  /** Heavy init work that should run at most once per process. */
+  /** Per-key hook construction; runs at most once per key per process. */
   doInit: () => Promise<T>
   /**
-   * Called exactly once on the first duplicate invocation in the same
-   * process. Subsequent duplicates are silent. Receives the same `pid`
+   * Guard key. Use the workspace directory so each workspace gets its own
+   * hooks while repeat invocations for one workspace get `{}`. Defaults to a
+   * single shared key (the pre-#530 one-hooks-per-process behavior).
+   */
+  key?: string
+  /**
+   * Called exactly once on the first duplicate invocation for a key in the
+   * same process. Subsequent duplicates are silent. Receives the same `pid`
    * value the guard used for its identity check (so test overrides flow
    * through faithfully). Implementations must not throw; fire-and-forget
    * side effects (logging, metrics) are expected. Synchronous exceptions
@@ -125,18 +147,19 @@ export interface PlugInOnceResult<T> {
 }
 
 /**
- * Run `doInit` at most once per process; on duplicate invocations resolve
- * to empty hooks so the OpenCode host does not double-register tools and
- * hooks under dual-source configurations.
+ * Run `doInit` at most once per `key` per process; on duplicate invocations
+ * for the same key resolve to empty hooks so the OpenCode host does not
+ * double-register tools and hooks under dual-source configurations.
  */
 export async function plugInOnce<T>({
   doInit,
+  key = DEFAULT_KEY,
   onDuplicate,
   pid,
 }: PlugInOnceOptions<T>): Promise<PlugInOnceResult<T>> {
   const currentPid = pid ?? process.pid
-  const g = globalThis as unknown as GlobalWithSingleton<T>
-  const existing = g[SINGLETON_KEY]
+  const guards = hookGuards()
+  const existing = guards.get(key)
 
   if (existing && existing.pid === currentPid) {
     if (!existing.warned) {
@@ -156,21 +179,40 @@ export async function plugInOnce<T>({
   }
 
   const hooksPromise = doInit()
-  g[SINGLETON_KEY] = {
+  guards.set(key, {
     pid: currentPid,
     loadedAt: Date.now(),
     hooksPromise,
     warned: false,
-  }
+  })
   const hooks = await hooksPromise
   return { isFirst: true, hooks }
 }
 
 /**
- * Test-only: clear the singleton state so the next invocation re-runs
- * init. Must not be called in production code paths.
+ * Run process-wide setup at most once per process, across every module
+ * instance and workspace directory, and share its promise with every caller.
+ * A rejected init is sticky, like {@link plugInOnce}.
+ */
+export function initProcessOnce<T>(
+  doInit: () => Promise<T>,
+  pid: number = process.pid,
+): Promise<T> {
+  const slot = processGlobal<{ state?: ProcessInitState<unknown> }>(
+    PROCESS_INIT_SLOT,
+    () => ({}),
+  )
+  if (slot.state?.pid !== pid) {
+    slot.state = { pid, promise: doInit() }
+  }
+  return slot.state.promise as Promise<T>
+}
+
+/**
+ * Test-only: clear both guards so the next invocation re-runs process setup
+ * and hook construction. Must not be called in production code paths.
  */
 export function _resetPluginSingleton(): void {
-  const g = globalThis as unknown as GlobalWithSingleton<unknown>
-  delete g[SINGLETON_KEY]
+  _resetProcessGlobal(HOOKS_SLOT)
+  _resetProcessGlobal(PROCESS_INIT_SLOT)
 }

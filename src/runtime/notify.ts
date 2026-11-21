@@ -10,6 +10,7 @@
  * the same counter value and both setting noReply: false.
  */
 
+import { processGlobal } from '../lib/process-global'
 import type { TaskStatus } from './envelope'
 import type { SpawnCopilotResult } from './subprocess'
 import type { TaskOrigin, TaskState } from './task-registry'
@@ -57,8 +58,15 @@ export type NotifyTaskInfo = {
   origin?: TaskOrigin
 }
 
-/** Per-parent-session in-flight task counters. */
-const inFlightCounters = new Map<string, number>()
+/**
+ * Per-parent-session in-flight task counters. Process-wide: a parent session
+ * can delegate through tools from different module instances, and the
+ * `noReply` decision must count all of them.
+ */
+const inFlightCounters = processGlobal(
+  'notify-in-flight',
+  () => new Map<string, number>(),
+)
 
 /** Increment the in-flight counter for a parent session. */
 export function incrementInFlight(parentSessionID: string): void {

@@ -90,7 +90,7 @@ Returns `{ cancelled: boolean; was_running: boolean }`.
 
 ## Scope Boundary
 
-Task state is in-memory inside a single OpenCode process. Calling `copilot_output` from a different OpenCode process returns `{ status: 'unknown', error: 'task_id not found in this OpenCode process' }`. Cross-process sharing is deferred to a future version.
+Task state is in-memory inside a single OpenCode process, and it is shared by every workspace that process serves. When one OpenCode server opens several project directories, each directory gets its own `copilot_*` tools, which run Copilot in that directory and discover that repo's `.github/agents`. There is one task list for the whole process, and one RPC server, which feeds `/copilot-status`. If the same directory loads the plugin from more than one config source, only the first registers tools. Calling `copilot_output` from a different OpenCode process returns `{ status: 'unknown', error: 'task_id not found in this OpenCode process' }`. Cross-process sharing is deferred to a future version.
 
 ## Known Limitations
 

@@ -356,3 +356,81 @@ describe('plugin init lifecycle', () => {
     )
   })
 })
+
+describe('per-workspace hooks (#530 item 2)', () => {
+  function makeWorkspace(agentName: string): string {
+    const dir = mkdtempSync(join(tmpdir(), `plugin-ws-${agentName}-`))
+    tempPaths.push(dir)
+    mkdirSync(join(dir, '.github', 'agents'), { recursive: true })
+    writeFileSync(
+      join(dir, '.github', 'agents', `${agentName}.md`),
+      `---\nname: ${agentName}\ndescription: ${agentName} agent\n---\nbody\n`,
+    )
+    return dir
+  }
+
+  function readPortFileToken(): string {
+    const portFilePath = join(
+      process.env.XDG_CACHE_HOME ?? '',
+      'opencode',
+      'copilot-delegate',
+      process.env.OPENCODE_SESSION_ID ?? '',
+      'server-port.json',
+    )
+    return PortFileSchema.parse(JSON.parse(readFileSync(portFilePath, 'utf8')))
+      .token
+  }
+
+  it('gives each workspace directory its own tools, bound to that directory', async () => {
+    // Given two workspaces, each with a distinct repo-level Copilot agent
+    const xdgState = mkdtempSync(join(tmpdir(), 'plugin-ws-xdg-'))
+    tempPaths.push(xdgState)
+    process.env.XDG_STATE_HOME = xdgState
+    const alpha = makeWorkspace('alpha-agent')
+    const beta = makeWorkspace('beta-agent')
+
+    // When the host invokes the factory once per workspace
+    const first = await plugin(makePluginInput(alpha))
+    const second = await plugin(makePluginInput(beta))
+
+    // Then both get the full tool catalog (previously the second got `{}`)
+    const tools = [
+      'copilot_cancel',
+      'copilot_delegate',
+      'copilot_output',
+      'copilot_resume',
+    ]
+    expect(Object.keys(first.tool ?? {}).sort()).toEqual(tools)
+    expect(Object.keys(second.tool ?? {}).sort()).toEqual(tools)
+
+    // And each delegate tool discovered its own workspace's agents
+    const alphaDescription = first.tool?.copilot_delegate.description ?? ''
+    const betaDescription = second.tool?.copilot_delegate.description ?? ''
+    expect(alphaDescription).toContain('alpha-agent')
+    expect(alphaDescription).not.toContain('beta-agent')
+    expect(betaDescription).toContain('beta-agent')
+    expect(betaDescription).not.toContain('alpha-agent')
+  })
+
+  it('runs process setup once: one RPC server and port file for every workspace', async () => {
+    // Given the factory invoked for a first workspace
+    const xdgState = mkdtempSync(join(tmpdir(), 'plugin-ws-rpc-xdg-'))
+    tempPaths.push(xdgState)
+    process.env.XDG_STATE_HOME = xdgState
+    await plugin(makePluginInput(makeWorkspace('one')))
+    const firstCleanup = closeRpcServer
+    expect(firstCleanup).toBeDefined()
+    const tokenAfterFirst = readPortFileToken()
+
+    // When further workspaces load the plugin in the same process
+    closeRpcServer = undefined
+    await plugin(makePluginInput(makeWorkspace('two')))
+    await plugin(makePluginInput(makeWorkspace('three')))
+
+    // Then no second server started: no new cleanup was wired, and the port
+    // file still carries the first server's token
+    expect(closeRpcServer).toBeUndefined()
+    expect(readPortFileToken()).toBe(tokenAfterFirst)
+    closeRpcServer = firstCleanup
+  })
+})
