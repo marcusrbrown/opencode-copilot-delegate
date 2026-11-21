@@ -103,6 +103,7 @@ Biome handles both. Configuration in `biome.json`:
 
 - 2-space indent, single quotes, no semicolons (ASI)
 - Recommended lint rules enabled
+- Formatting is off for `docs/**/*.md`, and `CHANGELOG.md` is excluded, because Biome's markdown formatter corrupts YAML frontmatter and rejects changeset-generated lists. `tests/docs-frontmatter.test.ts` checks that every docs frontmatter block parses
 
 Run `bun run lint` to check, `bun run fix` to auto-fix.
 

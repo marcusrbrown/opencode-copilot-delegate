@@ -3,6 +3,12 @@
 # the plugin's `copilot -p ...` spawn replays a captured JSONL session and
 # exits 0, so tool execution can be tested with no model and no auth.
 # Arguments are ignored on purpose. Used by tests/host-contract/.
+# A missing fixture must fail the run, not exit 0 with no output (#579).
+set -eu
+fixture="$(dirname "$0")/../happy-path.jsonl"
+if [ ! -r "$fixture" ]; then
+  echo "copilot shim: fixture not found: $fixture" >&2
+  exit 66
+fi
 sleep 1
-cat "$(dirname "$0")/../happy-path.jsonl"
-exit 0
+cat "$fixture"

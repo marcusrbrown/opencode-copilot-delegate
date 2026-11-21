@@ -104,7 +104,7 @@ Facts are verified against source unless marked inferred.
 - `docs/solutions/integration-issues/two-entrypoint-rpc-tui-hardening-2026-05-01.md`:
   - RPC and TUI startup are best-effort and never block tool registration.
   - The session discriminator is validated before use.
-  - Cleanup removes only the exact stale port file.
+  - Cleanup removes only the exact stale port file. (Superseded in #575: a sibling sweep also removes stale and empty dirs.)
   - The export smoke test stays.
 - `docs/solutions/best-practices/per-instance-pid-files-spawner-liveness-gating-2026-04-28.md` and `docs/plans/2026-04-27-002-fix-runtime-hardening-plan.md` (completed): the PID ledger assumes one spawner per host process. Per-directory hooks in one process must share one ledger and one write lock.
 - `docs/solutions/best-practices/reliable-cli-integration-testing-2026-04-26.md`: host tests drive the CLI with config-dir isolation rather than an SDK harness.
