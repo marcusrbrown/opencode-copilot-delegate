@@ -112,7 +112,10 @@ case "$prompt" in
     exit 0
     ;;
   "almost timeout")
-    sleep 0.8
+    # Block until the test releases the gate so completion timing is driven by
+    # the test, not by a sleep racing the output timeout.
+    gate="$(dirname "$0")/release"
+    while [ ! -e "$gate" ]; do sleep 0.02; done
     printf '%s\n' '{"type":"assistant.message","data":{"messageId":"msg-3","content":"fast enough","toolRequests":[]}}'
     printf '%s\n' '{"type":"result","sessionId":"session-3","exitCode":0,"usage":{}}'
     exit 0
@@ -482,7 +485,7 @@ describe('plugin tools', () => {
   })
 
   it('does not mark output as timed out when completion wins the race', async () => {
-    // Given a delegated task that completes just before the timeout
+    // Given a delegated task that is held running until the test releases it
     const cwd = mkdtempSync(join(tmpdir(), 'copilot-tools-near-timeout-'))
     const binDir = makeFakeCopilotBin()
     tempPaths.push(cwd, binDir)
@@ -499,11 +502,14 @@ describe('plugin tools', () => {
     )
     const taskId = String(expectObject(delegateRaw).task_id)
 
-    // When blocking output waits slightly longer than task completion
-    const raw = await tools.copilot_output.execute(
-      { task_id: taskId, block: true, timeout_ms: 1200 },
+    // When blocking output is waiting (max cap, which never fires here) and
+    // the task is then released to complete
+    const pending = tools.copilot_output.execute(
+      { task_id: taskId, block: true, timeout_ms: 120000 },
       makeToolContext(),
     )
+    writeFileSync(join(binDir, 'release'), '')
+    const raw = await pending
 
     // Then the completed envelope wins and is not timed out
     const output = expectObject(raw)

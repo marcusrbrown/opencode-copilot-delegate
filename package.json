@@ -1,6 +1,6 @@
 {
   "name": "opencode-copilot-delegate",
-  "version": "0.12.1",
+  "version": "0.12.2",
   "description": "OpenCode plugin that delegates tasks to GitHub Copilot CLI as background subprocesses",
   "type": "module",
   "main": "dist/index.js",
@@ -62,7 +62,7 @@
     "@opencode-ai/plugin": "1.19.6",
     "@types/babel__core": "7.20.5",
     "@types/bun": "1.4.4",
-    "@types/node": "24.19.2",
+    "@types/node": "26.6.6",
     "rimraf": "6.1.4",
     "typescript": "7.0.2"
   },
@@ -76,18 +76,20 @@
     "test:integration": "bun test tests/integration/",
     "lint": "biome check .",
     "fix": "biome check . --write",
-    "prepublishOnly": "bun run build",
+    "prepublishOnly": "bun run typecheck && bun run build",
     "version-changesets": "changeset version && bun install --lockfile-only",
     "publish-changesets": "bun run build && changeset publish"
   },
   "dependencies": {
-    "@opentui/core": "0.2.7",
-    "@opentui/solid": "0.2.7",
+    "@opentui/core": "0.4.5",
+    "@opentui/solid": "0.4.5",
     "fkill": "10.0.3",
     "solid-js": "1.9.19",
     "zod": "^4.6.7"
   },
   "overrides": {
-    "zod": "^4.6.7"
+    "@opentui/core": "0.4.5",
+    "zod": "^4.6.7",
+    "brace-expansion@2": "^2.1.8"
   }
 }

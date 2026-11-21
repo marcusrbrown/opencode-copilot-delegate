@@ -20,38 +20,50 @@ src/
 │   ├── cancel.ts         # copilot_cancel tool
 │   └── resume.ts         # copilot_resume tool
 ├── runtime/
-│   ├── rpc-contract.ts   # Shared server/TUI RPC schemas + inferred types
-│   ├── rpc-server.ts     # localhost RPC server for the TUI half
-│   ├── cancel-helper.ts  # Shared cancellation path for tool + RPC
-│   ├── subprocess.ts     # Spawns copilot CLI, streams JSONL stdout
-│   ├── task-registry.ts  # In-memory task state (create/get/update/delete/cleanup)
-│   ├── jsonl-parser.ts   # Single-line JSONL parser for Copilot CLI output
-│   ├── envelope.ts       # Builds structured output envelopes from parsed events
-│   └── notify.ts         # Injects completion notifications into OpenCode sessions
+│   ├── rpc-contract.ts          # Shared server/TUI RPC schemas + inferred types
+│   ├── rpc-server.ts            # localhost RPC server for the TUI half
+│   ├── cancel-helper.ts         # Shared cancellation path for tool + RPC
+│   ├── subprocess.ts            # Spawns copilot CLI, streams JSONL stdout
+│   ├── task-registry.ts         # In-memory task state (create/get/update/delete/cleanup)
+│   ├── task-status.ts           # `setStatus` forward-only lifecycle; terminal states are idempotent
+│   ├── jsonl-parser.ts          # Single-line JSONL parser for Copilot CLI output
+│   ├── envelope.ts              # Builds structured output envelopes from parsed events
+│   ├── notify.ts                # Injects completion notifications into OpenCode sessions
+│   ├── continuity-checks.ts     # Resume/connect helpers: session UUID check, local session-state lookup, CLI error normalization
+│   ├── continuity-validation.ts # Validates resume target IDs, `--add-dir` paths, and cwd against allowed roots (realpath-aware)
+│   ├── orphan-reaper.ts         # Startup reaper: kills orphaned Copilot process trees found in per-instance PID files (liveness + identity gates)
+│   ├── pid-file.ts              # Per-instance PID file I/O (serialized append/remove/truncate, symlink-safe)
+│   └── plugin-singleton.ts      # Per-process register-once guard for the plugin factory (state on `globalThis`)
+├── lib/
+│   ├── ansi.ts                       # `stripAnsi` — removes ANSI escape sequences from text
+│   ├── errno.ts                      # `isErrnoException` type predicate for `node:fs` errors
+│   ├── kill-tree.ts                  # `killProcessTree` — `fkill` wrapper that kills the process group and tolerates already-exited roots
+│   ├── normalize-tool-arg-schemas.ts # Patches Zod `toJSONSchema` so tool arg descriptions survive the host/plugin zod split
+│   └── rpc-cleanup.ts                # `wireRpcServerCleanup` — runs RPC server close once on `beforeExit`/`SIGTERM`
 ├── tui/
-│   ├── index.tsx         # TUI plugin entrypoint — registers /copilot-status
-│   ├── rpc-client.ts     # Reads per-session port file + calls RPC server
-│   └── components/       # OpenTUI/Solid modal list + confirm card
+│   ├── index.tsx         # TUI plugin entrypoint — registers /copilot-status (palette + slash)
+│   ├── status-dialogs.tsx # /copilot-status flow on host DialogSelect/DialogConfirm/DialogAlert (host owns theming, keys, close)
+│   ├── status-format.ts  # Pure formatting helpers for task option text (status, elapsed, tool calls)
+│   └── rpc-client.ts     # Reads per-session port file + calls RPC server
 ├── discovery/
 │   ├── agents.ts         # Discovers .agent.md files from Copilot agent directories
 │   └── description.ts    # Builds copilot_delegate tool description from discovered agents
 tests/
-├── jsonl-parser.test.ts  # Parser unit tests
-├── envelope.test.ts      # Envelope builder tests
-├── subprocess.test.ts    # Subprocess wrapper tests (fake copilot binary)
-├── discovery.test.ts     # Agent discovery tests (temp fixture dirs)
-├── notify.test.ts        # Notification injection tests
-└── tools.test.ts         # Tool integration tests (full plugin lifecycle)
-tests/fixtures/
-└── jsonl/                # Real Copilot CLI JSONL captures (PII-scrubbed)
+├── *.test.ts             # Unit tests, roughly one per src module (parser, envelope, subprocess, discovery, notify, RPC, reaper, tools, package exports, ...)
+├── integration/          # Integration tests against the built plugin + a real `opencode` CLI (skipped when absent)
+└── fixtures/             # Test inputs: JSONL captures (PII-scrubbed Copilot CLI output), agent .md fixtures, README with provenance
+src/tui/__tests__/        # TUI tests (components, RPC client, plugin entrypoint)
 docs/
+├── brainstorms/          # Requirements documents from brainstorming sessions
+├── ideation/             # Improvement ideation write-ups
 ├── plans/                # Implementation plans for major work
+├── research/             # Research notes (Copilot CLI capabilities, experiments)
 └── solutions/            # Documented solutions to past problems (bugs, best practices, workflow patterns), organized by category with YAML frontmatter (module, tags, problem_type)
 ```
 
 ## Design Decisions
 
-- **Peer dependencies**: `@opencode-ai/plugin` and `@opencode-ai/sdk` are peers — the host OpenCode install provides them
+- **Peer dependencies**: `@opencode-ai/plugin` is the only declared peer dependency — the host OpenCode install provides it
 - **Single-line JSONL parser**: `parseJsonlLine` handles one line at a time and returns `{ type: 'unknown' }` for malformed input. Stream-level multiline accumulation belongs in the subprocess wrapper
 - **Task IDs**: prefixed with `cpl_` to distinguish from OpenCode-native task IDs
 - **Process cleanup**: uses `fkill` with `{ force: false, forceAfterTimeout: 2000, waitForExit: 5000 }` and `.catch()` guards on all `killProcessTree` calls in abort handlers. On macOS, `tree: true` is Windows-only, so the kill targets the entire process group via `fkill(-pid, ...)` and the subprocess is spawned with `detached: true`.
@@ -59,7 +71,8 @@ docs/
 - **Agent discovery**: builtin agents (bundled with Copilot CLI) cannot be overridden by user or repo agents
 - **Structured errors**: tools return `{ error: string }` objects, never throw exceptions
 - **Two-entrypoint architecture**: package exports the existing server plugin at `.` and `./plugin`, plus the TUI source entrypoint at `./tui`. The server half owns subprocesses, task registry, notifications, and the localhost RPC server. The TUI half is opt-in and talks to the server through the per-session authenticated port file.
-- **TUI command registration**: `api.command.register` uses the `value` field for `/copilot-status` on the installed `@opencode-ai/plugin/tui` types.
+- **TUI command registration**: `api.keymap.registerLayer` registers a `palette` command with `slashName: 'copilot-status'` and `desc`; the legacy `api.command.register` fallback uses the `value` field plus `slash` for hosts without the keymap surface.
+- **TUI dialogs**: `/copilot-status` is built only from host components (`api.ui.DialogSelect`, `DialogConfirm`, `DialogAlert`) so theming and keys come from the host. Never call `api.ui.dialog.clear()` or pass `onClose` to `dialog.replace`, and open follow-up dialogs on a deferred tick (the host clears `DialogConfirm`/`DialogAlert` itself after `onConfirm`/`onCancel`). See `docs/solutions/ui-bugs/re-entrant-dialog-close-froze-copilot-status-on-escape-2026-05-02.md`.
 - **TUI JSX mode**: `tsconfig.json` keeps `jsx: "preserve"`; TUI `.tsx` files use `/** @jsxImportSource @opentui/solid */` pragmas.
 
 ## Coding Standards
@@ -93,7 +106,7 @@ Run `bun run lint` to check, `bun run fix` to auto-fix.
 ### Commits
 
 - Format: `feat(scope): description`, `fix(scope): description`, `chore(scope): description`
-- Scopes: `runtime`, `tools`, `discovery`, `ci`, `docs`
+- Scopes: `runtime`, `tools`, `discovery`, `ci`, `docs`, `deps`, `dev`
 - User-visible feature additions and behavior changes require a `.changeset/*.md` with `minor` bump (unstable `0.x` series). Targeted user-visible bug fixes/hotfixes may use `patch` when they do not add new functionality.
 
 ## Security Constraints
