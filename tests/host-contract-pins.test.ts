@@ -36,6 +36,40 @@ const pin = (id: string) => {
   return found
 }
 
+describe('host-contract path filter', () => {
+  // The `changes` job's grep -E pattern, read from the workflow so the test
+  // can't drift from what CI runs. POSIX ERE here is also valid JS RegExp.
+  const changesStep = (
+    workflow.jobs.changes as unknown as { steps: { run?: string }[] }
+  ).steps.find((step) => step.run?.includes('pattern='))
+  const match = changesStep?.run?.match(/pattern='([^']+)'/)
+  const filter = new RegExp(match?.[1] ?? '(?!)')
+
+  test.each([
+    'src/hosts/v2.ts',
+    'scripts/build.ts',
+    'tests/host-contract/run-host.sh',
+    'tests/fixtures/happy-path.jsonl',
+    'package.json',
+    'bun.lock',
+    'tsconfig.json',
+    'mise.toml',
+    '.github/workflows/ci.yaml',
+  ])('runs the matrix when %s changes', (path) => {
+    expect(filter.test(path)).toBe(true)
+  })
+
+  test.each([
+    'README.md',
+    'docs/plans/x.md',
+    'tests/notify.test.ts',
+    '.github/settings.yml',
+    'src.md',
+  ])('skips the matrix when only %s changes', (path) => {
+    expect(filter.test(path)).toBe(false)
+  })
+})
+
 describe('opencode host pins', () => {
   test('the CI matrix runs exactly the pins in the pins file', () => {
     expect(

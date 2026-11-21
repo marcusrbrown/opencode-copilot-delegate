@@ -158,7 +158,7 @@ jobs:
             --jq '.[] | .filename, (.previous_filename // empty)' > changed-files.txt
           echo "Changed files:"
           cat changed-files.txt
-          pattern='^(src/|scripts/|tests/host-contract/|tests/fixtures/)|^(package\.json|bun\.lock|\.github/workflows/ci\.yaml)$'
+          pattern='^(src/|scripts/|tests/host-contract/|tests/fixtures/)|^(package\.json|bun\.lock|tsconfig\.json|mise\.toml|\.github/workflows/ci\.yaml)$'
           if grep -Eq "$pattern" changed-files.txt; then
             echo "host-contract=true" >> "$GITHUB_OUTPUT"
           else

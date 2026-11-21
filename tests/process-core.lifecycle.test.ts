@@ -102,6 +102,24 @@ describe('process core acquire/release', () => {
     expect(resources.pidFilePath).toBe('/ledger/g2')
   })
 
+  it('a rejecting init drops the reference and lets the next acquire retry', async () => {
+    const events: string[] = []
+
+    // When the first generation fails to start
+    await expect(
+      acquireProcessCore(async () => {
+        throw new Error('no state dir')
+      }),
+    ).rejects.toThrow('no state dir')
+
+    // Then no reference or dead promise was left behind: the next acquire
+    // starts a fresh generation, and one release tears it down
+    const next = await acquireProcessCore(generation('g2', events))
+    expect(next.pidFilePath).toBe('/ledger/g2')
+    await releaseProcessCore()
+    expect(events).toEqual(['init g2', 'teardown g2 begin', 'teardown g2 end'])
+  })
+
   it('a failing teardown does not wedge the next acquire', async () => {
     await acquireProcessCore(async () => ({
       pidFilePath: '/ledger/bad',

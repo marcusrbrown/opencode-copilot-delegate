@@ -40,8 +40,10 @@ function core(): CoreState {
 
 /**
  * Take a reference on the process resources, starting them with `init` if no
- * generation is live. `init` must not reject: setup failures are reported
- * inside it, and tools must still register.
+ * generation is live. `init` should report setup failures itself rather than
+ * reject. If it does reject, the reference is dropped and the failed
+ * generation forgotten, so the rejection reaches this caller and the next
+ * acquire retries instead of inheriting a stuck count and a dead promise.
  */
 export async function acquireProcessCore(
   init: () => Promise<ProcessResources>,
@@ -52,7 +54,14 @@ export async function acquireProcessCore(
   }
   state.refs += 1
   state.resources ??= init()
-  return state.resources
+  const resources = state.resources
+  try {
+    return await resources
+  } catch (error) {
+    state.refs = Math.max(0, state.refs - 1)
+    if (state.resources === resources) state.resources = undefined
+    throw error
+  }
 }
 
 /**
