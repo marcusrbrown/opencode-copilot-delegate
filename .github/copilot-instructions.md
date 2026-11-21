@@ -21,7 +21,7 @@ Follow AGENTS.md for architecture, coding standards, and module boundaries.
 - **Linting/formatting**: Biome (not ESLint/Prettier)
 - **Test framework**: `bun:test`
 - **Build**: `bun build` + `tsc --emitDeclarationOnly`
-- **Dependencies**: `fkill` for process cleanup; `@opencode-ai/plugin` as a peer dependency
+- **Dependencies**: `fkill` for process cleanup; `zod` (bundled, `>=4.2`); `@opencode-ai/plugin` (V1) and `@opencode/plugin` (V2) as optional peer dependencies, imported as types only
 
 ## Verification Commands
 

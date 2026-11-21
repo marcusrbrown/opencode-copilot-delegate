@@ -11,7 +11,7 @@ import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import type { PluginInput } from '@opencode-ai/plugin'
 import type { ToolContext } from '@opencode-ai/plugin/tool'
-import plugin from '../src/index'
+import { serverV1 } from '../src/hosts/v1'
 import { _resetPluginSingleton } from '../src/runtime/plugin-singleton'
 import { cleanupAll } from '../src/runtime/task-registry'
 import { createDelegateTool } from '../src/tools/delegate'
@@ -50,7 +50,7 @@ beforeEach(() => {
   // Each test loads `plugin(input)` and asserts on the returned tool dispatch.
   // The singleton would short-circuit subsequent invocations and reuse the
   // first test's MockClient/PATH, breaking per-test isolation. Reset between
-  // tests so each `await plugin(input)` runs init for real.
+  // tests so each `await serverV1(input)` runs init for real.
   _resetPluginSingleton()
 
   const homeDir = mkdtempSync(join(tmpdir(), 'copilot-tools-home-'))
@@ -227,7 +227,7 @@ describe('plugin tools', () => {
     const input = makePluginInput(process.cwd())
 
     // When the plugin is loaded
-    const result = await plugin(input)
+    const result = await serverV1(input)
 
     // Then all tool names are registered
     expect(Object.keys(result.tool ?? {}).sort()).toEqual([
@@ -244,7 +244,7 @@ describe('plugin tools', () => {
     expect(xdgStateHome.startsWith(tmpdir())).toBe(true)
 
     // When the plugin is loaded
-    await plugin(makePluginInput(process.cwd()))
+    await serverV1(makePluginInput(process.cwd()))
 
     // Then init created its state under the temp dir, not the real home
     expect(
@@ -259,7 +259,7 @@ describe('plugin tools', () => {
     expect(process.env.OPENCODE_SESSION_ID).toBe('tools-test-session')
 
     // When the plugin is loaded
-    await plugin(makePluginInput(process.cwd()))
+    await serverV1(makePluginInput(process.cwd()))
 
     // Then the port file lives under the temp cache, not the real one
     expect(
@@ -280,7 +280,7 @@ describe('plugin tools', () => {
     const input = makePluginInput(process.cwd())
 
     // When the plugin is loaded
-    const result = await plugin(input)
+    const result = await serverV1(input)
 
     // Then the delegate description includes dynamic agent text
     expect(result.tool?.copilot_delegate.description.length).toBeGreaterThan(50)
@@ -291,7 +291,7 @@ describe('plugin tools', () => {
     const input = makePluginInput(process.cwd())
 
     // When the plugin is loaded
-    const result = await plugin(input)
+    const result = await serverV1(input)
     const tools = requireTools(result)
 
     // Then each registered tool's args carry a _zod.toJSONSchema override that
@@ -328,7 +328,7 @@ describe('plugin tools', () => {
     process.env.PATH = `${binDir}:${process.env.PATH ?? ''}`
 
     const input = makePluginInput(cwd)
-    const result = await plugin(input)
+    const result = await serverV1(input)
     const tools = requireTools(result)
 
     // When the delegate tool executes
@@ -361,7 +361,7 @@ describe('plugin tools', () => {
 
     process.env.PATH = `${binDir}:${process.env.PATH ?? ''}`
 
-    const result = await plugin(makePluginInput(cwd))
+    const result = await serverV1(makePluginInput(cwd))
     const tools = requireTools(result)
 
     const delegateRaw = await tools.copilot_delegate.execute(
@@ -390,7 +390,7 @@ describe('plugin tools', () => {
 
     const input = makePluginInput(cwd)
     const client = input.client as MockClient
-    const result = await plugin(input)
+    const result = await serverV1(input)
     const tools = requireTools(result)
 
     const raw = await tools.copilot_delegate.execute(
@@ -413,7 +413,7 @@ describe('plugin tools', () => {
 
   it('returns structured unknown status for missing output tasks', async () => {
     // Given the loaded plugin tools
-    const result = await plugin(makePluginInput(process.cwd()))
+    const result = await serverV1(makePluginInput(process.cwd()))
     const tools = requireTools(result)
 
     // When output is requested for a nonexistent task
@@ -432,7 +432,7 @@ describe('plugin tools', () => {
 
   it('returns structured errors for malformed task ids', async () => {
     // Given the loaded plugin tools
-    const result = await plugin(makePluginInput(process.cwd()))
+    const result = await serverV1(makePluginInput(process.cwd()))
     const tools = requireTools(result)
 
     // When output is requested with malformed task ids
@@ -460,7 +460,7 @@ describe('plugin tools', () => {
 
   it('returns a non-running result when cancelling an unknown task', async () => {
     // Given the loaded plugin tools
-    const result = await plugin(makePluginInput(process.cwd()))
+    const result = await serverV1(makePluginInput(process.cwd()))
     const tools = requireTools(result)
 
     // When cancel is requested for an unknown task
@@ -484,7 +484,7 @@ describe('plugin tools', () => {
 
     process.env.PATH = `${binDir}:${process.env.PATH ?? ''}`
 
-    const result = await plugin(makePluginInput(cwd))
+    const result = await serverV1(makePluginInput(cwd))
     const tools = requireTools(result)
     const delegateRaw = await tools.copilot_delegate.execute(
       {
@@ -515,7 +515,7 @@ describe('plugin tools', () => {
 
     process.env.PATH = `${binDir}:${process.env.PATH ?? ''}`
 
-    const result = await plugin(makePluginInput(cwd))
+    const result = await serverV1(makePluginInput(cwd))
     const tools = requireTools(result)
     const delegateRaw = await tools.copilot_delegate.execute(
       {
@@ -573,7 +573,7 @@ describe('plugin tools', () => {
     process.env.PATH = `${binDir}:${process.env.PATH ?? ''}`
 
     const input = makePluginInput(cwd)
-    const result = await plugin(input)
+    const result = await serverV1(input)
     const tools = requireTools(result)
     const delegateRaw = await tools.copilot_delegate.execute(
       { prompt: 'sleep then return' },
@@ -608,7 +608,7 @@ describe('plugin tools', () => {
 
     process.env.PATH = `${binDir}:${process.env.PATH ?? ''}`
 
-    const result = await plugin(makePluginInput(cwd))
+    const result = await serverV1(makePluginInput(cwd))
     const tools = requireTools(result)
     const ctx = makeToolContext({ directory: cwd, worktree: cwd })
 
@@ -641,7 +641,7 @@ describe('plugin tools', () => {
 
     process.env.PATH = `${binDir}:${process.env.PATH ?? ''}`
 
-    const result = await plugin(makePluginInput(cwd))
+    const result = await serverV1(makePluginInput(cwd))
     const tools = requireTools(result)
     const ctx = makeToolContext({ directory: cwd, worktree: cwd })
     const delegateRaw = await tools.copilot_delegate.execute(
@@ -676,7 +676,7 @@ describe('plugin tools', () => {
 
     process.env.PATH = `${binDir}:${process.env.PATH ?? ''}`
 
-    const result = await plugin(makePluginInput(cwd))
+    const result = await serverV1(makePluginInput(cwd))
     const tools = requireTools(result)
     const ctx = makeToolContext({ directory: cwd, worktree: cwd })
 
@@ -712,7 +712,7 @@ describe('plugin tools', () => {
 
     process.env.PATH = `${binDir}:${process.env.PATH ?? ''}`
 
-    const result = await plugin(makePluginInput(cwd))
+    const result = await serverV1(makePluginInput(cwd))
     const tools = requireTools(result)
     const ctx = makeToolContext({ directory: cwd, worktree: cwd })
     const delegateRaw = await tools.copilot_delegate.execute(

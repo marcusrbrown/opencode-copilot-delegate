@@ -338,36 +338,48 @@ flowchart LR
 
 **Verification:** `test:unit` 363/0 on three runs, `test:tui` 31/0, ESM smoke `['default']`. The README states multi-workspace support.
 
-- [ ] **Unit 4: V2 server adapter and export-shape gate**
+- [x] **Unit 4: V2 server adapter and export-shape gate** (done 2026-11-21; as-built notes below)
 
 **Goal:** The same four tools and completion semantics on V2, with the export shape enforced in CI.
 
 **Requirements:** R2, R3, R5, R6
 
-**Dependencies:** Units 2–3; approval for the `@opencode/plugin` devDependency and optional peer, and for the `ci.yaml` edit
+**Dependencies:** Units 2–3. Approval was given on 2026-11-21 for the `@opencode/plugin` devDependency and optional peer, and for the `ci.yaml` edit.
 
-**Files:**
-- Create: `src/core/` (tool specs, host port: log sink, notify sink, per-call `{ sessionID, directory?, abort }`), `src/hosts/v1.ts`, `src/hosts/v2.ts`, `tests/core-*.test.ts`, `tests/host-v2.test.ts`. These were moved here from Unit 2, because the V2 adapter is the second caller that justifies the port. Extract the specs characterization-first, so existing V1 tests stay unchanged.
-- Also from Unit 3 (R5): a process-core acquire/release with a count, acquire waiting on a pending release, and the release policy (cancel, then close RPC, then truncate the ledger) wired to V2 `setup` cleanup. Tests: acquire/acquire/release/release cancels once, closes RPC once, and truncates the ledger, and a later acquire leaves exactly one port file with the new token; an unawaited release followed by an acquire still leaves exactly one live port file.
-- Modify: `src/index.ts` (default `{ id, server, setup }`), `package.json` (peers, devDependency, zod `>=4.2` floor), `bun.lock`, `.github/workflows/ci.yaml` (the smoke test asserts the default has `id`/`server`/`setup`, calls `server()` with a V1-shaped input, checks for four tools, and calls `setup()` with a fake V2 context), `tests/package-exports.test.ts`, `.changeset/*.md`
+**Files (as built):**
+- Create:
+  - `src/core/tools.ts` (`buildTools`)
+  - `src/core/process.ts` (`initializeProcess` plus its release teardown)
+  - `src/runtime/process-core.ts` (acquire/release with a count)
+  - `src/hosts/v1.ts`, `src/hosts/v2.ts`
+  - `tests/host-v2.test.ts`, `tests/process-core.lifecycle.test.ts`
+- Modify:
+  - `src/index.ts`
+  - `src/runtime/notify.ts`: an optional `inject` sink with modes `silent | final | urgent`
+  - `src/tools/{delegate,resume}.ts`: `client` is now typed as `NotifyClient`
+  - `src/runtime/plugin-singleton.ts`: `initProcessOnce` was replaced by the process core
+  - `package.json`, `bun.lock`, `.github/workflows/ci.yaml`
+  - `tests/package-exports.test.ts`, `tests/host-free-build.test.ts`
+  - the V1 tests (`index`, `tools`, `resume`) now call `serverV1`
+  - `README.md`, `.github/copilot-instructions.md`, `AGENTS.md`, `.changeset/opencode-v2-server.md`
 
-**Approach:**
-- `setup` checks for the reduced bridge, then:
-  - acquires the process core
-  - registers the tools through `tools.add`
-  - wires the V2 notify sink per R6
-  - wires the stderr log sink
-  - returns a cleanup that releases.
+**Deviations from the plan:**
+- **No separate spec/port layer.** Both adapters register `buildTools`' V1-shaped definitions, so the four tools still can't drift between hosts. The host port is the notify sink (`NotifyClient.inject`) plus the log sink. The V2 adapter supplies the per-call context: `sessionID` comes from the call; `directory` is bound at `setup`, because V2 calls carry none; `abort` is `ctx.signal`, read once to opt into cooperative stop.
+- **`normalizeToolArgSchemas` is V1-only.** Its per-arg `toJSONSchema` patch breaks zod's whole-object conversion (`seen.ref` TypeError), and V2 uses that conversion through `~standard.jsonSchema.input`. V2 would then have skipped every tool silently. The schema test runs V2's real conversion path and fails if V2 receives normalized args.
+- **`dist/index.d.ts` is typed structurally rather than as `unknown`.** It is `{ id: string; server(input: never); setup(context: never) }`, which names no host package and so type-checks with either optional peer missing.
+- The zod `>=4.2` floor is already met by `^4.6.7`. The CI smoke test also runs each V2 input through `~standard.jsonSchema.input`.
 
-**Test scenarios:**
-- Happy path: a fake V2 context records `tools.add` for exactly four tools, with input schemas equivalent to the zod ones (names, required fields, descriptions).
-- Happy path: execute returns `{ content }` with the same envelope text V1 returns.
-- Edge case: `setup` with a V1-style reduced bridge returns without registering.
-- Edge case: tasks A, B, C are in flight. A fails and injects with `delivery: 'steer'`. B completes and injects with `resume: false`. C completes last and injects with `delivery: 'queue'`. Each injection names its own task.
-- Integration: a task running across setup → cleanup → setup is cancelled on release, and its notification goes nowhere. No error reaches the new activation.
-- Error path: a notification sink failure is swallowed and logged, and the tool result is unaffected.
+**Test scenarios (done):**
+- `setup` registers exactly four tools. Each V2 input converts as the host converts it, and matches V1's per-arg JSON Schema: properties, descriptions, required fields.
+- `execute` returns `{ content }` equal to V1's envelope text.
+- A reduced bridge (`{}`, no session, no tool domain) returns `undefined` and starts no process resources.
+- With A, B and C in flight: A fails and gets `steer`; B completes and gets `resume: false`; C completes last and gets `queue`. Each injection names its own task.
+- `setup` → cleanup → `setup`: the running task is cancelled, the registry is cleared, the registration is disposed, the new activation's port-file token differs, and no notice reaches either activation.
+- Two locations share one core, and the port file lives until both have cleaned up.
+- A sink failure is logged to stderr and the tool result is unaffected.
+- Process core: acquire/acquire/release/release tears down once; concurrent and extra releases tear down once; an unawaited release followed by an acquire waits for the teardown, then starts a new generation; a failing teardown doesn't wedge the next acquire.
 
-**Verification:** Unit suites and the updated smoke test are green. `dist/index.d.ts` types the default as `unknown`.
+**Verification:** `test:unit` 376/0 on three runs, `test:tui` 31/0. Both CI smoke steps were run locally under Node 24 and passed.
 
 - [ ] **Unit 5: CI host-contract matrix**
 

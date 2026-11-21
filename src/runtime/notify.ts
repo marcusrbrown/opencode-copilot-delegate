@@ -15,8 +15,27 @@ import type { TaskStatus } from './envelope'
 import type { SpawnCopilotResult } from './subprocess'
 import type { TaskOrigin, TaskState } from './task-registry'
 
+/**
+ * How a completion notice should reach the parent session:
+ * - `silent`: other tasks for this session are still running; record it
+ *   without starting a turn (V1 `noReply: true`).
+ * - `final`: the last running task finished; start a turn once the current
+ *   one ends.
+ * - `urgent`: a failure or cancellation; join the active turn or start one.
+ */
+export type InjectMode = 'silent' | 'final' | 'urgent'
+
 /** Minimal client interface for notification injection. */
 export type NotifyClient = {
+  /**
+   * Host-specific injection. When present it replaces `session.prompt`, so a
+   * host whose API has no `noReply` (OpenCode V2) can map each mode itself.
+   */
+  inject?: (notice: {
+    sessionID: string
+    text: string
+    mode: InjectMode
+  }) => Promise<unknown>
   session: {
     prompt: (opts: {
       path: { id: string }
@@ -191,15 +210,25 @@ export async function notifyCompletion(
       : remaining > 0
 
   const text = buildNotificationText(task)
+  const mode: InjectMode =
+    task.status === 'failed' || task.status === 'cancelled'
+      ? 'urgent'
+      : noReply
+        ? 'silent'
+        : 'final'
 
   try {
-    await client.session.prompt({
-      path: { id: task.parentSessionID },
-      body: {
-        noReply,
-        parts: [{ type: 'text', text, synthetic: true }],
-      },
-    })
+    if (client.inject) {
+      await client.inject({ sessionID: task.parentSessionID, text, mode })
+    } else {
+      await client.session.prompt({
+        path: { id: task.parentSessionID },
+        body: {
+          noReply,
+          parts: [{ type: 'text', text, synthetic: true }],
+        },
+      })
+    }
   } catch (error) {
     // Wrap in try/catch as well as .catch() because client.app.log may throw
     // synchronously (e.g., shape validation, dead session binding) before
