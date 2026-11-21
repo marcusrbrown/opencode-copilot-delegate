@@ -1,0 +1,8 @@
+#!/bin/sh
+# Test shim for the GitHub Copilot CLI. Put this directory first on PATH and
+# the plugin's `copilot -p ...` spawn replays a captured JSONL session and
+# exits 0, so tool execution can be tested with no model and no auth.
+# Arguments are ignored on purpose. Used by tests/host-contract/.
+sleep 1
+cat "$(dirname "$0")/../happy-path.jsonl"
+exit 0

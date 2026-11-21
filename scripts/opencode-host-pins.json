@@ -1,0 +1,23 @@
+{
+  "$comment": "OpenCode host versions the CI host-contract matrix runs against. v1-floor must match the @opencode-ai/plugin peer floor in package.json. Consumed by tests/host-contract/run-host.sh and the host-contract job in .github/workflows/ci.yaml.",
+  "pins": [
+    {
+      "id": "v1-floor",
+      "host": "v1",
+      "package": "opencode-ai",
+      "version": "1.14.41"
+    },
+    {
+      "id": "v1-current",
+      "host": "v1",
+      "package": "opencode-ai",
+      "version": "1.19.6"
+    },
+    {
+      "id": "v2",
+      "host": "v2",
+      "package": "@opencode/cli",
+      "version": "2.3.2"
+    }
+  ]
+}
