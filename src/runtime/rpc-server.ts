@@ -1,6 +1,14 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { readFileSync } from 'node:fs'
-import { chmod, mkdir, readdir, rename, rm, writeFile } from 'node:fs/promises'
+import {
+  chmod,
+  mkdir,
+  readdir,
+  rename,
+  rm,
+  rmdir,
+  writeFile,
+} from 'node:fs/promises'
 import {
   createServer,
   type IncomingMessage,
@@ -25,6 +33,11 @@ import {
   defaultPortFileBaseDir,
   defaultSessionDiscriminator,
 } from './rpc-paths'
+import {
+  type PortFileSweepOptions,
+  type PortFileSweepResult,
+  sweepStalePortFiles,
+} from './rpc-port-sweep'
 
 type RpcTaskRecord = {
   taskId: string
@@ -48,11 +61,23 @@ export type StartRpcServerOptions = {
   portFileBaseDir?: string
   sessionDiscriminator?: string
   now?: () => number
+  /**
+   * Receives a count-only summary when the background sweep removed stale
+   * port files. Never receives paths or token values.
+   */
+  log?: (message: string) => void
+  /** Test seams for the stale port-file sweep. */
+  sweep?: Pick<
+    PortFileSweepOptions,
+    'graceMs' | 'maxEntries' | 'isPidAlive' | 'now'
+  >
 }
 
 export type StartedRpcServer = {
   port: number
   token: string
+  /** Settles when the background stale-file sweep finishes. Never rejects. */
+  staleSweep: Promise<PortFileSweepResult>
   close(): Promise<void>
 }
 
@@ -170,6 +195,10 @@ async function writePortFile(
 
 async function removePortFile(portFilePath: string): Promise<void> {
   await rm(portFilePath, { force: true })
+  // Also drop the per-session directory so clean exits leave nothing behind.
+  // Non-recursive and best-effort: it only succeeds once the directory is
+  // empty, so a concurrent writer's files are never touched.
+  await rmdir(dirname(portFilePath)).catch(() => {})
 }
 
 async function removeStalePortFiles(portFileDir: string): Promise<void> {
@@ -192,6 +221,40 @@ async function removeStalePortFiles(portFileDir: string): Promise<void> {
       )
       .map((entry) => rm(join(portFileDir, entry), { force: true })),
   )
+}
+
+async function runStaleSweep(
+  options: StartRpcServerOptions,
+  baseDir: string,
+  currentDiscriminator: string,
+): Promise<PortFileSweepResult> {
+  const empty: PortFileSweepResult = { scanned: 0, removed: 0, kept: 0 }
+
+  try {
+    // Yield so server start returns before any sweep I/O begins.
+    await Promise.resolve()
+
+    const result = await sweepStalePortFiles({
+      baseDir,
+      currentDiscriminator,
+      now: options.now,
+      ...options.sweep,
+    })
+
+    if (result.removed > 0) {
+      try {
+        options.log?.(
+          `[copilot-delegate] removed ${result.removed} stale RPC port file(s) from exited sessions`,
+        )
+      } catch {
+        // Logging is best-effort.
+      }
+    }
+
+    return result
+  } catch {
+    return empty
+  }
 }
 
 export function isMissingPathError(error: unknown): boolean {
@@ -371,6 +434,7 @@ export async function startRpcServer(
   const token = randomBytes(32).toString('base64url')
   const now = options.now ?? Date.now
   let portFileWritten = false
+  let staleSweep: Promise<PortFileSweepResult> | undefined
 
   const server = createServer((request, response) => {
     void handleRpcRequest(request, response, token, options, now).catch(() => {
@@ -395,6 +459,10 @@ export async function startRpcServer(
       })
     }).catch(() => {})
 
+    // Let any in-flight sweep finish so shutdown never races it (it never
+    // rejects and is bounded by maxEntries).
+    await staleSweep
+
     if (portFileWritten) {
       await removePortFile(portFilePath).catch(() => {})
       portFileWritten = false
@@ -417,7 +485,16 @@ export async function startRpcServer(
     await writePortFile(portFilePath, port, token)
     portFileWritten = true
 
-    return { port, token, close }
+    // Sweep sibling directories only after the server is up and its own port
+    // file is published, off the init critical path, and never rejecting.
+    const sweepPromise = runStaleSweep(
+      options,
+      portFileBaseDir,
+      sessionDiscriminator,
+    )
+    staleSweep = sweepPromise
+
+    return { port, token, staleSweep: sweepPromise, close }
   } catch (error) {
     await close()
     throw error

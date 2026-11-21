@@ -252,6 +252,29 @@ describe('plugin tools', () => {
     ).toBe(true)
   })
 
+  it('roots the RPC port file under the temp XDG_CACHE_HOME (#573)', async () => {
+    // Given the suite's isolated XDG_CACHE_HOME and session discriminator
+    const cacheHome = process.env.XDG_CACHE_HOME ?? ''
+    expect(cacheHome.startsWith(tmpdir())).toBe(true)
+    expect(process.env.OPENCODE_SESSION_ID).toBe('tools-test-session')
+
+    // When the plugin is loaded
+    await plugin(makePluginInput(process.cwd()))
+
+    // Then the port file lives under the temp cache, not the real one
+    expect(
+      existsSync(
+        join(
+          cacheHome,
+          'opencode',
+          'copilot-delegate',
+          'tools-test-session',
+          'server-port.json',
+        ),
+      ),
+    ).toBe(true)
+  })
+
   it('builds a non-trivial delegate description', async () => {
     // Given a plugin input
     const input = makePluginInput(process.cwd())
