@@ -8,7 +8,7 @@ origin: docs/brainstorms/2026-05-02-copilot-session-continuity-requirements.md
 
 # Copilot session continuity — resume + connect
 
-> **Note 2026-11-21:** "Every tool registers through `normalizeToolArgSchemas` + `plugInOnce`" now applies to OpenCode 1.x only. On 2.x, tools register unnormalized through `setup`. See [2026-11-20-002](2026-11-20-002-feat-opencode-v2-dual-host-plan.md).
+> **Note 2026-11-21:** Registering every tool through `normalizeToolArgSchemas` and `plugInOnce` (see the Interaction graph bullets under System-Wide Impact) now applies to OpenCode 1.x only. On 2.x, tools register unnormalized through `setup`. See [2026-11-20-002](2026-11-20-002-feat-opencode-v2-dual-host-plan.md).
 
 ## Overview
 

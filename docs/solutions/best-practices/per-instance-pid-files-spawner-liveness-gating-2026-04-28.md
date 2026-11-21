@@ -22,7 +22,7 @@ tags:
 
 # Per-Instance PID Files with Spawner-Liveness Gating
 
-> **Update 2026-11-21:** The "no dispose hook" premise now holds only on OpenCode 1.x. On 2.x, `setup` returns a cleanup. The last activation's release cancels running tasks, closes RPC and truncates the ledger through the ref-counted process core (`src/runtime/process-core.ts`). The startup reap remains the crash safety net on both hosts. See [v2-silent-zero-tools-normalize-tool-arg-schemas-2026-11-21.md](../../../docs/solutions/integration-issues/v2-silent-zero-tools-normalize-tool-arg-schemas-2026-11-21.md).
+> **Update 2026-11-21:** The "no dispose hook" premise now holds only on OpenCode 1.x. On 2.x, `setup` returns a cleanup. The last activation's release cancels running tasks, closes RPC and truncates the ledger through the ref-counted process core (`src/runtime/process-core.ts`). The startup reap remains the crash safety net on both hosts. See [v2-silent-zero-tools-normalize-tool-arg-schemas-2026-11-21.md](../integration-issues/v2-silent-zero-tools-normalize-tool-arg-schemas-2026-11-21.md).
 
 ## Context
 

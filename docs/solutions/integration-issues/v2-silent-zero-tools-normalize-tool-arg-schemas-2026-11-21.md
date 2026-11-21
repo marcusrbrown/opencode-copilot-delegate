@@ -33,7 +33,6 @@ The bug was caught by a unit test before #582 merged, so it never shipped.
 ## What Didn't Work
 - **Checking schemas with `z.toJSONSchema` on the raw args.** The unpatched schemas convert cleanly, so this check passes even when the real host path fails. Only the patched schema, wrapped in `z.object(...)`, throws.
 - **Relying on V2 to surface registration errors.** `editor.add` does not throw on a bad schema, so a `try/catch` around `ctx.tool.transform` never sees the failure.
-- **A planned dead end: a separate spec/port layer per host.** One V1-shaped `buildTools` plus a flag for the one host-specific transform turned out to be enough for both hosts.
 
 ## Solution
 Normalization now runs only on V1. Before #582, the shared assembly in `src/index.ts` patched every tool unconditionally:
@@ -89,7 +88,7 @@ Leaving V2's schemas untouched fixes this. On V2 the schemas and the converter c
 ## Prevention
 **Test the host's real conversion path, and assert registration positively.**
 - Never assert only `z.toJSONSchema(rawSchema)`. Call `schema['~standard'].jsonSchema.input({ target: 'draft-2020-12' })` on the exact object you hand the host.
-- At runtime, call `ctx.tool.reload()` then `ctx.tool.list()`, and diff the result against the expected names.
+- At runtime, call `ctx.tool.reload()` then `ctx.tool.list()`, and diff the result against the expected names. In this plugin the runtime check only logs a warning and does not fail `setup`, because registration did succeed. The hard assertion lives in the "registers exactly the four tools" test in `tests/host-v2.test.ts` and in the `Host contract matrix` CI check.
 
 **Import host packages as types only, and prove it with a load test.**
 - The default export is `{ id, server, setup }`, typed structurally as `server(input: never)` and `setup(context: never)`, so `dist/index.d.ts` names no host package.
