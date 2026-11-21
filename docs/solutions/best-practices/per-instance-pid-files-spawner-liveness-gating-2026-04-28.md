@@ -1,5 +1,4 @@
 ---
-
 title: Per-Instance PID Files with Spawner-Liveness Gating
 date: 2026-04-28
 category: best-practices

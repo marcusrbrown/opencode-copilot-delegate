@@ -1,5 +1,4 @@
 ---
-
 title: Hardening Two-Entrypoint RPC/TUI Plugin Integration
 date: 2026-05-01
 category: integration-issues

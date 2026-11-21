@@ -1,5 +1,4 @@
 ---
-
 title: "/copilot-status TUI — visibility platform requirements"
 date: 2026-04-27
 status: ready-for-planning
