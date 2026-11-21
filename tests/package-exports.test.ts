@@ -41,9 +41,13 @@ describe('package exports', () => {
   it('exports an OpenCode TUI plugin module from the built TUI entrypoint', async () => {
     const builtTui = await import(join(process.cwd(), 'dist/tui/index.js'))
 
+    // Dual-host shape: V1 reads `tui`, V2 reads `setup`. V1's loader rejects
+    // a default with both `server` and `tui`, so `server` must never appear.
+    expect(Object.keys(builtTui.default).sort()).toEqual(['id', 'setup', 'tui'])
     expect(builtTui.default).toEqual({
       id: 'opencode-copilot-delegate',
       tui: expect.any(Function),
+      setup: expect.any(Function),
     })
   })
 

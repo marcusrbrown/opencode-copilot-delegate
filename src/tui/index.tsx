@@ -1,8 +1,11 @@
 /** @jsxImportSource @opentui/solid */
 
+import type { Plugin } from '@opencode/plugin/tui'
 import type { TuiPlugin, TuiPluginModule } from '@opencode-ai/plugin/tui'
+import { serverPidDiscriminator } from '../runtime/rpc-paths'
 import { createRpcClient } from './rpc-client'
 import { createStatusDialogs } from './status-dialogs'
+import { createStatusFlow } from './status-flow-v2'
 
 /**
  * Narrow structural interface for `api.keymap.registerLayer`. Mirrors the
@@ -116,6 +119,70 @@ const tui: TuiPlugin = async (api) => {
   })
 }
 
+/**
+ * OpenCode V2 entry. V2 calls `setup(ctx)` once per TUI process and awaits the
+ * returned cleanup on deactivation.
+ *
+ * The V2 TUI is a different process from the server, with no
+ * `OPENCODE_SESSION_ID`, so the server's port file is found by the server pid
+ * that `ctx.client.server.info()` reports (see `serverPidDiscriminator`). It is
+ * resolved per request, so a restarted managed service is picked up.
+ *
+ * `keymap.layer` registrations are removed by the host on deactivation; the
+ * cleanup only stops this plugin's own work.
+ */
+const setup = async (ctx: Plugin.Context): Promise<Plugin.Cleanup> => {
+  const rpc = createRpcClient({
+    resolveSessionDiscriminator: async () => {
+      const info = await ctx.client.server.info()
+      const discriminator = serverPidDiscriminator(info.pid)
+
+      if (discriminator === undefined) {
+        throw new Error('the OpenCode server did not report a usable pid')
+      }
+
+      return discriminator
+    },
+  })
+  const flow = createStatusFlow(ctx.ui.dialog, { rpc })
+
+  ctx.keymap.layer(() => ({
+    // A layer defaults to the `base` input mode. Live check on 2.3.2: with the
+    // default, the command was registered (`keymap.commands()` listed it) but
+    // the prompt's `/` menu answered "No matching commands". `global` (what the
+    // host's own slash commands use) makes it appear there and in the palette.
+    mode: 'global',
+    commands: [
+      {
+        id: 'copilot-status',
+        title: 'Copilot Status',
+        description: 'Show running Copilot delegations',
+        group: 'Copilot',
+        palette: true,
+        slash: { name: 'copilot-status' },
+        run() {
+          flow.open()
+        },
+      },
+    ],
+  }))
+
+  return () => {
+    flow.dispose()
+    rpc.dispose()
+  }
+}
+
 const id = 'opencode-copilot-delegate'
 
-export default { id, tui } satisfies TuiPluginModule
+/**
+ * Dual-host TUI entry: V1 reads `tui`, V2 reads `setup`. V1's loader rejects a
+ * default that carries both `server` and `tui`, but accepts extra keys such as
+ * `setup`; this is the `./tui` entry, which never carries `server`.
+ */
+const plugin = { id, tui, setup }
+
+plugin satisfies TuiPluginModule
+plugin satisfies Plugin.Definition
+
+export default plugin

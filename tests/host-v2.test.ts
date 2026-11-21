@@ -177,20 +177,45 @@ async function delegate(
   return (JSON.parse(result.content) as { task_id: string }).task_id
 }
 
-function portFile(): { token: string } {
-  const path = join(
+// The V2 server keys its port file by its own pid, never by
+// `OPENCODE_SESSION_ID`: the V2 TUI is a separate process and reads the pid
+// from `client.server.info()`.
+function portFilePath(): string {
+  return join(
     process.env.XDG_CACHE_HOME ?? '',
     'opencode',
     'copilot-delegate',
-    process.env.OPENCODE_SESSION_ID ?? '',
+    String(process.pid),
     'server-port.json',
   )
+}
+
+function portFile(): { token: string } {
+  const path = portFilePath()
   return PortFileSchema.parse(JSON.parse(readFileSync(path, 'utf8')))
 }
 
 describe('V2 setup', () => {
   it('the default export carries the V2 setup entry', () => {
     expect(plugin.setup).toBe(setupV2)
+  })
+
+  it('publishes the RPC port file under the server pid, ignoring OPENCODE_SESSION_ID', async () => {
+    const fake = fakeContext(tempDir('host-v2-ws-'))
+    await activate(fake)
+
+    expect(process.env.OPENCODE_SESSION_ID).toBe('host-v2-session')
+    expect(existsSync(portFilePath())).toBe(true)
+    expect(
+      existsSync(
+        join(
+          process.env.XDG_CACHE_HOME ?? '',
+          'opencode',
+          'copilot-delegate',
+          'host-v2-session',
+        ),
+      ),
+    ).toBe(false)
   })
 
   it('registers exactly the four tools, with zod inputs equivalent to the V1 args', async () => {

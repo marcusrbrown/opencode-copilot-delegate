@@ -19,6 +19,12 @@ export type LogSink = (level: 'info' | 'warn', message: string) => void
 
 export interface InitializeProcessOptions {
   log: LogSink
+  /**
+   * Port-file directory name for the RPC server. Omit on V1 (defaults to
+   * `OPENCODE_SESSION_ID ?? pid`). V2 passes its server pid, which its TUI
+   * process reads back from `client.server.info()`.
+   */
+  rpcSessionDiscriminator?: string
   /** Test seam: receives the idempotent RPC close function. */
   onRpcCleanup?: (close: () => Promise<void>) => void
 }
@@ -66,6 +72,7 @@ export async function initializeProcess(
       taskRegistry: { getAllTasks },
       cancelTaskById: (taskId) => cancelTaskById({ getTask }, taskId),
       log: (message) => log('info', message),
+      sessionDiscriminator: options.rpcSessionDiscriminator,
     })
     closeRpc = wireRpcServerCleanup(rpcServer.close)
     options.onRpcCleanup?.(closeRpc)

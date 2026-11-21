@@ -6,6 +6,7 @@ import { initializeProcess, type LogSink } from '../core/process'
 import { buildTools, type CopilotTools } from '../core/tools'
 import type { InjectMode, NotifyClient } from '../runtime/notify'
 import { acquireProcessCore, releaseProcessCore } from '../runtime/process-core'
+import { serverPidDiscriminator } from '../runtime/rpc-paths'
 
 const LOG_PREFIX = 'opencode-copilot-delegate:'
 
@@ -90,8 +91,13 @@ export async function setupV2(
   const directory = context?.location?.directory
   if (!directory || !context.session || !context.tool) return undefined
 
+  // The V2 TUI is a separate process with no `OPENCODE_SESSION_ID`; it finds
+  // this server's port file by the server pid (see `serverPidDiscriminator`).
   const resources = await acquireProcessCore(() =>
-    initializeProcess({ log: stderrLog }),
+    initializeProcess({
+      log: stderrLog,
+      rpcSessionDiscriminator: serverPidDiscriminator(process.pid),
+    }),
   )
 
   // Notices for this activation stop at cleanup: a task cancelled by the
