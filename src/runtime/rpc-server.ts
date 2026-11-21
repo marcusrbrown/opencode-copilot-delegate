@@ -1,6 +1,14 @@
 import { randomBytes, timingSafeEqual } from 'node:crypto'
 import { readFileSync } from 'node:fs'
-import { chmod, mkdir, readdir, rename, rm, writeFile } from 'node:fs/promises'
+import {
+  chmod,
+  mkdir,
+  readdir,
+  rename,
+  rm,
+  rmdir,
+  writeFile,
+} from 'node:fs/promises'
 import {
   createServer,
   type IncomingMessage,
@@ -187,6 +195,10 @@ async function writePortFile(
 
 async function removePortFile(portFilePath: string): Promise<void> {
   await rm(portFilePath, { force: true })
+  // Also drop the per-session directory so clean exits leave nothing behind.
+  // Non-recursive and best-effort: it only succeeds once the directory is
+  // empty, so a concurrent writer's files are never touched.
+  await rmdir(dirname(portFilePath)).catch(() => {})
 }
 
 async function removeStalePortFiles(portFileDir: string): Promise<void> {
