@@ -1,5 +1,18 @@
 # opencode-copilot-delegate
 
+## 0.14.0
+
+### Minor Changes
+
+- d97f536: support OpenCode 2.x: the same package now registers the four `copilot_*` tools through V2 `setup` and delivers completion notices with `session.synthetic`, while OpenCode 1.x keeps using `server`; both host plugin packages are optional peers
+- 62ddbb0: add `/copilot-status` on OpenCode 2.x: the `./tui` entry now exports `{ id, tui, setup }`, so V1 keeps using `tui` and V2 uses `setup` with host dialogs and a global palette/slash command. The V2 TUI runs in a separate process from the server, so the server now keys its RPC port file by its own pid and the TUI reads that pid from the server it is connected to. `@opentui/core`, `@opentui/solid` and `solid-js` move from `dependencies` to dev dependencies and optional peers: both hosts supply their own copies at runtime
+
+### Patch Changes
+
+- 8db5a2d: on OpenCode 2.x, fail plugin setup when tool registration throws instead of reporting the plugin active with no tools, and let a later activation retry after process setup fails
+- 3f613a7: report a copilot run that exits 0 without emitting any events as failed instead of complete
+- 9f764f7: say "Copilot exited 0 without producing any output" in the failure notice for a zero-output run instead of "exited with code 0"
+
 ## 0.13.0
 
 ### Minor Changes
