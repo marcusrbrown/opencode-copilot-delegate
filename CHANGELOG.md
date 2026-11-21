@@ -1,5 +1,17 @@
 # opencode-copilot-delegate
 
+## 0.13.0
+
+### Minor Changes
+
+- 875f916: Rebuild `/copilot-status` on the host's `DialogSelect`, `DialogConfirm`, and `DialogAlert` components. The modal is now themed like the rest of OpenCode and responds to the keyboard: ↑/↓ move the highlight, Enter on a running task opens the cancel confirm, and Esc closes cleanly. `/copilot-status` is also registered as a real slash command (`slashName`), so it appears when you type `/`.
+
+### Patch Changes
+
+- 997204a: Align the shipped `@opentui/core` and `@opentui/solid` dependencies with the OpenCode V1 host (`0.2.7` → `0.4.5`), pin a single `@opentui/core` copy, and raise the transitive `brace-expansion` 2.x copy under `@opentui/solid` to `^2.1.8` to clear GHSA-6j4f-fj2g-mc7p, GHSA-qhr7-859c-m2p7, and GHSA-q2hr-2g5m-vwhr.
+- 63d886a: register the `copilot_*` tools for every workspace directory an OpenCode process serves, not just the first; task state and the RPC server stay shared process-wide
+- 80f669c: clean up stale RPC port files from exited sessions
+
 ## 0.12.2
 
 ### Patch Changes
