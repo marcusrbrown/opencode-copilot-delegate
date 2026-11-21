@@ -136,6 +136,7 @@ export async function setupV2(
     })
   } catch (error) {
     stderrLog('warn', `tool setup failed: ${error}`)
+    active = false
     await releaseProcessCore()
     return undefined
   }
@@ -156,8 +157,19 @@ export async function setupV2(
         })
       }
     })
-    // `tools.add` skips a tool whose schema fails to convert without
-    // throwing, so check that every tool actually registered.
+  } catch (error) {
+    // No tools registered. Release the reference and fail setup, so the host
+    // reports the plugin as failed instead of active with zero tools.
+    stderrLog('warn', `tool registration failed: ${error}`)
+    active = false
+    await releaseProcessCore()
+    throw error
+  }
+
+  // `tools.add` skips a tool whose schema fails to convert without throwing,
+  // so check that every tool actually registered. Verification is
+  // best-effort: the tools are registered even if `reload`/`list` fails.
+  try {
     await context.tool.reload()
     const listed = new Set((await context.tool.list()).map((tool) => tool.id))
     const missing = names.filter((name) => !listed.has(name))
@@ -165,7 +177,7 @@ export async function setupV2(
       stderrLog('warn', `tools failed to register: ${missing.join(', ')}`)
     }
   } catch (error) {
-    stderrLog('warn', `tool registration failed: ${error}`)
+    stderrLog('warn', `tool registration check failed: ${error}`)
   }
 
   // Idempotent per activation: a second call must not drop another

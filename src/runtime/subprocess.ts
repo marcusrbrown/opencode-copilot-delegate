@@ -33,6 +33,11 @@ export type SpawnCopilotResult = {
    * crashed before emitting one).
    */
   copilotSessionId?: string
+  /**
+   * Why a run failed when the exit code alone does not say. Set only by
+   * `finalizeTask` for an exit-0 run that produced no output.
+   */
+  failureReason?: 'no-output'
 }
 
 function flushBufferedStdout(task: SpawnCopilotResult): void {
@@ -94,7 +99,8 @@ function assignCopilotSessionId(task: SpawnCopilotResult): void {
   }
 }
 
-const NO_OUTPUT_ERROR = 'copilot exited 0 without producing any output'
+/** errorText (and notice reason) for an exit-0 run that emitted no events (#579). */
+export const NO_OUTPUT_ERROR = 'copilot exited 0 without producing any output'
 
 function finalizeTask(
   task: SpawnCopilotResult,
@@ -118,6 +124,7 @@ function finalizeTask(
 
   const stderrTail = stripAnsi(stderrText.trim())
   if (producedNothing) {
+    task.failureReason = 'no-output'
     task.errorText = stderrTail
       ? `${NO_OUTPUT_ERROR}\n${stderrTail}`
       : NO_OUTPUT_ERROR

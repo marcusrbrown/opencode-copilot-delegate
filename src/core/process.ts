@@ -31,8 +31,10 @@ export interface InitializeProcessOptions {
 
 /**
  * Start one generation of process-wide resources: orphan reaping, then the
- * RPC server for the TUI. It never rejects, so a failure here can't block
- * tool registration for any workspace. Callers go through
+ * RPC server for the TUI. Reap and RPC failures are logged, not thrown, so
+ * they can't block tool registration. Only an unresolvable state path (no
+ * `XDG_STATE_HOME` and no home directory) rejects; `acquireProcessCore` then
+ * drops the reference so the next activation retries. Callers go through
  * `acquireProcessCore`, which runs this at most once per live generation.
  *
  * The returned `teardown` applies the in-flight policy for a V2 release:

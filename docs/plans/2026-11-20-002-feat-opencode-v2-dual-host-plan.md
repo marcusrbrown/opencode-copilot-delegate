@@ -381,7 +381,7 @@ flowchart LR
 
 **Verification:** `test:unit` 376/0 on three runs, `test:tui` 31/0. Both CI smoke steps were run locally under Node 24 and passed.
 
-- [ ] **Unit 5: CI host-contract matrix**
+- [x] **Unit 5: CI host-contract matrix** (done 2026-11-21; as-built notes below. Local runs are on macOS arm64. The first CI run on linux-x64 is the real proof.)
 
 **Goal:** Prove R1–R3 and R7 against real hosts on every contract-touching PR.
 
@@ -410,6 +410,29 @@ flowchart LR
 - Error path: a deliberately added named export fails the smoke test. A runtime import of a host package fails the clean install on the other host's pin.
 
 **Verification:** Matrix green on a PR. The aggregator is a required check. Red-team PRs fail as expected.
+
+**As built:**
+- `scripts/opencode-host-pins.json`: `v1-floor` = `opencode-ai@1.14.41`, `v1-current` = `opencode-ai@1.19.6`, `v2` = `@opencode/cli@2.3.2`.
+- `tests/host-contract/`:
+  - `run-host.sh <pin-id>` packs the plugin and installs the tarball plus that host's package into a clean dir, starts the host under `env -i` with its own HOME, XDG and config dirs, asserts the plugin loads with exactly four `copilot_*` tools, then runs `drive.mjs`.
+  - `drive.mjs` is copied into the install dir and runs there, so `import 'opencode-copilot-delegate'` resolves through the installed package's `exports`. In each of V1 (`server()` with a V1-shaped input) and V2 (`setup()` with a fake context) mode it asserts the entry has only a `default` export, delegates, waits via `copilot_output` with `block: true`, and asserts `status: complete`, `exit_code: 0`, a non-empty `final_message`, and one completion notice.
+  - `observer-plugin.js` is the V2 observer; `util.mjs` holds the JSON checks.
+- `tests/fixtures/bin/copilot` is a `PATH` shim that sleeps 1 s, so the blocking wait is exercised, replays `tests/fixtures/happy-path.jsonl` and exits 0.
+- `tests/host-contract-pins.test.ts` (in `test:unit`) keeps the pins file, the workflow matrix ids, the peer floor and devDependency versions, and the required-check list in step.
+- `.github/workflows/ci.yaml`: `test:tui` after the unit tests in `check`, then three new jobs.
+  - `changes` lists the PR's files with `gh api` and applies the path filter. It fails closed, and pushes to main and manual runs always run the matrix. It does not use a third-party paths-filter action.
+  - `host-contract` is the matrix over the pin ids.
+  - `host-contract-result` is named **`Host contract matrix`**. It runs with `if: always()` and fails if `changes` or any leg finished as anything but `success` or `skipped`. When the filter skips the matrix it reports success.
+- `.github/settings.yml`: `Host contract matrix` added to `required_status_checks.contexts`. It takes effect when the repo's settings sync applies the file.
+
+**Deviations from the plan:**
+- The fixture is `tests/fixtures/happy-path.jsonl`, not `tests/fixtures/jsonl/happy-path.jsonl`.
+- V2 `GET /api/plugin` returns `{ location, data: [...] }`, not a bare array. `data` is `[]` for a few seconds after the location is created, so `run-host.sh` polls.
+- The V2 plugin is installed by symlinking the installed package directory into `<project>/.opencode/plugin/`, so the host resolves the package's own `exports`. The V1 plugin is a `file://` URL from `import.meta.resolve('opencode-copilot-delegate')`, in `opencode.json`.
+- `npm install --ignore-scripts` is used for the clean dir, because the host binary is run from its platform package directly.
+- `drive.mjs` asserts the named-export rule itself. A V1 1.19.6 host still loads a package with an extra *non-function* named export, so only the export-shape smoke and `drive.mjs` catch it, not the host load.
+- No Renovate rule was added for the pins file. Bumping a pin is a manual edit to the pins file, the matrix ids stay the same, and `host-contract-pins.test.ts` guards the relationships.
+- The `resume: false` and `delivery` semantics against a real model are still unverified: the matrix runs with no model by design.
 
 - [ ] **Unit 6: Phase 1 docs and release**
 

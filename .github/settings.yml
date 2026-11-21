@@ -15,6 +15,7 @@ branches:
         contexts:
           - Fro Bot
           - Lint, typecheck, build, unit tests
+          - Host contract matrix
           - Renovate / Renovate
       enforce_admins: true
       required_pull_request_reviews: null
