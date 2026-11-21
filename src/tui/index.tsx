@@ -1,16 +1,8 @@
 /** @jsxImportSource @opentui/solid */
 
 import type { TuiPlugin, TuiPluginModule } from '@opencode-ai/plugin/tui'
-import { ModalList } from './components/modal-list'
 import { createRpcClient } from './rpc-client'
-
-function errorMessage(error: unknown): string {
-  if (error instanceof Error && error.message.trim().length > 0) {
-    return error.message.trim()
-  }
-
-  return 'Unknown RPC error.'
-}
+import { createStatusDialogs } from './status-dialogs'
 
 /**
  * Narrow structural interface for `api.keymap.registerLayer`. Mirrors the
@@ -28,6 +20,9 @@ interface KeymapRegisterLayerHost {
       name: string
       title: string
       category: string
+      slashName?: string
+      slashAliases?: ReadonlyArray<string>
+      desc?: string
       run: () => void
     }>
     bindings: ReadonlyArray<unknown>
@@ -53,8 +48,8 @@ function hasKeymapRegisterLayer(
  * back to `command.register` for hosts pinned at 1.14.41 or earlier.
  *
  * If neither surface is available, registration is a no-op and a warning
- * is logged. The TUI plugin still loads (dialog UI continues to work);
- * only the slash command discovery affordance is missing.
+ * is logged. The TUI plugin still loads; only the slash command discovery
+ * affordance is missing.
  *
  * Reference: Magic Context commit `5fe1c4f` on cortexkit/magic-context
  * established this dual-path pattern across the same upstream gap.
@@ -71,6 +66,8 @@ function registerCopilotStatusCommand(
           name: 'copilot-status',
           title: 'Copilot Status',
           category: 'Copilot',
+          slashName: 'copilot-status',
+          desc: 'Show running Copilot delegations',
           run() {
             openList()
           },
@@ -106,42 +103,14 @@ function registerCopilotStatusCommand(
 
 const tui: TuiPlugin = async (api) => {
   const rpc = createRpcClient()
-  const closeDialog = () => {
-    api.ui.dialog.clear()
-  }
-
-  const showUnavailableAlert = (error: unknown) => {
-    api.ui.dialog.setSize('medium')
-    api.ui.dialog.replace(() => {
-      return (
-        <api.ui.DialogAlert
-          title="Status unavailable."
-          message={errorMessage(error)}
-          onConfirm={closeDialog}
-        />
-      )
-    })
-  }
-
-  const openList = (initialTaskId?: string) => {
-    api.ui.dialog.setSize('large')
-    api.ui.dialog.replace(() => {
-      return (
-        <ModalList
-          onClose={closeDialog}
-          onLoadError={showUnavailableAlert}
-          initialTaskId={initialTaskId}
-          rpc={rpc}
-        />
-      )
-    })
-  }
+  const dialogs = createStatusDialogs(api, { rpc })
 
   const unregister = registerCopilotStatusCommand(api, () => {
-    openList()
+    dialogs.openList()
   })
 
   api.lifecycle.onDispose(() => {
+    dialogs.dispose()
     rpc.dispose()
     unregister()
   })

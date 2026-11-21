@@ -4,11 +4,11 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type {
   TuiCommand,
+  TuiDialogSelectProps,
   TuiPluginApi,
   TuiPluginMeta,
-  TuiToast,
 } from '@opencode-ai/plugin/tui'
-import { type JSX, testRender } from '@opentui/solid'
+import type { JSX } from '@opentui/solid'
 
 type TuiPlugin = (
   api: TuiPluginApi,
@@ -26,12 +26,6 @@ type DialogReplacement = {
   onClose?: () => void
 }
 
-type ToastCall = {
-  message: string
-  variant?: string
-  duration?: number
-}
-
 type KeymapLayerCall = {
   commands: ReadonlyArray<Record<string, unknown>>
   bindings: ReadonlyArray<unknown>
@@ -42,9 +36,9 @@ type TestApiControls = {
   commandFactories: Array<() => TuiCommand[]>
   dialogReplacements: DialogReplacement[]
   dialogSizes: Array<'medium' | 'large' | 'xlarge'>
+  selectProps: TuiDialogSelectProps<string>[]
   clearCalls: number
   disposeHandlers: Array<() => void | Promise<void>>
-  toastCalls: ToastCall[]
   unregisterCalls: number
   keymapLayerCalls: KeymapLayerCall[]
   keymapUnregisterCalls: number
@@ -56,9 +50,6 @@ type CreateTestApiOptions = {
    * - `'command'` (default): only `api.command.register` — OpenCode 1.14.41 baseline
    * - `'keymap'`: only `api.keymap.registerLayer` — OpenCode 1.14.44+ canonical (and the 1.14.42–43 gap)
    * - `'both'`: both surfaces — the 1.14.44+ shim era where `command.register` is restored as a deprecated shim
-   *
-   * Default `'command'` preserves the existing test suite's assertions about the
-   * legacy `command.register` registration path without modification.
    */
   surfaces?: 'command' | 'keymap' | 'both'
 }
@@ -103,8 +94,8 @@ function createTestApi(options: CreateTestApiOptions = {}): TestApiControls {
   const commandFactories: Array<() => TuiCommand[]> = []
   const dialogReplacements: DialogReplacement[] = []
   const dialogSizes: Array<'medium' | 'large' | 'xlarge'> = []
+  const selectProps: TuiDialogSelectProps<string>[] = []
   const disposeHandlers: Array<() => void | Promise<void>> = []
-  const toastCalls: ToastCall[] = []
   const keymapLayerCalls: KeymapLayerCall[] = []
   let clearCalls = 0
   let unregisterCalls = 0
@@ -144,21 +135,12 @@ function createTestApi(options: CreateTestApiOptions = {}): TestApiControls {
     ...(commandSurface ? { command: commandSurface } : {}),
     ...(keymapSurface ? { keymap: keymapSurface } : {}),
     ui: {
-      Dialog: ((props: { children?: JSX.Element }) =>
-        props.children ?? null) as TuiPluginApi['ui']['Dialog'],
       DialogAlert: (() => null) as TuiPluginApi['ui']['DialogAlert'],
       DialogConfirm: (() => null) as TuiPluginApi['ui']['DialogConfirm'],
-      DialogPrompt: (() => null) as TuiPluginApi['ui']['DialogPrompt'],
-      DialogSelect: (() => null) as TuiPluginApi['ui']['DialogSelect'],
-      Slot: (() => null) as TuiPluginApi['ui']['Slot'],
-      Prompt: (() => null) as TuiPluginApi['ui']['Prompt'],
-      toast: (input: TuiToast) => {
-        toastCalls.push({
-          message: input.message,
-          variant: input.variant,
-          duration: input.duration,
-        })
-      },
+      DialogSelect: ((props: TuiDialogSelectProps<string>) => {
+        selectProps.push(props)
+        return null
+      }) as unknown as TuiPluginApi['ui']['DialogSelect'],
       dialog: {
         replace: (render: () => JSX.Element, onClose?: () => void) => {
           dialogReplacements.push({ render, onClose })
@@ -188,11 +170,11 @@ function createTestApi(options: CreateTestApiOptions = {}): TestApiControls {
     commandFactories,
     dialogReplacements,
     dialogSizes,
+    selectProps,
     get clearCalls() {
       return clearCalls
     },
     disposeHandlers,
-    toastCalls,
     get unregisterCalls() {
       return unregisterCalls
     },
@@ -225,29 +207,10 @@ function writePortFile(
   writeFileSync(join(sessionDir, 'server-port.json'), JSON.stringify(contents))
 }
 
-async function waitForFrame(options: {
-  renderOnce: () => Promise<void>
-  idle: () => Promise<void>
-  captureCharFrame: () => string
-  includes: string
-  attempts?: number
-}): Promise<string> {
-  const attempts = options.attempts ?? 10
-
-  for (let index = 0; index < attempts; index += 1) {
-    await Promise.resolve()
+async function flush(times = 5) {
+  for (let index = 0; index < times; index += 1) {
     await new Promise((resolve) => setTimeout(resolve, 0))
-    await options.renderOnce()
-    await options.idle()
-    await options.renderOnce()
-
-    const frame = options.captureCharFrame()
-    if (frame.includes(options.includes)) {
-      return frame
-    }
   }
-
-  return options.captureCharFrame()
 }
 
 function makePluginMeta(): TuiPluginMeta {
@@ -269,7 +232,7 @@ function makePluginMeta(): TuiPluginMeta {
 }
 
 describe('tui entrypoint', () => {
-  it('registers /copilot-status using the value field', async () => {
+  it('registers the slash command through the legacy command.register path with slash set', async () => {
     const plugin = await loadTuiPlugin()
     const controls = createTestApi()
 
@@ -291,121 +254,7 @@ describe('tui entrypoint', () => {
     expect(controls.unregisterCalls).toBe(1)
   })
 
-  it('opens the modal list and loads tasks when /copilot-status is selected', async () => {
-    const plugin = await loadTuiPlugin()
-    const controls = createTestApi()
-    const cacheHome = makeCacheHome()
-    const sessionDiscriminator = 'tui-index-open'
-    const fetchCalls: Array<{
-      url: string
-      authorization?: string
-      body?: string
-    }> = []
-
-    process.env.XDG_CACHE_HOME = cacheHome
-    process.env.OPENCODE_SESSION_ID = sessionDiscriminator
-
-    writePortFile(cacheHome, sessionDiscriminator, {
-      port: 43123,
-      pid: process.pid,
-      token: 'token-index-open',
-    })
-
-    const stubFetch = Object.assign(
-      async (input: string | URL | Request, init?: RequestInit) => {
-        const headers = new Headers(init?.headers)
-        fetchCalls.push({
-          url: String(input),
-          authorization: headers.get('Authorization') ?? undefined,
-          body: typeof init?.body === 'string' ? init.body : undefined,
-        })
-
-        return new Response(JSON.stringify({ tasks: [] }), {
-          status: 200,
-          headers: { 'content-type': 'application/json' },
-        })
-      },
-      { preconnect: originalFetch.preconnect },
-    )
-
-    globalThis.fetch = stubFetch as unknown as typeof fetch
-
-    await plugin(controls.api, undefined, makePluginMeta())
-
-    const [command] = controls.commandFactories[0]()
-    command.onSelect?.()
-
-    expect(controls.dialogReplacements).toHaveLength(1)
-    expect(controls.dialogSizes).toEqual(['large'])
-
-    const { renderOnce, captureCharFrame, renderer } = await testRender(
-      () => controls.dialogReplacements[0].render(),
-      { useThread: false },
-    )
-    await renderOnce()
-
-    const frame = await waitForFrame({
-      renderOnce,
-      idle: () => renderer.idle(),
-      captureCharFrame,
-      includes: '0 running · 0 recent',
-    })
-    expect(fetchCalls).toEqual([
-      {
-        url: 'http://127.0.0.1:43123/tasks/list',
-        authorization: 'Bearer token-index-open',
-        body: '{}',
-      },
-    ])
-    expect(frame).toContain('0 running · 0 recent')
-    expect(frame).toContain('No Copilot delegations are running.')
-    expect(frame).not.toContain('Unit 6')
-  })
-
-  it('does not pass a re-entrant host onClose callback to the custom status dialog', async () => {
-    const plugin = await loadTuiPlugin()
-    const controls = createTestApi()
-
-    await plugin(controls.api, undefined, makePluginMeta())
-
-    const [command] = controls.commandFactories[0]()
-    command.onSelect?.()
-
-    expect(controls.dialogReplacements).toHaveLength(1)
-    expect(controls.dialogReplacements[0].onClose).toBeUndefined()
-    expect(controls.clearCalls).toBe(0)
-  })
-
-  it('does not toast when rpc is unavailable', async () => {
-    const plugin = await loadTuiPlugin()
-    const controls = createTestApi()
-    const cacheHome = makeCacheHome()
-    process.env.XDG_CACHE_HOME = cacheHome
-    process.env.OPENCODE_SESSION_ID = 'tui-index-error'
-
-    await plugin(controls.api, undefined, makePluginMeta())
-
-    const [command] = controls.commandFactories[0]()
-    command.onSelect?.()
-
-    expect(controls.dialogReplacements).toHaveLength(1)
-    expect(controls.dialogSizes).toEqual(['large'])
-
-    const { renderOnce, renderer } = await testRender(
-      () => controls.dialogReplacements[0].render(),
-      { useThread: false },
-    )
-
-    await renderOnce()
-    await renderer.idle()
-    await renderOnce()
-
-    expect(controls.dialogReplacements).toHaveLength(1)
-    expect(controls.dialogSizes).toEqual(['large'])
-    expect(controls.toastCalls).toEqual([])
-  })
-
-  it('prefers api.keymap.registerLayer when available (OpenCode 1.14.44+)', async () => {
+  it('registers a palette command with slashName and desc via api.keymap.registerLayer (OpenCode 1.14.44+)', async () => {
     const plugin = await loadTuiPlugin()
     const controls = createTestApi({ surfaces: 'keymap' })
 
@@ -424,6 +273,8 @@ describe('tui entrypoint', () => {
       name: 'copilot-status',
       title: 'Copilot Status',
       category: 'Copilot',
+      slashName: 'copilot-status',
+      desc: 'Show running Copilot delegations',
     })
     expect(typeof command.run).toBe('function')
 
@@ -451,48 +302,41 @@ describe('tui entrypoint', () => {
 
     expect(controls.commandFactories).toHaveLength(1)
     expect(controls.keymapLayerCalls).toHaveLength(0)
-    expect(controls.disposeHandlers).toHaveLength(1)
 
-    // Dispose unregisters via the command-register path, mirroring the
-    // keymap-path test's assertion that the correct teardown route runs.
     await controls.disposeHandlers[0]()
     expect(controls.unregisterCalls).toBe(1)
     expect(controls.keymapUnregisterCalls).toBe(0)
   })
 
-  it('opens the modal list when the keymap-path command is run', async () => {
+  it('opens a host DialogSelect with one option per task when the palette command runs', async () => {
     const plugin = await loadTuiPlugin()
     const controls = createTestApi({ surfaces: 'keymap' })
-
-    await plugin(controls.api, undefined, makePluginMeta())
-
-    const command = controls.keymapLayerCalls[0]?.commands[0] as
-      | (Record<string, unknown> & { run?: () => void })
-      | undefined
-    expect(command).toBeDefined()
-    command?.run?.()
-
-    expect(controls.dialogReplacements).toHaveLength(1)
-    expect(controls.dialogSizes).toEqual(['large'])
-  })
-
-  it('keeps /copilot-status on a single read-only dialog replacement', async () => {
-    const plugin = await loadTuiPlugin()
-    const controls = createTestApi()
     const cacheHome = makeCacheHome()
-    const sessionDiscriminator = 'tui-index-read-only'
+    const sessionDiscriminator = 'tui-index-open'
+    const fetchCalls: Array<{
+      url: string
+      authorization?: string
+      body?: string
+    }> = []
 
     process.env.XDG_CACHE_HOME = cacheHome
     process.env.OPENCODE_SESSION_ID = sessionDiscriminator
 
     writePortFile(cacheHome, sessionDiscriminator, {
-      port: 43124,
+      port: 43123,
       pid: process.pid,
-      token: 'token-index-read-only',
+      token: 'token-index-open',
     })
 
-    const stubFetch = Object.assign(
-      async (_input: string | URL | Request) => {
+    globalThis.fetch = Object.assign(
+      async (input: string | URL | Request, init?: RequestInit) => {
+        const headers = new Headers(init?.headers)
+        fetchCalls.push({
+          url: String(input),
+          authorization: headers.get('Authorization') ?? undefined,
+          body: typeof init?.body === 'string' ? init.body : undefined,
+        })
+
         return new Response(
           JSON.stringify({
             tasks: [
@@ -516,46 +360,53 @@ describe('tui entrypoint', () => {
               },
             ],
           }),
-          {
-            status: 200,
-            headers: { 'content-type': 'application/json' },
-          },
+          { status: 200, headers: { 'content-type': 'application/json' } },
         )
       },
       { preconnect: originalFetch.preconnect },
-    )
+    ) as unknown as typeof fetch
 
-    globalThis.fetch = stubFetch as unknown as typeof fetch
+    await plugin(controls.api, undefined, makePluginMeta())
+
+    const command = controls.keymapLayerCalls[0]?.commands[0] as
+      | (Record<string, unknown> & { run?: () => void })
+      | undefined
+    command?.run?.()
+    await flush()
+
+    expect(fetchCalls).toEqual([
+      {
+        url: 'http://127.0.0.1:43123/tasks/list',
+        authorization: 'Bearer token-index-open',
+        body: '{}',
+      },
+    ])
+    expect(controls.dialogSizes).toEqual(['large'])
+    expect(controls.dialogReplacements).toHaveLength(1)
+
+    controls.dialogReplacements[0].render()
+    expect(controls.selectProps).toHaveLength(1)
+    expect(controls.selectProps[0].options.map((o) => o.value)).toEqual([
+      'cpl_alpha',
+      'cpl_beta',
+    ])
+  })
+
+  it('shows an alert instead of throwing when rpc is unavailable', async () => {
+    const plugin = await loadTuiPlugin()
+    const controls = createTestApi()
+    process.env.XDG_CACHE_HOME = makeCacheHome()
+    process.env.OPENCODE_SESSION_ID = 'tui-index-error'
 
     await plugin(controls.api, undefined, makePluginMeta())
 
     const [command] = controls.commandFactories[0]()
     command.onSelect?.()
+    await flush()
 
     expect(controls.dialogReplacements).toHaveLength(1)
-
-    const listRender = await testRender(
-      () => controls.dialogReplacements[0].render(),
-      {
-        width: 120,
-        height: 20,
-        useThread: false,
-      },
-    )
-
-    await listRender.renderOnce()
-
-    const listFrame = await waitForFrame({
-      renderOnce: listRender.renderOnce,
-      idle: () => listRender.renderer.idle(),
-      captureCharFrame: listRender.captureCharFrame,
-      includes: '2 running · 0 recent',
-    })
-    expect(listFrame).toContain('cpl_beta')
-    expect(listFrame).toContain('Esc close')
-    expect(listFrame).not.toContain('navigate')
-    expect(listFrame).not.toContain('c cancel')
-    expect(controls.dialogReplacements).toHaveLength(1)
-    expect(controls.dialogSizes).toEqual(['large'])
+    expect(controls.dialogSizes).toEqual(['medium'])
+    expect(controls.dialogReplacements[0].onClose).toBeUndefined()
+    expect(controls.clearCalls).toBe(0)
   })
 })
