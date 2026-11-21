@@ -33,12 +33,13 @@ src/
 │   ├── continuity-validation.ts # Validates resume target IDs, `--add-dir` paths, and cwd against allowed roots (realpath-aware)
 │   ├── orphan-reaper.ts         # Startup reaper: kills orphaned Copilot process trees found in per-instance PID files (liveness + identity gates)
 │   ├── pid-file.ts              # Per-instance PID file I/O (serialized append/remove/truncate, symlink-safe)
-│   └── plugin-singleton.ts      # Per-process register-once guard for the plugin factory (state on `globalThis`)
+│   └── plugin-singleton.ts      # `initProcessOnce` (reap + RPC once per process) and `plugInOnce` (hooks once per directory; `{}` for duplicate sources)
 ├── lib/
 │   ├── ansi.ts                       # `stripAnsi` — removes ANSI escape sequences from text
 │   ├── errno.ts                      # `isErrnoException` type predicate for `node:fs` errors
 │   ├── kill-tree.ts                  # `killProcessTree` — `fkill` wrapper that kills the process group and tolerates already-exited roots
 │   ├── normalize-tool-arg-schemas.ts # Patches Zod `toJSONSchema` so tool arg descriptions survive the host/plugin zod split
+│   ├── process-global.ts             # `processGlobal` — `Symbol.for`-keyed `globalThis` slots so state is shared across module instances (registry, PID write chains, in-flight counters)
 │   ├── rpc-cleanup.ts                # `wireRpcServerCleanup` — runs RPC server close once on `beforeExit`/`SIGTERM`
 │   └── tool.ts                       # Host-free `tool()` + bundled zod; host packages are type-only imports (no runtime host import in dist)
 ├── tui/

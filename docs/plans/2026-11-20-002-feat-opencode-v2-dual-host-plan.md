@@ -302,35 +302,41 @@ flowchart LR
 
 **Verification:** Unit and TUI suites are green. A manual Node 24 load from an empty directory printed `[ 'default' ] function`.
 
-- [ ] **Unit 3: Process core and per-directory V1 hooks**
+- [x] **Unit 3: Process core and per-directory V1 hooks** (done 2026-11-21; release lifecycle moved to Unit 4)
 
-**Goal:** Fix #530 item 2 and make process state shared and releasable.
+**Goal:** Fix #530 item 2 and share process state across module instances.
 
-**Requirements:** R4, R5
+**Requirements:** R4 (R5 moves to Unit 4)
 
 **Dependencies:** Unit 2
 
 **Files:**
-- Modify: `src/runtime/plugin-singleton.ts` (and its header comment: the partial supersession of 2026-05-11 R6, and the corrected rationale, which is about the port file rather than `EADDRINUSE`), `src/runtime/task-registry.ts`, `src/runtime/pid-file.ts`, `src/runtime/notify.ts` (in-flight state), `src/runtime/rpc-server.ts`, `src/lib/rpc-cleanup.ts`, `src/index.ts`, `README.md` (multi-workspace support)
-- Test: `tests/plugin-singleton.test.ts`, `tests/index.test.ts`, `tests/task-registry.test.ts`, `tests/pid-file.test.ts`, `tests/orphan-reaper.test.ts`, `tests/rpc-cleanup.test.ts`
+- Create: `src/lib/process-global.ts` (`Symbol.for`-keyed `globalThis` slots, `.v1`-versioned), `tests/process-core.test.ts`
+- Modify:
+  - `src/runtime/plugin-singleton.ts`: `plugInOnce` gains a per-directory `key`; a new `initProcessOnce` guards process setup. The header now records the partial supersession of 2026-05-11 R6 and the corrected rationale, which is the port file rather than `EADDRINUSE`.
+  - `src/runtime/task-registry.ts`, `src/runtime/pid-file.ts` (write chains), `src/runtime/notify.ts` (in-flight counters): their state moves to process-global slots.
+  - `src/index.ts`: split into process setup (reap plus RPC, once) and per-directory hooks.
+  - `README.md`: the Scope Boundary section now covers multiple workspaces.
+  - `tests/index.test.ts`.
 
-**Approach:**
-- Move the task registry, PID write lock, and in-flight state onto the `globalThis` process core, behind acquire/release with a count.
-- Acquire waits on a pending release.
-- Release runs the in-flight policy: cancel, then close RPC, then truncate the ledger.
-- V1 never releases.
-- Dedupe hooks by directory.
+**Approach (as built):**
+- The task registry, PID write chains, and in-flight counters live in process-global slots.
+- Process setup runs once per process through `initProcessOnce`, which never rejects: an RPC failure is logged and tools still register.
+- Hooks are deduped by directory.
+- The guard slot was renamed from `singleton` to `hook-guards`, so a Map can't collide with an older release's single-state slot if both load in one process.
 
-**Test scenarios:**
-- Happy path: two factory calls with different directories each get four tools, and each tool's `cwd` and resume root is its own directory.
-- Edge case: two calls with the same directory get real hooks and then `{}` (the #108 contract).
-- Integration: two fresh module imports (a module-state reset) each delegate a task, and both tasks are listed through the single RPC server.
-- Integration: concurrent PID appends and removes from two module instances leave the ledger exact.
-- Integration: acquire, acquire, release, release cancels running tasks once, closes RPC once, and truncates the ledger. A later acquire leaves exactly one port file with the new token.
-- Edge case: a release that is not awaited, followed immediately by an acquire, still leaves exactly one live port file.
-- Error path: an RPC bind failure leaves tool registration intact.
+**Moved to Unit 4 (rent test):** acquire/release with a count, acquire waiting on a pending release, and the release policy (cancel, then close RPC, then truncate the ledger). V1 never releases, so these would have no caller until the V2 `setup` cleanup exists. Their test scenarios (acquire/acquire/release/release, and an unawaited release followed by an acquire) move with them.
 
-**Verification:** Suites green. README states multi-workspace support.
+**Test scenarios (done; each red against `main` before the change):**
+- Two workspaces each get four tools, and each `copilot_delegate` discovers only its own `.github/agents`.
+- Three workspaces in one process: one RPC server; the port-file token is unchanged and no second cleanup is wired.
+- Same directory twice gives real hooks, then `{}`. The existing #108 test passes unchanged.
+- A task created through one module instance (`?instance=` import) is listed by another, the instance the RPC server reads.
+- Twenty interleaved appends and ten removes from two module instances leave exactly the expected ledger.
+- In-flight counters are shared: the first of two completions from different instances stays `noReply`, and the last wakes the parent.
+- An RPC bind failure leaves tool registration intact. The existing test passes unchanged.
+
+**Verification:** `test:unit` 363/0 on three runs, `test:tui` 31/0, ESM smoke `['default']`. The README states multi-workspace support.
 
 - [ ] **Unit 4: V2 server adapter and export-shape gate**
 
@@ -342,6 +348,7 @@ flowchart LR
 
 **Files:**
 - Create: `src/core/` (tool specs, host port: log sink, notify sink, per-call `{ sessionID, directory?, abort }`), `src/hosts/v1.ts`, `src/hosts/v2.ts`, `tests/core-*.test.ts`, `tests/host-v2.test.ts`. These were moved here from Unit 2, because the V2 adapter is the second caller that justifies the port. Extract the specs characterization-first, so existing V1 tests stay unchanged.
+- Also from Unit 3 (R5): a process-core acquire/release with a count, acquire waiting on a pending release, and the release policy (cancel, then close RPC, then truncate the ledger) wired to V2 `setup` cleanup. Tests: acquire/acquire/release/release cancels once, closes RPC once, and truncates the ledger, and a later acquire leaves exactly one port file with the new token; an unawaited release followed by an acquire still leaves exactly one live port file.
 - Modify: `src/index.ts` (default `{ id, server, setup }`), `package.json` (peers, devDependency, zod `>=4.2` floor), `bun.lock`, `.github/workflows/ci.yaml` (the smoke test asserts the default has `id`/`server`/`setup`, calls `server()` with a V1-shaped input, checks for four tools, and calls `setup()` with a fake V2 context), `tests/package-exports.test.ts`, `.changeset/*.md`
 
 **Approach:**
