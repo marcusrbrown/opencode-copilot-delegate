@@ -108,7 +108,7 @@ Task state is in-memory inside a single OpenCode process, and it is shared by ev
 - **Prompt visibility in `ps`:** The `copilot` CLI accepts the prompt as a command-line argument, which means the full prompt text appears in `ps` output for any user on the host. This is an upstream Copilot CLI behavior. Avoid delegating prompts that contain secrets or PII; pass sensitive material via files, env vars, or `--secret-env-vars` instead.
 - **No subprocess lifetime cap:** A hung `copilot` subprocess stays in the registry as `running` indefinitely. Cancel manually via `copilot_cancel`. A configurable timeout is planned for v1.x.
 - **TUI half is opt-in:** The package ships server and TUI entrypoints. Existing server-only installs continue to register the four tools; `/copilot-status` only appears when the TUI entrypoint is installed.
-- **RPC server cleanup is best-effort:** The server half exposes a localhost-only RPC listener for the TUI and writes a per-session authenticated port file under `<XDG_CACHE_HOME or ~/.cache>/opencode/copilot-delegate/`. OpenCode's server plugin API has no dispose hook today, so cleanup is tied to process exit signals and the orphan-reaper posture covers missed shutdowns.
+- **RPC server cleanup is best-effort:** The server half exposes a localhost-only RPC listener for the TUI and writes a per-session authenticated port file under `<XDG_CACHE_HOME or ~/.cache>/opencode/copilot-delegate/`. On OpenCode 1.x the server plugin API has no dispose hook, so cleanup is tied to process exit signals and the orphan reaper covers missed shutdowns. On OpenCode 2.x the last plugin activation's cleanup closes the server and removes its port file.
 
 ## Versioning
 

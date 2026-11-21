@@ -44,8 +44,10 @@ type V1Tool = CopilotTools[keyof CopilotTools]
 
 /**
  * Run a V1-shaped tool under a V2 call. V2's context has no directory, so the
- * workspace directory bound at `setup` stands in. `signal` is read once and
- * forwarded, which opts the call into cooperative stop.
+ * workspace directory bound at `setup` stands in. `signal` is forwarded as
+ * V1's `abort`. Reading it opts the call into V2's cooperative stop, but no
+ * tool consumes `abort` today: every tool returns promptly (delegations run
+ * in the background), so a user stop just lets the call finish.
  */
 async function runTool(
   tool: V1Tool,
@@ -116,12 +118,21 @@ export async function setupV2(
     },
   }
 
-  const tools = buildTools({
-    client,
-    directory,
-    pidFilePath: resources.pidFilePath,
-    normalizeArgs: false,
-  })
+  // Anything that throws between acquire and returning the cleanup must
+  // release the reference, or the core can never reach zero and tear down.
+  let tools: CopilotTools
+  try {
+    tools = buildTools({
+      client,
+      directory,
+      pidFilePath: resources.pidFilePath,
+      normalizeArgs: false,
+    })
+  } catch (error) {
+    stderrLog('warn', `tool setup failed: ${error}`)
+    await releaseProcessCore()
+    return undefined
+  }
   const names = Object.keys(tools)
 
   let registration: { dispose: () => Promise<void> } | undefined
@@ -151,7 +162,12 @@ export async function setupV2(
     stderrLog('warn', `tool registration failed: ${error}`)
   }
 
+  // Idempotent per activation: a second call must not drop another
+  // location's reference and tear the shared core down under it.
+  let released = false
   return async () => {
+    if (released) return
+    released = true
     active = false
     await registration?.dispose().catch(() => {})
     await releaseProcessCore()

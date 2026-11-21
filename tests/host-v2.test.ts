@@ -12,6 +12,7 @@ import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import type { Plugin } from '@opencode/plugin'
 import type { z } from 'zod'
+import * as coreTools from '../src/core/tools'
 import { buildTools } from '../src/core/tools'
 import { setupV2, syntheticDelivery } from '../src/hosts/v2'
 import plugin from '../src/index'
@@ -392,5 +393,75 @@ describe('V2 release and reactivation', () => {
 
     await cleanupTwo?.()
     expect(() => portFile()).toThrow()
+  })
+
+  it("calling one activation's cleanup twice does not tear down a live location", async () => {
+    const one = fakeContext(tempDir('host-v2-ws-'))
+    const two = fakeContext(tempDir('host-v2-ws-'))
+    const cleanupOne = await setupV2(one.context)
+    await activate(two)
+    const token = portFile().token
+
+    // When the host (or a bug) calls the first activation's cleanup twice
+    await cleanupOne?.()
+    await cleanupOne?.()
+
+    // Then the second location still holds the core: same server, same token
+    expect(portFile().token).toBe(token)
+  })
+
+  it('releases the core when setup fails after acquiring it', async () => {
+    const stderr = spyOn(console, 'error').mockImplementation(() => {})
+    const failing = spyOn(coreTools, 'buildTools').mockImplementation(() => {
+      throw new Error('agent discovery exploded')
+    })
+    try {
+      // Given a setup that throws after the core was acquired
+      const broken = fakeContext(tempDir('host-v2-ws-'))
+      await expect(setupV2(broken.context)).resolves.toBeUndefined()
+      expect(broken.added).toEqual([])
+      expect(
+        stderr.mock.calls.some((args) =>
+          String(args[0]).includes('tool setup failed'),
+        ),
+      ).toBe(true)
+    } finally {
+      failing.mockRestore()
+      stderr.mockRestore()
+    }
+
+    // Then no reference leaked: a healthy location's cleanup is the last
+    // release and tears the core down
+    const healthy = fakeContext(tempDir('host-v2-ws-'))
+    const cleanup = await setupV2(healthy.context)
+    expect(portFile().token).toBeString()
+    await cleanup?.()
+    expect(() => portFile()).toThrow()
+  })
+
+  it('forwards the call signal as the V1 abort signal', async () => {
+    const directory = tempDir('host-v2-ws-')
+    const fake = fakeContext(directory)
+    await activate(fake)
+    const seen: AbortSignal[] = []
+    const original = coreTools.buildTools
+    const spy = spyOn(coreTools, 'buildTools').mockImplementation((options) => {
+      const tools = original(options)
+      const execute = tools.copilot_output.execute
+      tools.copilot_output.execute = async (args, context) => {
+        seen.push(context.abort)
+        return execute(args, context)
+      }
+      return tools
+    })
+    try {
+      const spied = fakeContext(directory)
+      await activate(spied)
+      const call = toolContext('s1')
+      await tool(spied, 'copilot_output').execute({ task_id: 'cpl_x' }, call)
+      expect(seen).toEqual([call.signal])
+    } finally {
+      spy.mockRestore()
+    }
   })
 })
