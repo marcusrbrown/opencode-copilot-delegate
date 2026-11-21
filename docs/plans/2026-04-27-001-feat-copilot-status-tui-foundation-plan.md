@@ -1,5 +1,4 @@
 ---
-
 title: "feat: /copilot-status TUI foundation"
 type: feat
 status: active

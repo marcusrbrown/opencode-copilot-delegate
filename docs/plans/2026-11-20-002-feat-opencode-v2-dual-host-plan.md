@@ -1,0 +1,493 @@
+---
+title: "feat: Support OpenCode V1 and V2 hosts from one package"
+type: feat
+status: active
+date: 2026-11-20
+deepened: 2026-11-20
+---
+
+# feat: Support OpenCode V1 and V2 hosts from one package
+
+## Overview
+
+OpenCode V2 (`@opencode/cli` and `@opencode/plugin` 2.3.x) replaced the plugin API:
+- The plugin package was renamed.
+- Plugins are defined with `Plugin.define({ id, setup })`.
+- Tools register through `ctx.tool.transform`, which hands `setup` a `tools` registry; you register with `tools.add`.
+- There is no `client` or `$`.
+- The TUI API is new.
+
+This plugin currently loads only on V1 (`@opencode-ai/plugin` 1.x).
+
+This plan keeps one package with one default export that serves both hosts, following `marcusrbrown/systematic`. A shared core holds the tool specs, the completion pipeline, and the process-wide runtime. Thin V1 and V2 adapters wrap it for the server entry, tools, notifications, and logging, and later the TUI. The plan also folds in #530 item 2: tool hooks become per-directory instead of first-caller-wins per process.
+
+## Problem Frame
+
+- V2 hosts can't load the plugin. `fro-bot/agent` and other V2 adopters already run stock V2 only.
+- Serving V2 alone would strand every V1 user. The repo's peer floor is `>=1.14.41`, and the `mise.toml` host is `1.19.6`.
+- The per-process singleton (`src/runtime/plugin-singleton.ts`) gives the first factory call real hooks and every later call `{}`. A shared server with several workspaces therefore gets no tools after the first workspace (#530 item 2). V2 adds per-location `setup` plus plugin reload and reactivation, which breaks the singleton's assumptions outright.
+- Today's build also binds the plugin to V1 at runtime. The tools import `tool` from `@opencode-ai/plugin/tool` as a value and build their schemas with `tool.schema` (the host package's zod), and `scripts/build.ts` keeps that import external. A V2-only install fails to load the module before any adapter runs.
+
+## Requirements Trace
+
+- R1. On supported V1 hosts (the existing `>=1.14.41` floor through `1.19.x`), the plugin behaves as it does today: four `copilot_*` tools, notifications, and the TUI. The one intended change is R4's per-directory hooks.
+- R2. On a V2 host (`2.3.x`), the plugin loads, registers the same four tools with equivalent inputs and outputs, and delivers completion and failure information to the parent session per R6.
+- R3. One package with one default export. `dist/index.js` exports only `default`, keeping the 2026-05-11 regression contract. The built server entry imports **neither** host package at runtime, so it loads when only one host package, or neither, is resolvable.
+- R4. Each directory a host process serves gets its own tool hooks bound to that directory. Duplicate config sources for the same directory still get `{}` on V1 (the #76/#108 contract). Process-wide state starts once per process, whichever module instance gets there first: the RPC server, task registry, PID ledger and its write lock, in-flight counters, and orphan reap. On V2, that state is released when the last activation's cleanup runs. On V1, it is held for the life of the process.
+- R5. V2 reload and reactivation is safe. After setup → cleanup → setup, exactly one port file exists, pointing at the live server's port and token. This also holds when several locations clean up at once (V2 shutdown runs them concurrently), and if a future host stops awaiting cleanup: 2.3.2 does await it, and the guard is defence in depth. No PID entries are lost or leaked. Copilot tasks still running at release follow the in-flight policy in Key Technical Decisions.
+- R6. A notification failure never fails a tool call on either host. V2 keeps V1's two-mode contract: a silent notice while other tasks are still running, and a turn-starting notice for the last completion and for failures or cancellations (see Key Technical Decisions for the mapping).
+- R7. CI proves both hosts on every PR that touches the contract surface. The export-shape smoke test runs. A host-contract load test runs against the V1 floor, V1 current, and V2 pinned, each installing the packed tarball in a clean directory where only that host's package is present.
+- R8. The TUI half works on both hosts (phase 2), within the OpenTUI constraints: the V1 host uses 0.4.5 and the V2 peer requires `>=0.8.4`.
+
+## Scope Boundaries
+
+- Copilot CLI behavior, tool semantics, and JSONL parsing are unchanged.
+- No new tools. The unshipped session-continuity Units 4–6 (`docs/plans/2026-05-02-001-feat-copilot-session-continuity-resume-connect-plan.md`) stay deferred.
+- No V2-only features (permissions, MCP, references, integrations) beyond what parity needs.
+- V1 support is not dropped in this plan.
+
+### Deferred to Separate Tasks
+
+- OpenTUI 0.4.5 alignment and the `brace-expansion` override: `docs/plans/2026-11-20-001-fix-opentui-host-alignment-plan.md`. This lands first.
+- Wall-clock-flaky unit tests: resume's no-match window, the tools timeout race, and the subprocess grandchild pid wait. These are a separate test-hygiene fix, tracked in an issue to be opened before Unit 5. The CI matrix in Unit 5 depends on them being fixed.
+- Integration tests that need model auth (#38).
+
+## Context & Research
+
+### Relevant Code and Patterns
+
+- `src/index.ts`: the V1 factory. It wires `input.directory` and `input.client` into the tools, the RPC runtime, the reaper, and `plugInOnce`. The test hook `__captureRpcCleanup` needs a new home.
+- `src/tools/{delegate,output,cancel,resume}.ts`: these use the V1 `tool()` from `@opencode-ai/plugin/tool` (a value import), build schemas with `tool.schema.*` (host zod), and return JSON-string results. They use `ctx.sessionID` as the parent session for notifications and in-flight counts.
+- `src/lib/normalize-tool-arg-schemas.ts`: imports `tool` from the host package and patches zod JSON Schema metadata for the V1 host's separate zod.
+- `src/runtime/notify.ts`: `client.session.prompt/promptAsync({ noReply, parts: [{ synthetic: true }] })`, `client.app.log`, and `client.tui.showToast`. It forces a turn for `failed` and `cancelled` tasks whatever else is in flight. `buildNotificationText(task)` describes a single task. In-flight counters are module-level (`inFlightCounters`).
+- `src/runtime/task-registry.ts`: a module-level `tasks` Map. `cleanupAll()` has no production caller.
+- `src/runtime/pid-file.ts`: does read-modify-write plus rename on `${pid}.pids`, serialized by a module-level `writeChains` lock.
+- `src/runtime/orphan-reaper.ts`: treats the current PID's file as reapable, killing its entries and truncating it.
+- `src/runtime/rpc-server.ts`: `listen(0, '127.0.0.1')` (ephemeral port). Its exclusive resource is the port file `<cache>/opencode/copilot-delegate/<OPENCODE_SESSION_ID ?? pid>/server-port.json`, which start cleans stale and `close()` removes. After #561, the path functions live in `src/runtime/rpc-paths.ts`.
+- `src/runtime/plugin-singleton.ts`: a `globalThis` `Symbol.for` singleton. State must live on `globalThis`, because module state resets between factory calls (#76 probe).
+- `scripts/build.ts`: the server builds with `target: 'node'`, the TUI with `target: 'bun'` plus `@opentui/solid/bun-plugin`. `@opencode-ai/plugin` is external.
+- `.github/workflows/ci.yaml`: the Node ESM smoke test asserts `typeof default === 'function'`. CI runs `test:unit` but not `test:tui`.
+- `tests/package-exports.test.ts`: asserts the default is a function, and asserts the TUI entry `toEqual({ id, tui: Function })`.
+- `.github/settings.yml`: required status-check `contexts`.
+- Systematic main is the reference implementation:
+  - One default object `{ id, setup, server }`. `setup` returns early when `!ctx.location || !ctx.session`, which is V1's reduced bridge.
+  - Adapters in `src/lib/opencode-v1.ts` and `src/lib/opencode-v2*.ts`.
+  - Two optional peers.
+  - The public `.d.ts` types the entry as `unknown`.
+  - A CI Host Contract job runs V2 shards, the V1 floor, and V1 current, with pins in `scripts/opencode-host-pins.json`.
+- `@opencode-ai/plugin@1.19.6` also ships `./v2/promise` and `./v2/effect` subpaths. Those are **not** the 2.3.x API; import V2 types only from `@opencode/plugin`.
+
+### Host Facts
+
+| Concern | V1 (`v1.19.6`) | V2 (`v2.3.2`) |
+|---|---|---|
+| Server entry resolution | `exports["./server"]`, else `main` | `server` subpath, else root `"."` |
+| Default shape | Object with `id` + `server`, or a legacy factory (then every named export is iterated as a factory) | Must be `{ id, setup }` or `{ id, effect }`; named exports ignored |
+| `oc-plugin` field | — | Not read (inferred) |
+| Per-directory | One factory call per instance directory (`InstanceState`); `ToolContext` also carries a per-call `directory`/`worktree` | `setup` once per location per activation; module re-evaluated per location and per file edit; reactivation awaits the prior cleanup; shutdown runs all locations' cleanups concurrently (probe) |
+| Dedupe | None; each config source calls the factory | By `id` within an instance |
+| Tools | `tool()` (identity) + zod, string result | `ctx.tool.transform` → `tools.add({ name, description, input, execute })`; `input` accepts effect Schema, Standard Schema, or JSON Schema; result `{ output?, content?, metadata? }` |
+| Session injection | `session.prompt/promptAsync({ noReply })` | `session.synthetic` / `session.prompt({ sessionID, text, delivery?, resume? })`. `delivery` defaults to `steer` (joins the active turn); `queue` waits for it. `resume: false` adds the message without starting a turn, which is the `noReply: true` analogue (source) |
+| Logging | `client.app.log` | None; stderr only (Systematic uses a prefixed `console.error`) |
+| TUI module sharing | `runtime-plugin-support` shares `solid-js`, `@opentui/core`, `@opentui/solid` with externalized plugin imports (probe) | Same set plus `@opencode/plugin/tui`; `PluginContextProvider` identity holds (probe) |
+| TUI process | — (unmeasured) | Separate process from the server in every mode; `OPENCODE_SESSION_ID` unset in both (probe) |
+| Default carrying `server` + `tui` | Rejected; server and TUI need separate entries (probe) | — |
+| Tool `execute` context | `sessionID`, `directory`, `worktree`, `abort` | `sessionID`, `agent`, `messageID`, `id`, `progress`, `signal`; no directory (use `ctx.location.directory` from `setup`) |
+| Runtime | Server: Node or Bun | Server: Node or Bun; TUI: Bun only |
+
+Facts are verified against source unless marked inferred.
+
+### Institutional Learnings
+
+- `docs/plans/2026-05-11-001-feat-plugin-contract-and-tui-api-resilience-plan.md` is recorded as completed (#121, #123). Keep its decisions on default-only export, the Node build target, and the failing CI gate. Its R6, which keeps `plugInOnce` and rejects per-load models, is **partly superseded** here. V1 keeps dedupe, now per-directory. V2 drops the guard in favor of `setup` + cleanup over a shared process core.
+- `docs/research/copilot-memory-experiment-2026-05-03.md` describes the dual pattern: on V1, both `normalizeToolArgSchemas` and `plugInOnce` are required. Unit 1 re-verified it with bundled zod. `normalizeToolArgSchemas` is still needed below 1.15.1, which includes the 1.14.41 floor: unpatched bundled zod lost descriptions on 1.14.41 and 1.14.49 and kept them on 1.15.2+. `plugInOnce` is still needed, because V1 called `server()` twice for two specifiers with the same id.
+- `docs/solutions/integration-issues/two-entrypoint-rpc-tui-hardening-2026-05-01.md`:
+  - RPC and TUI startup are best-effort and never block tool registration.
+  - The session discriminator is validated before use.
+  - Cleanup removes only the exact stale port file.
+  - The export smoke test stays.
+- `docs/solutions/best-practices/per-instance-pid-files-spawner-liveness-gating-2026-04-28.md` and `docs/plans/2026-04-27-002-fix-runtime-hardening-plan.md` (completed): the PID ledger assumes one spawner per host process. Per-directory hooks in one process must share one ledger and one write lock.
+- `docs/solutions/best-practices/reliable-cli-integration-testing-2026-04-26.md`: host tests drive the CLI with config-dir isolation rather than an SDK harness.
+- `docs/solutions/ui-bugs/re-entrant-dialog-close-froze-copilot-status-on-escape-2026-05-02.md`: the host owns dialog close. The V2 `ui.dialog.show` path needs the same no-re-entrant-close test.
+- `docs/plans/2026-04-21-copilot-delegate-plugin.md` (T4) is the notification contract. `noReply: true` injects while other tasks are running. `noReply: false` is used when the last in-flight task completes, and for failures and cancellations.
+
+## Prior-Art Survey
+
+```json
+{
+  "schema_version": 2,
+  "verdict": "extend",
+  "scope": "src/index.ts, src/tools/, src/runtime/{notify,plugin-singleton,task-registry,rpc-server,rpc-paths,pid-file,orphan-reaper}.ts, src/lib/, src/tui/, scripts/build.ts, tests/package-exports.test.ts, .github/workflows/ci.yaml, .github/settings.yml",
+  "freshness": {
+    "vcs_reference": "origin/main@15b2a9a"
+  },
+  "budget": {
+    "max_search_passes": 3,
+    "max_candidate_inspections": 10,
+    "exhausted": false
+  },
+  "candidates": [
+    {
+      "path_or_symbol": "src/runtime/plugin-singleton.ts plugInOnce",
+      "description": "Process-wide register-once guard on globalThis; duplicates get {}",
+      "disposition": "extend"
+    },
+    {
+      "path_or_symbol": "src/runtime/notify.ts",
+      "description": "Completion injection via client.session prompt with noReply, toast, app.log; module-level in-flight counters",
+      "disposition": "extend"
+    },
+    {
+      "path_or_symbol": "src/tools/*.ts",
+      "description": "Four V1 tool definitions mixing schema (host zod via tool.schema), execution, and host result shape",
+      "disposition": "extend"
+    },
+    {
+      "path_or_symbol": "src/lib/normalize-tool-arg-schemas.ts",
+      "description": "V1-only zod JSON Schema metadata patch; imports the host package at runtime",
+      "disposition": "extend"
+    },
+    {
+      "path_or_symbol": "src/runtime/{task-registry,pid-file}.ts",
+      "description": "Module-level task map and PID write lock that must become process-wide",
+      "disposition": "extend"
+    },
+    {
+      "path_or_symbol": "src/runtime/{subprocess,jsonl-parser,envelope,rpc-server,rpc-paths,orphan-reaper}.ts",
+      "description": "Host-agnostic runtime",
+      "disposition": "reuse"
+    }
+  ]
+}
+```
+
+## Key Technical Decisions
+
+- **No runtime host imports in the server entry.**
+  - Host packages are type-only imports.
+  - The core builds tool schemas with the plugin's own bundled `zod`.
+  - The V1 adapter returns plain `{ description, args, execute }` objects, because V1's `tool()` is an identity function.
+  - `normalizeToolArgSchemas` is re-pointed at the bundled zod.
+  - Neither host package is a runtime external of `dist/index.js`.
+  - R3 makes this enforceable, and Unit 5's clean-install test proves it.
+- **One default object, `{ id, server, setup }`.** The `./tui` entry also gets `setup` beside `tui`, in phase 2. Systematic shows that V1 1.19 reads `server` and V2 reads `setup`. A single file avoids depending on an untested split between `main` and `"."`, and keeps the default-only contract. `setup` returns early on V1's reduced bridge.
+- **Adapters at the edges, one core.**
+  - The core takes a host port with two kinds of input:
+    - A per-adapter part: log sink and notification sink.
+    - A per-call context: `sessionID`, optional `directory`, and `abort`.
+  - The core returns tool specs: name, description, zod schema, and an execute that returns a plain result.
+  - Adapter paths are `src/hosts/v1.ts` and `src/hosts/v2.ts`. Shared code lives in `src/core/`.
+  - The V2 adapter registers through `ctx.tool.transform`'s `tools.add`. Its `input` is the same zod schema, passed directly as Standard Schema; Unit 1 verified this for zod 4.2+, including a separately bundled copy. Because `tools.add` silently skips a tool whose schema fails to convert, the adapter asserts after registration that all four tools are present, and the package keeps a zod `>=4.2` floor. It returns `{ content }`. The four tools can't drift between hosts.
+- **Directory precedence.** A tool uses the per-call directory when the host supplies one (V1 `ToolContext.directory`, or the V2 location). Otherwise it falls back to the directory bound at registration. `copilot_resume`'s `allowedRoots` containment uses the same resolved directory and never a union of the two, which keeps it a strict boundary.
+- **Process core on `globalThis`, reference-counted.**
+  - It owns everything that must be process-wide, whichever module instance runs:
+    - the RPC server and its task accessors
+    - the task registry
+    - the PID ledger write lock
+    - per-session in-flight counters
+    - orphan reap
+  - V1 acquires on the first factory call and never releases. V2 acquires in `setup` and releases in cleanup.
+  - Acquire waits on any pending release, so a cleanup that isn't awaited can't delete the next server's port file. 2.3.2 awaits cleanup; this is defence in depth.
+- **In-flight policy on release: cancel.** When the last V2 activation releases, the process core first cancels running Copilot tasks (`cleanupAll`), then closes RPC (removing its own port file only), then truncates the ledger. Re-binding tasks to a new activation was rejected. It would need late-bound notify sinks and reaper exemptions for live entries, all to serve a dev-reload case. Cancelling also matches "children don't outlive their plugin".
+- **Per-directory V1 hooks.** `plugInOnce` dedupe is keyed by `directory`. The first call for a directory gets hooks bound to it. Repeat calls for that directory get `{}` (#530 item 2, #108). V2 needs no guard, because its registry dedupes by `id`.
+- **V2 notifications.**
+  - V2 mirrors V1's two modes with `session.synthetic`.
+  - A completion while other tasks are still running is `resume: false`, the `noReply: true` analogue. It is a silent notice.
+  - The last completion uses `delivery: 'queue'`, so it waits for the active turn, then starts one.
+  - Failures and cancellations use `delivery: 'steer'`, which joins the active turn. This matches V1 forcing a turn for them.
+  - Unit 1 verified this mapping from source only, because a probe needs a model. Unit 4's tests pin the arguments, and Unit 5's host check confirms it on the first run with a model available.
+  - `copilot_output` stays the reliable pull path.
+- **Logging on V2** goes to stderr, prefixed `opencode-copilot-delegate:`, behind the same log-sink port. No secrets in logs.
+- **Peers and versions.**
+  - Both peers are optional: `@opencode-ai/plugin` and `@opencode/plugin >=2.3.0`.
+  - The V1 floor stays `>=1.14.41`. Unit 1 found that object defaults with `server` work from 1.3.4.
+  - Add `@opencode/plugin` 2.3.x as a devDependency, for types only. Dependency and CI changes are ask-first: approval comes at **Unit 4**, which first edits `package.json` and `ci.yaml`, and again at Unit 5 for the matrix.
+  - Ship as `minor` in the 0.x series, with a changeset announcing V2 support.
+- **Public types.** `dist/index.d.ts` types the default as `unknown`.
+- **Phasing.** Server parity, including its docs, ships as a release on its own (phase 1). The TUI follows (phase 2). It is opt-in, Bun-only on V2, and blocked on OpenTUI `>=0.8.4` and the Solid context-identity question.
+
+## Open Questions
+
+### Resolved During Planning
+
+- Can one package serve both hosts? Yes, with one default object (Systematic, verified).
+- Does V2 iterate named exports? No. Only `default` is decoded.
+- Does V2 need the zod metadata patch? No. It receives JSON Schema or Standard Schema. The patch stays on the V1 path only.
+- What happens to in-flight tasks on V2 release? They are cancelled (see Key Technical Decisions).
+
+### Resolved by Unit 1 spikes
+
+Unit 1's findings are recorded in `docs/research/opencode-v2-host-contract-2026-11.md` and folded into this plan:
+- The V1 object default works from 1.3.4, so the floor stays.
+- `setup` runs once per location per activation, and reactivation awaits the prior cleanup.
+- `synthetic`/`prompt` take `{ sessionID, text, delivery?, resume? }` (source).
+- zod 4.2+ works directly as V2 `input`.
+- The V2 tool context has `sessionID` and `signal` but no directory.
+- Both hosts share Solid and OpenTUI with the plugin.
+- `normalizeToolArgSchemas` is still needed below 1.15.1, and `plugInOnce` is still needed.
+- Only `useThread: false`, in 20 test sites, blocks OpenTUI 0.6+.
+
+### Deferred to Implementation
+
+- How the V2 TUI finds the server, given that it runs in a separate process with no `OPENCODE_SESSION_ID`. Unit 8 designs a new port-file discriminator.
+- The live behavior of `resume: false` and `delivery: 'queue' | 'steer'` with a real model. It is source-verified only, and Unit 5's host check confirms it.
+- V2 2.3.0 and 2.3.1 were not probed. The pinned host-contract job covers 2.3.2. Add a 2.3.0 shard only if the peer floor stays at `>=2.3.0`.
+
+## High-Level Technical Design
+
+> *This illustrates the intended approach and is directional guidance for review, not implementation specification. The implementing agent should treat it as context, not code to reproduce.*
+
+```mermaid
+flowchart LR
+  subgraph Entry["dist/index.js default { id, server, setup } — no runtime host imports"]
+    S1["server(input) — src/hosts/v1.ts"]
+    S2["setup(ctx) — src/hosts/v2.ts"]
+  end
+  S1 -->|"input.directory · client.app.log · client.session (noReply)"| Port["Host port: log · notify · per-call {sessionID, directory?, abort}"]
+  S2 -->|"ctx.location · stderr · ctx.session (synthetic/queue)"| Port
+  Port --> Core["src/core: tool specs (bundled zod) + completion pipeline"]
+  Core --> Proc["Process core on globalThis (ref-counted): RPC server · task registry · PID write lock · in-flight counters · reap"]
+  Proc --> RT["Runtime: subprocess · JSONL · envelope"]
+  S1 -.->|"plain {description,args,execute}; normalize patch"| HostV1[(V1 host)]
+  S2 -.->|"tools.add + JSON Schema + {content}; cleanup → release"| HostV2[(V2 host)]
+```
+
+## Implementation Units
+
+### Phase 0: Spikes (no shipped behavior)
+
+- [x] **Unit 1: Host contract spikes** (done 2026-11-20; see `docs/research/opencode-v2-host-contract-2026-11.md`)
+
+**Goal:** Turn every deferred question into a recorded fact before code moves.
+
+**Requirements:** R1–R6, R8 (de-risking)
+
+**Dependencies:** None
+
+**Files:**
+- Create: `docs/research/opencode-v2-host-contract-2026-11.md`
+
+**Approach:** Run throwaway probe plugins against `opencode-ai` (V1 floor candidates, plus 1.19.6) and `@opencode/cli` 2.3.x. Answer each deferred question, recording the version tested and the evidence.
+
+**Test scenarios:**
+- Test expectation: none. This unit produces a research artifact, and later units encode its findings as tests.
+
+**Verification:** Every deferred question has either a verified answer or an "unknown + chosen fallback" entry in the research doc.
+
+### Phase 1: Server dual-host (releasable on its own)
+
+- [ ] **Unit 2: Shared core, host-free build, host port**
+
+**Goal:** Separate tool specs and the completion pipeline from host packages. V1 behavior does not change.
+
+**Requirements:** R1, R3
+
+**Dependencies:** Unit 1
+
+**Files:**
+- Create: `src/core/` (tool specs, host port types), `src/hosts/v1.ts`
+- Modify: `src/tools/*.ts`, `src/runtime/notify.ts`, `src/lib/normalize-tool-arg-schemas.ts`, `src/index.ts`, `scripts/build.ts`
+- Test: `tests/tools.test.ts`, `tests/notify.test.ts`, `tests/index.test.ts`, `tests/normalize-tool-arg-schemas.test.ts`, new `tests/core-*.test.ts`
+
+**Approach:**
+- Schemas use bundled zod. The V1 adapter wraps the specs as plain tool objects.
+- Host packages become type-only imports, and `scripts/build.ts` stops externalizing them for runtime use.
+- `{ error }` results stay as they are.
+
+**Execution note:** Characterization first. Existing tool and notify tests must pass unchanged before and after the extraction.
+
+**Test scenarios:**
+- Happy path: each of the four specs runs through a fake host port and returns the same envelope the V1 tool returns today.
+- Error path: a spec error (validation or execution) yields `{ error }` and never throws across the port.
+- Integration: the V1 adapter registers four tools with `execute`, and the V1 host's JSON Schema for each tool keeps the argument descriptions (the normalize patch is re-verified).
+- Edge case: `dist/index.js` contains no runtime import of `@opencode-ai/plugin` or `@opencode/plugin`.
+
+**Verification:** Unit and TUI suites are green. Tool output for existing fixtures has no diff.
+
+- [ ] **Unit 3: Process core and per-directory V1 hooks**
+
+**Goal:** Fix #530 item 2 and make process state shared and releasable.
+
+**Requirements:** R4, R5
+
+**Dependencies:** Unit 2
+
+**Files:**
+- Modify: `src/runtime/plugin-singleton.ts` (and its header comment: the partial supersession of 2026-05-11 R6, and the corrected rationale, which is about the port file rather than `EADDRINUSE`), `src/runtime/task-registry.ts`, `src/runtime/pid-file.ts`, `src/runtime/notify.ts` (in-flight state), `src/runtime/rpc-server.ts`, `src/lib/rpc-cleanup.ts`, `src/index.ts`, `README.md` (multi-workspace support)
+- Test: `tests/plugin-singleton.test.ts`, `tests/index.test.ts`, `tests/task-registry.test.ts`, `tests/pid-file.test.ts`, `tests/orphan-reaper.test.ts`, `tests/rpc-cleanup.test.ts`
+
+**Approach:**
+- Move the task registry, PID write lock, and in-flight state onto the `globalThis` process core, behind acquire/release with a count.
+- Acquire waits on a pending release.
+- Release runs the in-flight policy: cancel, then close RPC, then truncate the ledger.
+- V1 never releases.
+- Dedupe hooks by directory.
+
+**Test scenarios:**
+- Happy path: two factory calls with different directories each get four tools, and each tool's `cwd` and resume root is its own directory.
+- Edge case: two calls with the same directory get real hooks and then `{}` (the #108 contract).
+- Integration: two fresh module imports (a module-state reset) each delegate a task, and both tasks are listed through the single RPC server.
+- Integration: concurrent PID appends and removes from two module instances leave the ledger exact.
+- Integration: acquire, acquire, release, release cancels running tasks once, closes RPC once, and truncates the ledger. A later acquire leaves exactly one port file with the new token.
+- Edge case: a release that is not awaited, followed immediately by an acquire, still leaves exactly one live port file.
+- Error path: an RPC bind failure leaves tool registration intact.
+
+**Verification:** Suites green. README states multi-workspace support.
+
+- [ ] **Unit 4: V2 server adapter and export-shape gate**
+
+**Goal:** The same four tools and completion semantics on V2, with the export shape enforced in CI.
+
+**Requirements:** R2, R3, R5, R6
+
+**Dependencies:** Units 2–3; approval for the `@opencode/plugin` devDependency and optional peer, and for the `ci.yaml` edit
+
+**Files:**
+- Create: `src/hosts/v2.ts`, `tests/host-v2.test.ts`
+- Modify: `src/index.ts` (default `{ id, server, setup }`), `package.json` (peers, devDependency, zod `>=4.2` floor), `bun.lock`, `.github/workflows/ci.yaml` (the smoke test asserts the default has `id`/`server`/`setup`, calls `server()` with a V1-shaped input, checks for four tools, and calls `setup()` with a fake V2 context), `tests/package-exports.test.ts`, `.changeset/*.md`
+
+**Approach:**
+- `setup` checks for the reduced bridge, then:
+  - acquires the process core
+  - registers the tools through `tools.add`
+  - wires the V2 notify sink per R6
+  - wires the stderr log sink
+  - returns a cleanup that releases.
+
+**Test scenarios:**
+- Happy path: a fake V2 context records `tools.add` for exactly four tools, with input schemas equivalent to the zod ones (names, required fields, descriptions).
+- Happy path: execute returns `{ content }` with the same envelope text V1 returns.
+- Edge case: `setup` with a V1-style reduced bridge returns without registering.
+- Edge case: tasks A, B, C are in flight. A fails and injects with `delivery: 'steer'`. B completes and injects with `resume: false`. C completes last and injects with `delivery: 'queue'`. Each injection names its own task.
+- Integration: a task running across setup → cleanup → setup is cancelled on release, and its notification goes nowhere. No error reaches the new activation.
+- Error path: a notification sink failure is swallowed and logged, and the tool result is unaffected.
+
+**Verification:** Unit suites and the updated smoke test are green. `dist/index.d.ts` types the default as `unknown`.
+
+- [ ] **Unit 5: CI host-contract matrix**
+
+**Goal:** Prove R1–R3 and R7 against real hosts on every contract-touching PR.
+
+**Requirements:** R1, R2, R3, R7
+
+**Dependencies:** Unit 4; the flaky-test fix (Deferred to Separate Tasks); approval for CI and required-check changes
+
+**Files:**
+- Modify: `.github/workflows/ci.yaml` (path-filtered matrix plus an aggregator that always reports), `.github/settings.yml` (aggregator in required `contexts`)
+- Create: `scripts/opencode-host-pins.json`, `tests/host-contract/` (load tests), `tests/fixtures/bin/copilot` (a `PATH` shim that replays `tests/fixtures/jsonl/happy-path.jsonl`)
+
+**Approach:**
+- For each pin (V1 floor, V1 current, V2 pinned):
+  - Pack the plugin.
+  - Install the tarball in a clean directory with only that host's package present.
+  - Start the host with config-dir isolation.
+  - Confirm the plugin loads and lists four tools.
+- Tool execution is proved by calling the installed package's `server()`/`setup()` directly with the fake `copilot` shim first on `PATH`. No model auth is needed.
+- Install hosts per job, not through `mise.toml`, so the V1 and V2 `opencode` binaries never collide.
+- Add `test:tui` to CI, or document it as a local-only gate.
+- Optionally, a Renovate rule keeps the pins file current. This is an ask-first config change.
+
+**Test scenarios:**
+- Integration: on each pin, the plugin loads from a clean install and exactly four `copilot_*` tools appear.
+- Integration: `copilot_delegate` runs against the shim to completion, and `copilot_output` returns the envelope.
+- Error path: a deliberately added named export fails the smoke test. A runtime import of a host package fails the clean install on the other host's pin.
+
+**Verification:** Matrix green on a PR. The aggregator is a required check. Red-team PRs fail as expected.
+
+- [ ] **Unit 6: Phase 1 docs and release**
+
+**Goal:** Ship server dual-host with accurate docs.
+
+**Requirements:** R6, R7
+
+**Dependencies:** Units 3–5
+
+**Files:**
+- Modify: `README.md` (V1/V2 install, supported host ranges, V2 notification mapping), `AGENTS.md` (`src/core`, `src/hosts`, the process core, the dual-host design decision)
+- Create: a `docs/solutions/` entry for the dual-host contract, via `ce:compound`
+
+**Test scenarios:**
+- Test expectation: none. Documentation only.
+
+**Verification:** Docs match the shipped behavior. Fro Bot's doc-drift check reports nothing.
+
+### Phase 2: TUI dual-host
+
+- [ ] **Unit 7: OpenTUI 0.9.x on the TUI half**
+
+**Goal:** Meet V2's `>=0.8.4` peer without breaking V1.
+
+**Requirements:** R8
+
+**Dependencies:** The OpenTUI alignment plan merged (#568). Unit 1 found that both hosts share `solid-js` and `@opentui/*` with the plugin. The plugin's version therefore mostly affects types and tests, but it must stay within both hosts' peer ranges.
+
+**Files:**
+- Modify: `package.json`, `bun.lock`, `src/tui/components/*`, `src/tui/__tests__/*` (remove `useThread`, make `destroy` async)
+
+**Approach:** Choose the version from Unit 1's V1 and V2 sharing findings. Decide `solid-js` alignment with both hosts here: V1 uses 1.9.10, and `@opentui/solid` peers on 1.9.12. If a host shares its OpenTUI copy, the plugin's version mostly affects types and tests. Otherwise, verify that 0.9.x renders inside the V1 0.4.5 host.
+
+**Test scenarios:**
+- Integration: `test:tui` passes with the 0.9 test-renderer options.
+- Integration: the re-entrant close and load-error regression tests still pass.
+- Edge case: modal layout snapshots (`captureCharFrame`) match, or the change is reviewed (0.8.1/0.8.2 zero-size and wrap changes).
+
+**Verification:** Suites green. A live Esc check on the V1 host passes.
+
+- [ ] **Unit 8: V2 TUI adapter**
+
+**Goal:** `/copilot-status` on V2.
+
+**Requirements:** R8
+
+**Dependencies:** Unit 7. Unit 1 showed the TUI runs in a separate process with no `OPENCODE_SESSION_ID`, so this unit designs the new port-file discriminator.
+
+**Files:**
+- Modify: `src/tui/index.tsx` (default `{ id, tui, setup }`; `ctx.keymap.layer` in the registration ladder; dialogs via `ctx.ui.dialog.show`; cleanup from `setup`), `src/runtime/rpc-paths.ts` (only if discovery needs a V2 discriminator)
+- Test: `src/tui/__tests__/index.test.ts`, `tests/package-exports.test.ts`
+
+**Approach:** `src/tui/rpc-client.ts` and the components stay host-agnostic. Only registration, dialog, toast, and discovery wiring differ between hosts. The host owns close on both.
+
+**Test scenarios:**
+- Happy path: V2 setup registers one palette and slash command, `copilot-status`.
+- Integration: opening the dialog and then pressing Esc never makes a re-entrant `clear` call (ui-bugs learning).
+- Integration: the V2 TUI finds the server's port file under the discriminator that Unit 1 confirmed.
+- Error path: an RPC failure renders the error state and does not throw.
+- Edge case: a V1 `api` without `keymap.layer` still uses the existing ladder.
+
+**Verification:** TUI suites green. Live check on both hosts. README TUI section updated.
+
+## System-Wide Impact
+
+- **Interaction graph:** every host entry point, the tool registry, notification injection, the RPC server, the PID ledger, and the reaper.
+- **Error propagation:** tool errors (validation and execution) surface to the model as `{ error }`. Host-adapter failures (notify, log, RPC) stay non-fatal and are only logged.
+- **State lifecycle risks:** V2 reactivation (R5), shared state across module instances (Unit 3), and port files keyed by session discriminator.
+- **API surface parity:** the four tools keep the same name, description, schema, and envelope on both hosts, generated from one zod source.
+- **Unchanged invariants:**
+  - default-only export
+  - `{ error }` results
+  - no secrets in logs or tool output
+  - Copilot CLI spawn flags
+  - `cpl_` task IDs
+
+## Risks & Dependencies
+
+| Risk | Likelihood | Impact | Mitigation |
+|------|-----------|--------|------------|
+| A runtime host import makes the plugin unloadable on the other host | High (today's code) | High | R3 invariant; Unit 2 build change; Unit 5 clean-install test |
+| `tools.add` silently skips a tool whose schema fails to convert | Med | High | Post-registration assertion that four tools exist; zod `>=4.2` floor; Unit 5 host check |
+| Module-local state diverges across instances (lost tasks, PID races) | High | High | Unit 3 moves it onto the process core, with two-instance tests |
+| Reactivation cancels a dev's running tasks | Med | Low | Deliberate policy; documented |
+| V2 injection semantics (`resume`, `delivery`) behave differently than source suggests | Med | Med | Args pinned by Unit 4 tests; verified on a real model run in Unit 5; `copilot_output` remains the pull path |
+| V2 TUI can't find the server's port file | High | Med | Unit 8 designs the new discriminator, with a cross-process test; the TUI stays opt-in and the server ships first |
+| CI matrix flakiness | Med | Low | Fake `copilot` shim, no model auth, flaky unit tests fixed first |
+
+## Sources & References
+
+- Related issues and PRs: #530 (item 2), #38, #561 (shared `rpc-paths` module), #556 (security fix that also edits `overrides`)
+- Related past work: `docs/plans/2026-05-11-001-feat-plugin-contract-and-tui-api-resilience-plan.md` is recorded as completed. This plan keeps its export and CI decisions and partly supersedes its R6.
+- Related past work: `docs/plans/2026-05-02-001-feat-copilot-session-continuity-resume-connect-plan.md` is recorded as active. Its unshipped Units 4–6 are out of scope.
+- Reviews: feasibility and coherence reviews (2026-11-20) are folded into this revision.
+- External sources:
+  - anomalyco/opencode `v2.3.2`: `packages/plugin/src/{promise/plugin.ts,promise/tool.ts,promise/session.ts,host.ts,runtime-modules.ts,source.ts}`, `packages/core/src/plugin/{module.ts,instance.ts}`, `packages/schema/src/{tool.ts,session-inbox.ts}`
+  - anomalyco/opencode `v1.19.6`: `packages/opencode/src/plugin/{shared.ts,loader.ts,index.ts,tui/runtime.ts}`, `@opencode-ai/plugin` `dist/tool.js`
+  - marcusrbrown/systematic main: `src/index.ts`, `src/lib/opencode-v1.ts`, `src/lib/opencode-v2*.ts`, `.github/workflows/main.yaml`

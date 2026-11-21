@@ -1,5 +1,4 @@
 ---
-
 title: Atomic File Append/Remove with O_EXCL Temp-File and In-Process Serialization Queue
 date: 2026-04-28
 category: best-practices
