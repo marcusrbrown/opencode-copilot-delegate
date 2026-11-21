@@ -94,6 +94,8 @@ function assignCopilotSessionId(task: SpawnCopilotResult): void {
   }
 }
 
+const NO_OUTPUT_ERROR = 'copilot exited 0 without producing any output'
+
 function finalizeTask(
   task: SpawnCopilotResult,
   exitCode: number | null,
@@ -104,10 +106,23 @@ function finalizeTask(
   task.endedAt = Date.now()
   task.exitCode = exitCode ?? undefined
 
-  setStatus(task, exitCode === 0 ? 'complete' : 'failed', { pidFilePath })
+  // Exit code 0 alone is not proof of success: a broken install or wrapper can
+  // exit 0 without ever emitting a JSONL event. Stderr alone never decides the
+  // status, because Copilot writes warnings there on successful runs.
+  const producedNothing =
+    task.status === 'running' && exitCode === 0 && task.events.length === 0
 
-  if (stderrText.trim().length > 0) {
-    task.errorText = stripAnsi(stderrText.trim())
+  setStatus(task, exitCode === 0 && !producedNothing ? 'complete' : 'failed', {
+    pidFilePath,
+  })
+
+  const stderrTail = stripAnsi(stderrText.trim())
+  if (producedNothing) {
+    task.errorText = stderrTail
+      ? `${NO_OUTPUT_ERROR}\n${stderrTail}`
+      : NO_OUTPUT_ERROR
+  } else if (stderrTail.length > 0) {
+    task.errorText = stderrTail
   }
 
   assignFinalMessage(task)
