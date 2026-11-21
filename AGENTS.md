@@ -39,7 +39,8 @@ src/
 │   ├── errno.ts                      # `isErrnoException` type predicate for `node:fs` errors
 │   ├── kill-tree.ts                  # `killProcessTree` — `fkill` wrapper that kills the process group and tolerates already-exited roots
 │   ├── normalize-tool-arg-schemas.ts # Patches Zod `toJSONSchema` so tool arg descriptions survive the host/plugin zod split
-│   └── rpc-cleanup.ts                # `wireRpcServerCleanup` — runs RPC server close once on `beforeExit`/`SIGTERM`
+│   ├── rpc-cleanup.ts                # `wireRpcServerCleanup` — runs RPC server close once on `beforeExit`/`SIGTERM`
+│   └── tool.ts                       # Host-free `tool()` + bundled zod; host packages are type-only imports (no runtime host import in dist)
 ├── tui/
 │   ├── index.tsx         # TUI plugin entrypoint — registers /copilot-status (palette + slash)
 │   ├── status-dialogs.tsx # /copilot-status flow on host DialogSelect/DialogConfirm/DialogAlert (host owns theming, keys, close)

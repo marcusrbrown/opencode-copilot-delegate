@@ -276,33 +276,31 @@ flowchart LR
 
 ### Phase 1: Server dual-host (releasable on its own)
 
-- [ ] **Unit 2: Shared core, host-free build, host port**
+- [x] **Unit 2: Host-free build** (done 2026-11-21; scope narrowed, see below)
 
-**Goal:** Separate tool specs and the completion pipeline from host packages. V1 behavior does not change.
+**Goal:** `dist/index.js` imports no host package at runtime, with no V1 behavior change.
 
 **Requirements:** R1, R3
 
 **Dependencies:** Unit 1
 
 **Files:**
-- Create: `src/core/` (tool specs, host port types), `src/hosts/v1.ts`
-- Modify: `src/tools/*.ts`, `src/runtime/notify.ts`, `src/lib/normalize-tool-arg-schemas.ts`, `src/index.ts`, `scripts/build.ts`
-- Test: `tests/tools.test.ts`, `tests/notify.test.ts`, `tests/index.test.ts`, `tests/normalize-tool-arg-schemas.test.ts`, new `tests/core-*.test.ts`
+- Create: `src/lib/tool.ts` (a host-free `tool()` identity helper; `tool.schema` is the plugin's bundled zod; host types are imported type-only), `tests/host-free-build.test.ts`
+- Modify: `src/tools/*.ts`, `src/lib/normalize-tool-arg-schemas.ts`
 
 **Approach:**
-- Schemas use bundled zod. The V1 adapter wraps the specs as plain tool objects.
-- Host packages become type-only imports, and `scripts/build.ts` stops externalizing them for runtime use.
+- Schemas use bundled zod. The tool definitions are already plain objects, because V1's `tool()` is an identity function.
+- Host packages become type-only imports.
 - `{ error }` results stay as they are.
 
-**Execution note:** Characterization first. Existing tool and notify tests must pass unchanged before and after the extraction.
+**Scope narrowed (rent test).** The `src/core/` tool specs, the host port, and `src/hosts/v1.ts` have only one caller until the V2 adapter exists, so they move to Unit 4, where the second host justifies them. Unit 2 ships only the invariant that unblocks V2 loading.
 
-**Test scenarios:**
-- Happy path: each of the four specs runs through a fake host port and returns the same envelope the V1 tool returns today.
-- Error path: a spec error (validation or execution) yields `{ error }` and never throws across the port.
-- Integration: the V1 adapter registers four tools with `execute`, and the V1 host's JSON Schema for each tool keeps the argument descriptions (the normalize patch is re-verified).
-- Edge case: `dist/index.js` contains no runtime import of `@opencode-ai/plugin` or `@opencode/plugin`.
+**Test scenarios (done):**
+- Edge case: a build of `src/index.ts` contains no `@opencode-ai/plugin` or `@opencode/plugin` specifier. Verified red by temporarily restoring one host import.
+- Integration: the bundle, copied to a directory with no `node_modules`, imports and exposes only a `default` function.
+- Characterization: the existing tool, notify, index, and `normalize-tool-arg-schemas` suites pass unchanged, including the argument-description checks.
 
-**Verification:** Unit and TUI suites are green. Tool output for existing fixtures has no diff.
+**Verification:** Unit and TUI suites are green. A manual Node 24 load from an empty directory printed `[ 'default' ] function`.
 
 - [ ] **Unit 3: Process core and per-directory V1 hooks**
 
@@ -343,7 +341,7 @@ flowchart LR
 **Dependencies:** Units 2–3; approval for the `@opencode/plugin` devDependency and optional peer, and for the `ci.yaml` edit
 
 **Files:**
-- Create: `src/hosts/v2.ts`, `tests/host-v2.test.ts`
+- Create: `src/core/` (tool specs, host port: log sink, notify sink, per-call `{ sessionID, directory?, abort }`), `src/hosts/v1.ts`, `src/hosts/v2.ts`, `tests/core-*.test.ts`, `tests/host-v2.test.ts`. These were moved here from Unit 2, because the V2 adapter is the second caller that justifies the port. Extract the specs characterization-first, so existing V1 tests stay unchanged.
 - Modify: `src/index.ts` (default `{ id, server, setup }`), `package.json` (peers, devDependency, zod `>=4.2` floor), `bun.lock`, `.github/workflows/ci.yaml` (the smoke test asserts the default has `id`/`server`/`setup`, calls `server()` with a V1-shaped input, checks for four tools, and calls `setup()` with a fake V2 context), `tests/package-exports.test.ts`, `.changeset/*.md`
 
 **Approach:**

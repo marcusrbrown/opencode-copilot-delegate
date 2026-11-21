@@ -1,4 +1,4 @@
-import { tool } from '@opencode-ai/plugin/tool'
+import { tool } from '../lib/tool'
 import { buildEnvelope } from '../runtime/envelope'
 import { getTask } from '../runtime/task-registry'
 

@@ -1,5 +1,4 @@
-import type { ToolDefinition } from '@opencode-ai/plugin'
-import { tool } from '@opencode-ai/plugin/tool'
+import { type ToolDefinition, tool } from './tool'
 
 /**
  * Internal shape of a Zod schema's `_zod` slot, narrowed to the override hook
