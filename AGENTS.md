@@ -72,7 +72,7 @@ docs/
 
 ## Design Decisions
 
-- **Peer dependencies**: `@opencode-ai/plugin` is the only declared peer dependency — the host OpenCode install provides it
+- **Peer dependencies**: `@opencode-ai/plugin` (OpenCode 1.x) and `@opencode/plugin` (2.x) are both optional peers, and the host install provides whichever applies. Both are type-only imports, so `dist/index.js` loads on either host without the other's package.
 - **Single-line JSONL parser**: `parseJsonlLine` handles one line at a time and returns `{ type: 'unknown' }` for malformed input. Stream-level multiline accumulation belongs in the subprocess wrapper
 - **Task IDs**: prefixed with `cpl_` to distinguish from OpenCode-native task IDs
 - **Process cleanup**: uses `fkill` with `{ force: false, forceAfterTimeout: 2000, waitForExit: 5000 }` and `.catch()` guards on all `killProcessTree` calls in abort handlers. On macOS, `tree: true` is Windows-only, so the kill targets the entire process group via `fkill(-pid, ...)` and the subprocess is spawned with `detached: true`.
@@ -111,6 +111,8 @@ Run `bun run lint` to check, `bun run fix` to auto-fix.
 - Subprocess tests use a fake `copilot` shell script that emits JSONL
 - No mocking libraries — use plain functions and temp dirs
 - Tests must be deterministic: no wall-clock timing assertions, use injected timestamps
+- Process-wide state lives on `globalThis` (process core, hook guards, registry), so tests that touch it reset it in both `beforeEach` and `afterEach`; bun's file order differs between machines
+- Gates: `bun run test:unit` and `bun run test:tui` both run in CI. The `Host contract matrix` CI check (`tests/host-contract/run-host.sh <pin>`, pins in `scripts/opencode-host-pins.json`) installs the packed plugin next to each real host (V1 floor, V1 current, V2) and needs no model; run it locally for host-contract changes
 
 ### Commits
 
