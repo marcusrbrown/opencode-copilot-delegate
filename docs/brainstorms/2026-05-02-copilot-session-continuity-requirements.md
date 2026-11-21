@@ -1,5 +1,4 @@
 ---
-
 title: Copilot session continuity requirements
 date: 2026-05-02
 status: ready-for-review

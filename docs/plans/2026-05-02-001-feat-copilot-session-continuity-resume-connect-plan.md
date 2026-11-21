@@ -1,5 +1,4 @@
 ---
-
 title: Copilot session continuity — resume + connect
 type: feat
 status: active
