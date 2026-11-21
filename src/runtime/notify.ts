@@ -182,7 +182,12 @@ ${header}
 Use \`copilot_output(task_id="${task.taskId}")\` to retrieve the structured result.`
 
   if (task.status === 'failed') {
-    text += `\n\n**ACTION REQUIRED:** Subprocess exited with code ${task.exitCode ?? 'unknown'}.`
+    // Exit 0 can still fail when Copilot produced no output at all (#579).
+    const reason =
+      task.exitCode === 0
+        ? 'Copilot exited 0 without producing any output.'
+        : `Subprocess exited with code ${task.exitCode ?? 'unknown'}.`
+    text += `\n\n**ACTION REQUIRED:** ${reason}`
   }
 
   text += '\n</system-reminder>'

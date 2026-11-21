@@ -250,6 +250,24 @@ describe('notification injection', () => {
       expect(text).toContain('1')
     })
 
+    it('explains a zero-output failure instead of citing exit code 0', async () => {
+      // Given a task that failed even though Copilot exited 0 (#579: no output)
+      const client = mockClient()
+      incrementInFlight('session-A')
+
+      // When notified
+      await notifyCompletion(
+        client,
+        makeTaskInfo({ status: 'failed', exitCode: 0 }),
+      )
+
+      // Then the notice says why it failed, not that exit code 0 is the cause
+      const text = client.promptCalls[0].text
+      expect(text).toContain('ACTION REQUIRED')
+      expect(text).toContain('Copilot exited 0 without producing any output')
+      expect(text).not.toContain('Subprocess exited with code 0')
+    })
+
     it('should send prompt to the correct parent session ID', async () => {
       // Given a task for session B
       const client = mockClient()
