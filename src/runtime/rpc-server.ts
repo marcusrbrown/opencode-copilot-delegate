@@ -7,7 +7,6 @@ import {
   type ServerResponse,
 } from 'node:http'
 import type { AddressInfo } from 'node:net'
-import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import type { ZodError, ZodType } from 'zod'
 import { isErrnoException } from '../lib/errno'
@@ -22,6 +21,10 @@ import {
   type TasksListResponse,
   TasksListResponseSchema,
 } from './rpc-contract'
+import {
+  defaultPortFileBaseDir,
+  defaultSessionDiscriminator,
+} from './rpc-paths'
 import {
   type PortFileSweepOptions,
   type PortFileSweepResult,
@@ -91,17 +94,6 @@ function readPackageVersion(): string {
   }
 
   return '0.0.0'
-}
-
-function defaultPortFileBaseDir(): string {
-  const cacheHome =
-    process.env.XDG_CACHE_HOME ?? join(process.env.HOME ?? homedir(), '.cache')
-
-  return join(cacheHome, 'opencode', 'copilot-delegate')
-}
-
-function defaultSessionDiscriminator(): string {
-  return process.env.OPENCODE_SESSION_ID ?? String(process.pid)
 }
 
 function assertSafeSessionDiscriminator(discriminator: string): void {
