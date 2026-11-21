@@ -59,10 +59,20 @@ const originalXdgCacheHome = process.env.XDG_CACHE_HOME
 const originalSessionId = process.env.OPENCODE_SESSION_ID
 const tempPaths: string[] = []
 
+// Assigning `undefined` to process.env stores the string "undefined", so an
+// originally-unset variable must be deleted on restore.
+function setEnv(key: string, value: string | undefined): void {
+  if (value === undefined) {
+    delete process.env[key]
+  } else {
+    process.env[key] = value
+  }
+}
+
 afterEach(() => {
   globalThis.fetch = originalFetch
-  process.env.XDG_CACHE_HOME = originalXdgCacheHome
-  process.env.OPENCODE_SESSION_ID = originalSessionId
+  setEnv('XDG_CACHE_HOME', originalXdgCacheHome)
+  setEnv('OPENCODE_SESSION_ID', originalSessionId)
 
   for (const tempPath of tempPaths.splice(0)) {
     rmSync(tempPath, { force: true, recursive: true })

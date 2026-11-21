@@ -67,6 +67,17 @@ async function initializePlugin(input: PluginInputWithTestHooks) {
     const rpcServer = await startRpcServer({
       taskRegistry: { getAllTasks },
       cancelTaskById: (taskId) => cancelTaskById({ getTask }, taskId),
+      log: (message) => {
+        try {
+          client.app
+            .log({
+              body: { service: 'copilot-delegate', level: 'info', message },
+            })
+            .catch(() => {})
+        } catch {
+          // Logging is best-effort.
+        }
+      },
     })
     const closeRpcServer = wireRpcServerCleanup(rpcServer.close)
     input.__captureRpcCleanup?.(closeRpcServer)

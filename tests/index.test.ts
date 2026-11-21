@@ -1,4 +1,4 @@
-import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
+import { afterAll, afterEach, beforeEach, describe, expect, it } from 'bun:test'
 import {
   chmodSync,
   existsSync,
@@ -18,12 +18,20 @@ import plugin from '../src/index'
 import { _resetPluginSingleton } from '../src/runtime/plugin-singleton'
 import { PortFileSchema } from '../src/runtime/rpc-contract'
 import { cleanupAll } from '../src/runtime/task-registry'
+import { overrideEnv } from './helpers/env'
 
 const tempPaths: string[] = []
-const originalHome = process.env.HOME
-const originalXdgCacheHome = process.env.XDG_CACHE_HOME
-const originalSessionId = process.env.OPENCODE_SESSION_ID
-const originalXdgStateHome = process.env.XDG_STATE_HOME
+const ENV_KEYS = [
+  'HOME',
+  'XDG_CACHE_HOME',
+  'OPENCODE_SESSION_ID',
+  'XDG_STATE_HOME',
+] as const
+// Snapshot at module load so afterAll can prove nothing leaked past the suite.
+const envAtLoad = Object.fromEntries(
+  ENV_KEYS.map((key) => [key, process.env[key]]),
+)
+let restoreEnv: (() => void) | undefined
 let closeRpcServer: (() => Promise<void>) | undefined
 
 beforeEach(() => {
@@ -38,9 +46,11 @@ beforeEach(() => {
   const xdgCacheHome = mkdtempSync(join(tmpdir(), 'plugin-init-cache-'))
   tempPaths.push(homeDir)
   tempPaths.push(xdgCacheHome)
-  process.env.HOME = homeDir
-  process.env.XDG_CACHE_HOME = xdgCacheHome
-  process.env.OPENCODE_SESSION_ID = 'index-test-session'
+  restoreEnv = overrideEnv(ENV_KEYS, {
+    HOME: homeDir,
+    XDG_CACHE_HOME: xdgCacheHome,
+    OPENCODE_SESSION_ID: 'index-test-session',
+  })
   closeRpcServer = undefined
 })
 
@@ -49,10 +59,10 @@ afterEach(async () => {
 
   await cleanupAll()
 
-  process.env.HOME = originalHome
-  process.env.XDG_CACHE_HOME = originalXdgCacheHome
-  process.env.OPENCODE_SESSION_ID = originalSessionId
-  process.env.XDG_STATE_HOME = originalXdgStateHome
+  // Restore with delete-when-unset: assigning `undefined` would store the
+  // string "undefined" and poison later suites (relative cache paths).
+  restoreEnv?.()
+  restoreEnv = undefined
 
   for (const tempPath of tempPaths.splice(0)) {
     try {
@@ -63,6 +73,13 @@ afterEach(async () => {
       // best-effort
     }
     rmSync(tempPath, { force: true, recursive: true })
+  }
+})
+
+afterAll(() => {
+  for (const key of ENV_KEYS) {
+    expect(process.env[key]).toBe(envAtLoad[key])
+    expect(key in process.env).toBe(envAtLoad[key] !== undefined)
   }
 })
 
@@ -159,6 +176,9 @@ describe('plugin init lifecycle', () => {
       'copilot_output',
       'copilot_resume',
     ])
+    // Regression (#573): the port file must land in the temp cache, never in
+    // the developer's real ~/.cache/opencode/copilot-delegate.
+    expect(portFilePath.startsWith(tmpdir())).toBe(true)
     expect(existsSync(portFilePath)).toBe(true)
     expect(
       PortFileSchema.parse(JSON.parse(readFileSync(portFilePath, 'utf8'))),
