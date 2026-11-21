@@ -66,7 +66,7 @@
     "@opencode-ai/plugin": "1.19.6",
     "@opencode/plugin": "2.3.2",
     "@opentui/core": "0.8.4",
-    "@opentui/solid": "0.8.4",
+    "@opentui/solid": "0.9.2",
     "@types/babel__core": "7.20.5",
     "@types/bun": "1.4.4",
     "@types/node": "26.6.6",
