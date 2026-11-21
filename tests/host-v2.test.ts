@@ -108,7 +108,11 @@ async function waitFor(predicate: () => boolean): Promise<void> {
 
 function fakeContext(
   directory: string,
-  options: { synthetic?: (call: SyntheticCall) => Promise<unknown> } = {},
+  options: {
+    synthetic?: (call: SyntheticCall) => Promise<unknown>
+    transformError?: Error
+    reloadError?: Error
+  } = {},
 ) {
   const added: AddedTool[] = []
   const synthetic: SyntheticCall[] = []
@@ -123,6 +127,7 @@ function fakeContext(
     },
     tool: {
       transform: async (callback: (editor: unknown) => void) => {
+        if (options.transformError) throw options.transformError
         callback({ add: (tool: AddedTool) => added.push(tool) })
         return {
           dispose: async () => {
@@ -130,7 +135,9 @@ function fakeContext(
           },
         }
       },
-      reload: async () => {},
+      reload: async () => {
+        if (options.reloadError) throw options.reloadError
+      },
       list: async () => added.map((tool) => ({ ...tool, id: tool.name })),
     },
   }
@@ -437,6 +444,49 @@ describe('V2 release and reactivation', () => {
     expect(portFile().token).toBeString()
     await cleanup?.()
     expect(() => portFile()).toThrow()
+  })
+
+  it('a failed tool.transform releases the core and fails setup', async () => {
+    const stderr = spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      // Given a host whose tool registration throws
+      const broken = fakeContext(tempDir('host-v2-ws-'), {
+        transformError: new Error('registry offline'),
+      })
+
+      // Then setup rejects, so the host marks the plugin failed rather than
+      // active with zero tools
+      await expect(setupV2(broken.context)).rejects.toThrow('registry offline')
+    } finally {
+      stderr.mockRestore()
+    }
+
+    // And no reference leaked: a healthy location's cleanup tears down
+    const healthy = fakeContext(tempDir('host-v2-ws-'))
+    const cleanup = await setupV2(healthy.context)
+    expect(portFile().token).toBeString()
+    await cleanup?.()
+    expect(() => portFile()).toThrow()
+  })
+
+  it('a failed registration check keeps the registered tools and the cleanup', async () => {
+    const stderr = spyOn(console, 'error').mockImplementation(() => {})
+    try {
+      const fake = fakeContext(tempDir('host-v2-ws-'), {
+        reloadError: new Error('reload unavailable'),
+      })
+      const cleanup = await activate(fake)
+
+      expect(fake.added.map((t) => t.name).sort()).toEqual(TOOL_NAMES)
+      expect(typeof cleanup).toBe('function')
+      expect(
+        stderr.mock.calls.some((args) =>
+          String(args[0]).includes('tool registration check failed'),
+        ),
+      ).toBe(true)
+    } finally {
+      stderr.mockRestore()
+    }
   })
 
   it('forwards the call signal as the V1 abort signal', async () => {

@@ -749,6 +749,7 @@ describe('subprocess runtime', () => {
 
       await task.completionPromise
       expect(task.status).toBe('failed')
+      expect(task.failureReason).toBe('no-output')
       expect(task.errorText).toBe(
         'copilot exited 0 without producing any output',
       )
@@ -773,6 +774,7 @@ describe('subprocess runtime', () => {
 
       await task.completionPromise
       expect(task.status).toBe('complete')
+      expect(task.failureReason).toBeUndefined()
       expect(task.errorText).toBe('deprecation warning')
     })
   })
