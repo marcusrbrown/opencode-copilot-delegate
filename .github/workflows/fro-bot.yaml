@@ -55,9 +55,15 @@ env:
     Copilot CLI as background subprocesses and exposes copilot_* tools plus an
     opt-in TUI half). Read AGENTS.md and .github/copilot-instructions.md first.
 
-    Review the diff directly. Do NOT invoke `ce:review` or any other `ce:*`
-    skill; those are heavy authoring workflows. Read the changed files yourself
-    with standard tools (read, grep, git diff). A focused single pass is the goal.
+    Run the Systematic `ce:review` skill in read-only mode on the current
+    checkout (the PR head), with the arguments
+    `mode:read-only base:origin/<the PR's base branch>`. Do not pass a PR
+    number or branch as a target, because read-only mode must not switch the
+    checkout. Read-only mode makes no edits, artifacts, commits, or PR
+    actions. Use its validated findings as the evidence for the review below,
+    and verify each one you report against the diff. Do not invoke any other
+    `ce:*` workflow skill. If `ce:review` fails or degrades, review the diff
+    directly and say so in the risk assessment.
 
     Do NOT run repository-wide build, lint, typecheck, or test commands
     (`bun run build`, `bun run lint`, `bun run typecheck`, `bun test`,
