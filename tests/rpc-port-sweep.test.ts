@@ -455,3 +455,106 @@ describe('startRpcServer stale sweep', () => {
     }
   })
 })
+
+describe('sweepStalePortFiles: empty directories', () => {
+  function seedEmptyDir(baseDir: string, name: string, mtimeS = FILE_TIME_S) {
+    const dir = join(baseDir, name)
+    mkdirSync(dir, { recursive: true })
+    utimesSync(dir, mtimeS, mtimeS)
+    return dir
+  }
+
+  it('removes an empty directory older than the grace window', async () => {
+    const baseDir = makeBaseDir()
+    const dir = seedEmptyDir(baseDir, String(DEAD_PID))
+
+    const result = await sweepStalePortFiles({
+      baseDir,
+      currentDiscriminator: 'current',
+      now: () => OLD_NOW,
+      isPidAlive: isAlive,
+    })
+
+    expect(existsSync(dir)).toBe(false)
+    expect(result.removed).toBe(1)
+  })
+
+  it('keeps an empty directory inside the grace window', async () => {
+    const baseDir = makeBaseDir()
+    const dir = seedEmptyDir(baseDir, String(DEAD_PID))
+
+    await sweepStalePortFiles({
+      baseDir,
+      currentDiscriminator: 'current',
+      now: () => FRESH_NOW,
+      isPidAlive: isAlive,
+    })
+
+    expect(existsSync(dir)).toBe(true)
+  })
+
+  it('keeps a directory that holds only a leftover temp file', async () => {
+    const baseDir = makeBaseDir()
+    const dir = seedEmptyDir(baseDir, String(DEAD_PID))
+    writeFileSync(join(dir, 'server-port.json.tmp.abcd'), '{}')
+    utimesSync(dir, FILE_TIME_S, FILE_TIME_S)
+
+    const result = await sweepStalePortFiles({
+      baseDir,
+      currentDiscriminator: 'current',
+      now: () => OLD_NOW,
+      isPidAlive: isAlive,
+    })
+
+    expect(existsSync(dir)).toBe(true)
+    expect(result.removed).toBe(0)
+  })
+
+  it('makes progress past empty directories across starts under the entry cap', async () => {
+    // Given three old empty dirs plus one stale dead-PID file: four removable
+    // entries, one more than the cap (readdir order is filesystem-defined)
+    const baseDir = makeBaseDir()
+    const empties = ['100001', '100002', '100003'].map((name) =>
+      seedEmptyDir(baseDir, name),
+    )
+    const stale = seedPortFile(baseDir, '999001', portFileBody(DEAD_PID))
+    const sweep = () =>
+      sweepStalePortFiles({
+        baseDir,
+        currentDiscriminator: 'current',
+        now: () => OLD_NOW,
+        isPidAlive: isAlive,
+        maxEntries: 3,
+      })
+
+    // When two starts run
+    const first = await sweep()
+    const second = await sweep()
+
+    // Then empty dirs never pin a slot: each start removes every entry it
+    // examines, and everything is gone after two starts
+    expect(first.removed).toBe(3)
+    expect(second.removed).toBe(1)
+    expect(existsSync(stale)).toBe(false)
+    for (const dir of empties) expect(existsSync(dir)).toBe(false)
+  })
+})
+
+describe('startRpcServer close', () => {
+  it('removes its own port-file directory on close', async () => {
+    const baseDir = makeBaseDir()
+    const server = await startRpcServer({
+      taskRegistry: { getAllTasks: () => [] },
+      cancelTaskById: () => ({ cancelled: false, error: 'no such task' }),
+      portFileBaseDir: baseDir,
+      sessionDiscriminator: 'close-test',
+      sweep: { now: () => OLD_NOW, isPidAlive: isAlive },
+    })
+    const sessionDir = join(baseDir, 'close-test')
+    expect(existsSync(join(sessionDir, 'server-port.json'))).toBe(true)
+
+    await server.close()
+
+    expect(existsSync(sessionDir)).toBe(false)
+  })
+})

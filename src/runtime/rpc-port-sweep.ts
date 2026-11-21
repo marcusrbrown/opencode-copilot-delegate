@@ -1,5 +1,6 @@
 import { lstat, readdir, readFile, rm, rmdir } from 'node:fs/promises'
 import { join } from 'node:path'
+import { isErrnoException } from '../lib/errno'
 import { defaultIsPluginAlive } from './orphan-reaper'
 
 /**
@@ -102,7 +103,20 @@ async function sweepEntry(
   const dirStat = await lstat(dirPath)
   if (!dirStat.isDirectory()) return false
 
-  const fileStat = await lstat(filePath)
+  let fileStat: Awaited<ReturnType<typeof lstat>>
+  try {
+    fileStat = await lstat(filePath)
+  } catch (error) {
+    if (!isErrnoException(error) || error.code !== 'ENOENT') throw error
+    // No port file: an emptied directory left by a clean `close()` on an
+    // older build, or by a crash between mkdir and write. Once it is past
+    // the grace window, remove it so it stops using a sweep slot on every
+    // start. Non-recursive: anything still inside (for example an orphaned
+    // temp file) makes rmdir fail and keeps the directory.
+    if (nowMs - dirStat.mtimeMs < graceMs) return false
+    await rmdir(dirPath)
+    return true
+  }
   if (!fileStat.isFile()) return false
 
   if (nowMs - fileStat.mtimeMs < graceMs) return false
