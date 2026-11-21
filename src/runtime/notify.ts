@@ -12,7 +12,7 @@
 
 import { processGlobal } from '../lib/process-global'
 import type { TaskStatus } from './envelope'
-import type { SpawnCopilotResult } from './subprocess'
+import { NO_OUTPUT_ERROR, type SpawnCopilotResult } from './subprocess'
 import type { TaskOrigin, TaskState } from './task-registry'
 
 /**
@@ -69,6 +69,8 @@ export type NotifyTaskInfo = {
   modelName?: string
   startedAt: number
   exitCode?: number
+  /** Set when the exit code alone does not explain a failure. */
+  failureReason?: SpawnCopilotResult['failureReason']
   /**
    * Source of the task. Optional for back-compat with callers that
    * predate the discriminator (S2 Unit 1); existing call sites and
@@ -182,10 +184,10 @@ ${header}
 Use \`copilot_output(task_id="${task.taskId}")\` to retrieve the structured result.`
 
   if (task.status === 'failed') {
-    // Exit 0 can still fail when Copilot produced no output at all (#579).
+    // An explicit reason, not the exit code, marks a zero-output run (#579).
     const reason =
-      task.exitCode === 0
-        ? 'Copilot exited 0 without producing any output.'
+      task.failureReason === 'no-output'
+        ? `${NO_OUTPUT_ERROR}.`
         : `Subprocess exited with code ${task.exitCode ?? 'unknown'}.`
     text += `\n\n**ACTION REQUIRED:** ${reason}`
   }
@@ -302,6 +304,7 @@ export function attachCompletionPipeline(
         finalMessage: spawnResult.finalMessage,
         errorText: spawnResult.errorText,
         copilotSessionId: spawnResult.copilotSessionId,
+        failureReason: spawnResult.failureReason,
       })
 
       try {
@@ -314,6 +317,7 @@ export function attachCompletionPipeline(
           startedAt: task.startedAt,
           exitCode: task.exitCode,
           origin: task.origin,
+          failureReason: task.failureReason,
         })
       } catch {
         // Notification failures are non-fatal for the tool call.
