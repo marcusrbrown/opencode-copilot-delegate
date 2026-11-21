@@ -2,6 +2,14 @@ import type { TasksListResponse } from '../runtime/rpc-contract'
 
 export type StatusTask = TasksListResponse['tasks'][number]
 
+export function errorMessage(error: unknown): string {
+  if (error instanceof Error && error.message.trim().length > 0) {
+    return error.message.trim()
+  }
+
+  return 'Unknown RPC error.'
+}
+
 export function displayValue(value: string): string {
   const trimmed = value.trim()
 

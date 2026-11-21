@@ -55,17 +55,23 @@
   },
   "peerDependencies": {
     "@opencode-ai/plugin": ">=1.14.41",
-    "@opencode/plugin": ">=2.3.2"
+    "@opencode/plugin": ">=2.3.2",
+    "@opentui/core": ">=0.4.5",
+    "@opentui/solid": ">=0.4.5",
+    "solid-js": ">=1.9.10"
   },
   "devDependencies": {
     "@biomejs/biome": "2.6.8",
     "@changesets/cli": "2.31.1",
     "@opencode-ai/plugin": "1.19.6",
     "@opencode/plugin": "2.3.2",
+    "@opentui/core": "0.8.4",
+    "@opentui/solid": "0.8.4",
     "@types/babel__core": "7.20.5",
     "@types/bun": "1.4.4",
     "@types/node": "26.6.6",
     "rimraf": "6.1.4",
+    "solid-js": "1.9.19",
     "typescript": "7.0.2"
   },
   "scripts": {
@@ -83,14 +89,11 @@
     "publish-changesets": "bun run build && changeset publish"
   },
   "dependencies": {
-    "@opentui/core": "0.4.5",
-    "@opentui/solid": "0.4.5",
     "fkill": "10.0.3",
-    "solid-js": "1.9.19",
     "zod": "^4.6.7"
   },
   "overrides": {
-    "@opentui/core": "0.4.5",
+    "@opentui/core": "0.8.4",
     "zod": "^4.6.7",
     "brace-expansion@2": "^2.1.8"
   },
@@ -99,6 +102,15 @@
       "optional": true
     },
     "@opencode/plugin": {
+      "optional": true
+    },
+    "@opentui/core": {
+      "optional": true
+    },
+    "@opentui/solid": {
+      "optional": true
+    },
+    "solid-js": {
       "optional": true
     }
   }

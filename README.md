@@ -29,11 +29,11 @@ The same package works on OpenCode 1.x (`>=1.14.41`) and 2.x (`>=2.3.2`). Each h
 
 On OpenCode 2.x the host reactivates plugins on config changes, plugin edits, and edits to plugins listed before this one. When the last activation in the process ends, running delegations are cancelled and the in-memory task list is cleared, so earlier `task_id`s then return `unknown`.
 
-The `/copilot-status` TUI half supports OpenCode 1.x only for now.
+### The `/copilot-status` TUI half
 
-### Optional: install the TUI half
+The server plugin works by itself. `/copilot-status` is an optional terminal UI.
 
-The server plugin works by itself. To enable the `/copilot-status` terminal UI, also install the TUI half in OpenCode's TUI config:
+**OpenCode 1.x:** install the TUI half in OpenCode's TUI config:
 
 ```jsonc
 // tui.jsonc
@@ -41,6 +41,10 @@ The server plugin works by itself. To enable the `/copilot-status` terminal UI, 
   "plugin": ["opencode-copilot-delegate/tui"]
 }
 ```
+
+**OpenCode 2.x:** nothing extra to install. The TUI loads the `./tui` entry of any plugin the server lists with a TUI half, so the `opencode.json` entry above is enough. `/copilot-status` and a "Copilot Status" palette command appear once the plugin is active.
+
+On both hosts `/copilot-status` lists running delegations and lets you cancel one. The OpenCode 2.x TUI runs in a different process from the server, so it finds the server's port file by the server's pid (read from the server it is connected to). If the TUI is connected to a remote server (`--server <url>`), the port file is on the other machine. `/copilot-status` notices that the server's hostname differs from this machine's and reports that status is only available for a local server.
 
 Requires the `copilot` CLI to be on `PATH`. Install via:
 
@@ -108,7 +112,7 @@ Task state is in-memory inside a single OpenCode process, and it is shared by ev
 - **Prompt visibility in `ps`:** The `copilot` CLI accepts the prompt as a command-line argument, which means the full prompt text appears in `ps` output for any user on the host. This is an upstream Copilot CLI behavior. Avoid delegating prompts that contain secrets or PII; pass sensitive material via files, env vars, or `--secret-env-vars` instead.
 - **No subprocess lifetime cap:** A hung `copilot` subprocess stays in the registry as `running` indefinitely. Cancel manually via `copilot_cancel`. A configurable timeout is planned for v1.x.
 - **TUI half is opt-in:** The package ships server and TUI entrypoints. Existing server-only installs continue to register the four tools; `/copilot-status` only appears when the TUI entrypoint is installed.
-- **RPC server cleanup is best-effort:** The server half exposes a localhost-only RPC listener for the TUI and writes a per-session authenticated port file under `<XDG_CACHE_HOME or ~/.cache>/opencode/copilot-delegate/`. On OpenCode 1.x the server plugin API has no dispose hook, so cleanup is tied to process exit signals and the orphan reaper covers missed shutdowns. On OpenCode 2.x the last plugin activation's cleanup closes the server and removes its port file.
+- **RPC server cleanup is best-effort:** The server half exposes a localhost-only RPC listener for the TUI and writes an authenticated port file under `<XDG_CACHE_HOME or ~/.cache>/opencode/copilot-delegate/<id>/`, where `<id>` is the OpenCode session id on 1.x and the server's pid on 2.x. On OpenCode 1.x the server plugin API has no dispose hook, so cleanup is tied to process exit signals and the orphan reaper covers missed shutdowns. On OpenCode 2.x the last plugin activation's cleanup closes the server and removes its port file.
 
 ## Versioning
 

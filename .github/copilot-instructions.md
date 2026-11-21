@@ -21,7 +21,8 @@ Follow AGENTS.md for architecture, coding standards, and module boundaries.
 - **Linting/formatting**: Biome (not ESLint/Prettier)
 - **Test framework**: `bun:test`
 - **Build**: `bun build` + `tsc --emitDeclarationOnly`
-- **Dependencies**: `fkill` for process cleanup; `zod` (bundled, `>=4.2`); `@opencode-ai/plugin` (V1) and `@opencode/plugin` (V2) as optional peer dependencies, imported as types only
+- **Dependencies**: `fkill` for process cleanup; `zod` (bundled, `>=4.2`); `@opencode-ai/plugin` (V1) and `@opencode/plugin` (V2) as optional peer dependencies, imported as types only; `@opentui/core`, `@opentui/solid` and `solid-js` are dev dependencies and optional peers (the host supplies them at runtime), kept external in the TUI build
+- **TUI half**: the `./tui` entry exports `{ id, tui, setup }` (V1 reads `tui`, V2 reads `setup`; never add `server`). `/copilot-status` uses host dialogs only: V1 components and V2 `ctx.ui.dialog.*` promises. Never call `dialog.clear()` or pass `onClose`. The V2 keymap layer needs `mode: 'global'`. V2 finds the server's port file by server pid.
 
 ## Verification Commands
 
