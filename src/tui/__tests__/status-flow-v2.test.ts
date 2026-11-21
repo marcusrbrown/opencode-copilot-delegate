@@ -338,6 +338,43 @@ describe('V2 status flow', () => {
     expect(host.active()?.kind).toBe('confirm')
   })
 
+  it('lets a second open supersede a run that is waiting on a confirm', async () => {
+    const host = createFakeDialog()
+    const fake = fakeRpc({ tasks: [[task()]] })
+    const flow = createStatusFlow(host.dialog, { rpc: fake.rpc, now: () => 0 })
+
+    flow.open()
+    await flush()
+    host.settleActive('cpl_alpha')
+    await flush()
+    expect(host.active()?.kind).toBe('confirm')
+    const staleConfirm = host.active()
+
+    flow.open()
+    await flush()
+
+    // The new run's list replaced the confirm, and the host settled the
+    // replaced confirm with undefined: the old run ended without cancelling.
+    expect(host.active()?.kind).toBe('select')
+    expect(host.opened.map((entry) => entry.kind)).toEqual([
+      'select',
+      'confirm',
+      'select',
+    ])
+    expect(fake.cancelled).toEqual([])
+
+    // Even a late "yes" on the replaced confirm is harmless.
+    staleConfirm?.settle(true)
+    await flush()
+    expect(fake.cancelled).toEqual([])
+    expect(host.active()?.kind).toBe('select')
+
+    // The new run is alive and renders onward.
+    host.settleActive('cpl_alpha')
+    await flush()
+    expect(host.active()?.kind).toBe('confirm')
+  })
+
   it('stops after dispose without opening anything further', async () => {
     const host = createFakeDialog()
     const fake = fakeRpc({ tasks: [[task()]] })

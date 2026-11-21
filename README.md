@@ -44,7 +44,7 @@ The server plugin works by itself. `/copilot-status` is an optional terminal UI.
 
 **OpenCode 2.x:** nothing extra to install. The TUI loads the `./tui` entry of any plugin the server lists with a TUI half, so the `opencode.json` entry above is enough. `/copilot-status` and a "Copilot Status" palette command appear once the plugin is active.
 
-On both hosts `/copilot-status` lists running delegations and lets you cancel one. The OpenCode 2.x TUI runs in a different process from the server, so it finds the server's port file by the server's pid (read from the server it is connected to). If the TUI is connected to a remote server (`--server <url>`), the port file is on the other machine and `/copilot-status` reports that status is unavailable.
+On both hosts `/copilot-status` lists running delegations and lets you cancel one. The OpenCode 2.x TUI runs in a different process from the server, so it finds the server's port file by the server's pid (read from the server it is connected to). If the TUI is connected to a remote server (`--server <url>`), the port file is on the other machine. `/copilot-status` notices that the server's hostname differs from this machine's and reports that status is only available for a local server.
 
 Requires the `copilot` CLI to be on `PATH`. Install via:
 

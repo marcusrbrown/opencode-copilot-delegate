@@ -13,6 +13,7 @@ import {
   TasksListResponseSchema,
 } from '../runtime/rpc-contract'
 import {
+  assertSafeSessionDiscriminator,
   defaultPortFileBaseDir,
   defaultSessionDiscriminator,
 } from '../runtime/rpc-paths'
@@ -103,6 +104,9 @@ async function resolvePortFilePath(
       options.sessionDiscriminator ??
       (await (options.resolveSessionDiscriminator?.() ??
         defaultSessionDiscriminator()))
+    // Whatever the source, it becomes a path segment: never read outside the
+    // base dir.
+    assertSafeSessionDiscriminator(discriminator)
   } catch (error) {
     throw new RpcUnreachableError(
       `Could not determine which OpenCode server to query: ${errorMessage(error)}`,

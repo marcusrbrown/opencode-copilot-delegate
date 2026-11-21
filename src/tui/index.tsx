@@ -2,7 +2,7 @@
 
 import type { Plugin } from '@opencode/plugin/tui'
 import type { TuiPlugin, TuiPluginModule } from '@opencode-ai/plugin/tui'
-import { serverPidDiscriminator } from '../runtime/rpc-paths'
+import { discriminatorForServer } from '../runtime/rpc-paths'
 import { createRpcClient } from './rpc-client'
 import { createStatusDialogs } from './status-dialogs'
 import { createStatusFlow } from './status-flow-v2'
@@ -134,14 +134,7 @@ const tui: TuiPlugin = async (api) => {
 const setup = async (ctx: Plugin.Context): Promise<Plugin.Cleanup> => {
   const rpc = createRpcClient({
     resolveSessionDiscriminator: async () => {
-      const info = await ctx.client.server.info()
-      const discriminator = serverPidDiscriminator(info.pid)
-
-      if (discriminator === undefined) {
-        throw new Error('the OpenCode server did not report a usable pid')
-      }
-
-      return discriminator
+      return discriminatorForServer(await ctx.client.server.info())
     },
   })
   const flow = createStatusFlow(ctx.ui.dialog, { rpc })

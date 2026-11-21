@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it } from 'bun:test'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
-import { tmpdir } from 'node:os'
+import { hostname, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Plugin } from '@opencode/plugin/tui'
 import type { TuiPluginApi, TuiPluginMeta } from '@opencode-ai/plugin/tui'
@@ -331,6 +331,66 @@ describe('tui entrypoint (OpenCode V2)', () => {
     expect(String(host.dialogs[0]?.options.message)).toContain(
       'port file is unavailable',
     )
+  })
+
+  it('does not read a local port file when the server runs on another machine', async () => {
+    const entry = await loadEntry()
+    const cacheHome = makeTempDir('copilot-status-v2-remote-')
+    const fetched: string[] = []
+
+    process.env.XDG_CACHE_HOME = cacheHome
+    // An unrelated local server whose pid collides with the remote one.
+    writePortFile(cacheHome, '4500', { port: 43500, pid: 4500, token: 't' })
+    globalThis.fetch = Object.assign(
+      async (input: string | URL | Request) => {
+        fetched.push(String(input))
+        return new Response(JSON.stringify({ tasks: [] }), { status: 200 })
+      },
+      { preconnect: originalFetch.preconnect },
+    ) as unknown as typeof fetch
+
+    const host = createV2Context({
+      serverInfo: async () =>
+        ({ pid: 4500, hostname: 'remote-box.example' }) as { pid: number },
+    })
+    await entry.setup(host.ctx)
+
+    host.command().run()
+    await flush(() => host.dialogs.length > 0)
+
+    expect(fetched).toEqual([])
+    expect(host.dialogs[0]?.kind).toBe('alert')
+    expect(host.dialogs[0]?.options.title).toBe('Status unavailable.')
+    expect(String(host.dialogs[0]?.options.message)).toContain(
+      'only available for a local server',
+    )
+  })
+
+  it('uses the local port file when the server reports this machine', async () => {
+    const entry = await loadEntry()
+    const cacheHome = makeTempDir('copilot-status-v2-samehost-')
+    const fetched: string[] = []
+
+    process.env.XDG_CACHE_HOME = cacheHome
+    writePortFile(cacheHome, '4600', { port: 43600, pid: 4600, token: 't' })
+    globalThis.fetch = Object.assign(
+      async (input: string | URL | Request) => {
+        fetched.push(String(input))
+        return new Response(JSON.stringify({ tasks: [] }), { status: 200 })
+      },
+      { preconnect: originalFetch.preconnect },
+    ) as unknown as typeof fetch
+
+    const host = createV2Context({
+      serverInfo: async () =>
+        ({ pid: 4600, hostname: hostname() }) as { pid: number },
+    })
+    await entry.setup(host.ctx)
+
+    host.command().run()
+    await flush(() => fetched.length > 0)
+
+    expect(fetched).toEqual(['http://127.0.0.1:43600/tasks/list'])
   })
 
   it('rejects a server pid that is not a positive integer', async () => {

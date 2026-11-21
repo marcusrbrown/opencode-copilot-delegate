@@ -22,6 +22,7 @@ type RpcClientModule = {
   createRpcClient(options?: {
     baseDir?: string
     sessionDiscriminator?: string
+    resolveSessionDiscriminator?: () => string | Promise<string>
     fetchImpl?: typeof fetch
     requestTimeoutMs?: number
   }): RpcClient
@@ -209,6 +210,88 @@ describe('tui rpc client', () => {
         body: '',
       },
     ])
+  })
+
+  it('resolves the discriminator on every request', async () => {
+    const rpcClientModule = await loadRpcClientModule()
+    const first = await startStubServer((_request, response) => {
+      respondJson(response, 200, { ok: true, version: 'first' })
+    })
+    const second = await startStubServer((_request, response) => {
+      respondJson(response, 200, { ok: true, version: 'second' })
+    })
+    const baseDir = makeCacheDir()
+    const keys = ['1001', '1002']
+    let calls = 0
+
+    writePortFile(baseDir, '1001', { port: first.port, pid: 1001, token: 'a' })
+    writePortFile(baseDir, '1002', { port: second.port, pid: 1002, token: 'b' })
+
+    const client = rpcClientModule.createRpcClient({
+      baseDir,
+      resolveSessionDiscriminator: () => keys[calls++],
+    })
+
+    expect(await client.health()).toMatchObject({ version: 'first' })
+    expect(await client.health()).toMatchObject({ version: 'second' })
+  })
+
+  it.each(['../escape', '..', '.', '', 'a/b', 'a\\b'])(
+    'refuses the unsafe resolved discriminator %p without reading or fetching',
+    async (unsafe) => {
+      const rpcClientModule = await loadRpcClientModule()
+      const root = makeCacheDir()
+      const baseDir = join(root, 'base')
+      const fetched: string[] = []
+
+      mkdirSync(baseDir, { recursive: true })
+      // A valid port file that a path escape would reach, outside the base dir.
+      writePortFile(root, 'escape', { port: 1, pid: 1, token: 'outside' })
+
+      const client = rpcClientModule.createRpcClient({
+        baseDir,
+        resolveSessionDiscriminator: () => unsafe,
+        fetchImpl: (async (input: string | URL | Request) => {
+          fetched.push(String(input))
+          return new Response('{}')
+        }) as unknown as typeof fetch,
+      })
+
+      const error = await captureError(client.health())
+
+      expect(error).toBeInstanceOf(rpcClientModule.RpcUnreachableError)
+      expect((error as Error).message).toContain(
+        'invalid session discriminator',
+      )
+      expect(fetched).toEqual([])
+    },
+  )
+
+  it('refuses an unsafe fixed discriminator too', async () => {
+    const rpcClientModule = await loadRpcClientModule()
+    const client = rpcClientModule.createRpcClient({
+      baseDir: makeCacheDir(),
+      sessionDiscriminator: '../escape',
+    })
+
+    expect(await captureError(client.health())).toBeInstanceOf(
+      rpcClientModule.RpcUnreachableError,
+    )
+  })
+
+  it('turns a throwing resolver into an unreachable error', async () => {
+    const rpcClientModule = await loadRpcClientModule()
+    const client = rpcClientModule.createRpcClient({
+      baseDir: makeCacheDir(),
+      resolveSessionDiscriminator: async () => {
+        throw new Error('server is down')
+      },
+    })
+
+    const error = await captureError(client.health())
+
+    expect(error).toBeInstanceOf(rpcClientModule.RpcUnreachableError)
+    expect((error as Error).message).toContain('server is down')
   })
 
   it('rejects missing port files with a clear unreachable error', async () => {

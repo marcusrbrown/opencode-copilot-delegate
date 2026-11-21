@@ -30,6 +30,7 @@ import {
   TasksListResponseSchema,
 } from './rpc-contract'
 import {
+  assertSafeSessionDiscriminator,
   defaultPortFileBaseDir,
   defaultSessionDiscriminator,
 } from './rpc-paths'
@@ -102,18 +103,6 @@ function readPackageVersion(): string {
   }
 
   return '0.0.0'
-}
-
-function assertSafeSessionDiscriminator(discriminator: string): void {
-  if (
-    discriminator.length === 0 ||
-    discriminator === '.' ||
-    discriminator === '..' ||
-    discriminator.includes('/') ||
-    discriminator.includes('\\')
-  ) {
-    throw new Error('invalid session discriminator')
-  }
 }
 
 function jsonResponse(
