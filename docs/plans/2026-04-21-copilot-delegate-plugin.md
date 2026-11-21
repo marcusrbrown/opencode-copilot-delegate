@@ -1,5 +1,4 @@
 ---
-
 title: "feat: OpenCode Copilot Delegate Plugin"
 type: feat
 status: active

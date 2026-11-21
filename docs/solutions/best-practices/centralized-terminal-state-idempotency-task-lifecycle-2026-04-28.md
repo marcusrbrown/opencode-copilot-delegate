@@ -1,5 +1,4 @@
 ---
-
 title: Centralized Terminal-State Idempotency for Task Lifecycle
 date: 2026-04-28
 category: best-practices

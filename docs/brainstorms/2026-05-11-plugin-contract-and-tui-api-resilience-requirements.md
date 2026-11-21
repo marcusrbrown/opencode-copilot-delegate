@@ -1,5 +1,4 @@
 ---
-
 date: 2026-05-11
 topic: plugin-contract-and-tui-api-resilience
 ---

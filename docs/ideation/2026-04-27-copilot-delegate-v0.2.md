@@ -1,5 +1,4 @@
 ---
-
 title: opencode-copilot-delegate v0.2.x — ideation
 date: 2026-04-27
 status: ranked

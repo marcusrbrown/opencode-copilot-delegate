@@ -1,5 +1,4 @@
 ---
-
 title: 'feat: Plugin contract and TUI API resilience'
 type: feat
 status: completed

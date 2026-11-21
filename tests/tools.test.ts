@@ -1,5 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
-import { chmodSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  chmodSync,
+  existsSync,
+  mkdtempSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
@@ -9,6 +15,7 @@ import plugin from '../src/index'
 import { _resetPluginSingleton } from '../src/runtime/plugin-singleton'
 import { cleanupAll } from '../src/runtime/task-registry'
 import { createDelegateTool } from '../src/tools/delegate'
+import { overrideEnv } from './helpers/env'
 
 type PromptCall = {
   sessionId: string
@@ -29,10 +36,15 @@ type MockClient = PluginInput['client'] & {
 type ToolResultObject = Record<string, unknown>
 
 const tempPaths: string[] = []
-const originalPath = process.env.PATH
-const originalHome = process.env.HOME
-const originalXdgCacheHome = process.env.XDG_CACHE_HOME
-const originalSessionId = process.env.OPENCODE_SESSION_ID
+const ENV_KEYS = [
+  'PATH',
+  'HOME',
+  'XDG_CACHE_HOME',
+  'XDG_STATE_HOME',
+  'OPENCODE_SESSION_ID',
+] as const
+let restoreEnv: (() => void) | undefined
+let xdgStateHome = ''
 
 beforeEach(() => {
   // Each test loads `plugin(input)` and asserts on the returned tool dispatch.
@@ -43,11 +55,17 @@ beforeEach(() => {
 
   const homeDir = mkdtempSync(join(tmpdir(), 'copilot-tools-home-'))
   const xdgCacheHome = mkdtempSync(join(tmpdir(), 'copilot-tools-cache-'))
-  tempPaths.push(homeDir)
-  tempPaths.push(xdgCacheHome)
-  process.env.HOME = homeDir
-  process.env.XDG_CACHE_HOME = xdgCacheHome
-  process.env.OPENCODE_SESSION_ID = 'tools-test-session'
+  // Plugin init resolves its PID-file dir from XDG_STATE_HOME (else
+  // os.homedir(), which Bun does not re-read after an in-process HOME change),
+  // so without this the suite writes to the developer's real state dir.
+  xdgStateHome = mkdtempSync(join(tmpdir(), 'copilot-tools-state-'))
+  tempPaths.push(homeDir, xdgCacheHome, xdgStateHome)
+  restoreEnv = overrideEnv(ENV_KEYS, {
+    HOME: homeDir,
+    XDG_CACHE_HOME: xdgCacheHome,
+    XDG_STATE_HOME: xdgStateHome,
+    OPENCODE_SESSION_ID: 'tools-test-session',
+  })
 })
 
 afterEach(async () => {
@@ -56,10 +74,8 @@ afterEach(async () => {
 
   await cleanupAll()
 
-  process.env.PATH = originalPath
-  process.env.HOME = originalHome
-  process.env.XDG_CACHE_HOME = originalXdgCacheHome
-  process.env.OPENCODE_SESSION_ID = originalSessionId
+  restoreEnv?.()
+  restoreEnv = undefined
 
   for (const tempPath of tempPaths.splice(0)) {
     rmSync(tempPath, { force: true, recursive: true })
@@ -96,7 +112,10 @@ case "$prompt" in
     exit 0
     ;;
   "almost timeout")
-    sleep 0.8
+    # Block until the test releases the gate so completion timing is driven by
+    # the test, not by a sleep racing the output timeout.
+    gate="$(dirname "$0")/release"
+    while [ ! -e "$gate" ]; do sleep 0.02; done
     printf '%s\n' '{"type":"assistant.message","data":{"messageId":"msg-3","content":"fast enough","toolRequests":[]}}'
     printf '%s\n' '{"type":"result","sessionId":"session-3","exitCode":0,"usage":{}}'
     exit 0
@@ -217,6 +236,20 @@ describe('plugin tools', () => {
       'copilot_output',
       'copilot_resume',
     ])
+  })
+
+  it('roots the orphans directory under the temp XDG_STATE_HOME', async () => {
+    // Given the suite's isolated XDG_STATE_HOME
+    expect(process.env.XDG_STATE_HOME).toBe(xdgStateHome)
+    expect(xdgStateHome.startsWith(tmpdir())).toBe(true)
+
+    // When the plugin is loaded
+    await plugin(makePluginInput(process.cwd()))
+
+    // Then init created its state under the temp dir, not the real home
+    expect(
+      existsSync(join(xdgStateHome, 'opencode-copilot-delegate', 'orphans')),
+    ).toBe(true)
   })
 
   it('builds a non-trivial delegate description', async () => {
@@ -452,7 +485,7 @@ describe('plugin tools', () => {
   })
 
   it('does not mark output as timed out when completion wins the race', async () => {
-    // Given a delegated task that completes just before the timeout
+    // Given a delegated task that is held running until the test releases it
     const cwd = mkdtempSync(join(tmpdir(), 'copilot-tools-near-timeout-'))
     const binDir = makeFakeCopilotBin()
     tempPaths.push(cwd, binDir)
@@ -469,11 +502,14 @@ describe('plugin tools', () => {
     )
     const taskId = String(expectObject(delegateRaw).task_id)
 
-    // When blocking output waits slightly longer than task completion
-    const raw = await tools.copilot_output.execute(
-      { task_id: taskId, block: true, timeout_ms: 1200 },
+    // When blocking output is waiting (max cap, which never fires here) and
+    // the task is then released to complete
+    const pending = tools.copilot_output.execute(
+      { task_id: taskId, block: true, timeout_ms: 120000 },
       makeToolContext(),
     )
+    writeFileSync(join(binDir, 'release'), '')
+    const raw = await pending
 
     // Then the completed envelope wins and is not timed out
     const output = expectObject(raw)

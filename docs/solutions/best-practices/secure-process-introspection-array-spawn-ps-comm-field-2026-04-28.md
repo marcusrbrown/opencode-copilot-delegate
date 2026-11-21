@@ -1,5 +1,4 @@
 ---
-
 title: Secure Process Introspection with Array-Spawn ps and Comm-Field Identity Gate
 date: 2026-04-28
 category: best-practices

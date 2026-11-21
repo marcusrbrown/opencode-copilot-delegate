@@ -1,5 +1,4 @@
 ---
-
 title: Diagnosing OpenCode failures with debug logs
 date: 2026-04-26
 category: developer-experience
