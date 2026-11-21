@@ -28,6 +28,8 @@ src/
 ├── runtime/
 │   ├── rpc-contract.ts          # Shared server/TUI RPC schemas + inferred types
 │   ├── rpc-server.ts            # localhost RPC server for the TUI half
+│   ├── rpc-paths.ts             # Port-file paths and discriminators (`defaultSessionDiscriminator`, `serverPidDiscriminator`, `discriminatorForServer`, `assertSafeSessionDiscriminator`), shared by server and TUI
+│   ├── rpc-port-sweep.ts        # `sweepStalePortFiles`: removes dead sessions' port files and empty dirs after the server listens
 │   ├── cancel-helper.ts         # Shared cancellation path for tool + RPC
 │   ├── subprocess.ts            # Spawns copilot CLI, streams JSONL stdout
 │   ├── task-registry.ts         # In-memory task state (create/get/update/delete/cleanup)
@@ -61,6 +63,8 @@ src/
 tests/
 ├── *.test.ts             # Unit tests, roughly one per src module (parser, envelope, subprocess, discovery, notify, RPC, reaper, tools, package exports, ...)
 ├── integration/          # Integration tests against the built plugin + a real `opencode` CLI (skipped when absent)
+├── helpers/env.ts        # `overrideEnv`/`setEnv`: restore env by deleting originally-unset keys (never assign `undefined`)
+├── host-contract/        # `run-host.sh <pin>` + `drive.mjs`: packed-plugin load and delegate checks against real hosts (CI `Host contract matrix`)
 └── fixtures/             # Test inputs: JSONL captures (PII-scrubbed Copilot CLI output), agent .md fixtures, README with provenance
 src/tui/__tests__/        # TUI tests (components, RPC client, plugin entrypoint)
 docs/

@@ -59,7 +59,7 @@ Biome 2.6 formats markdown, and `biome.json` formatted every `**` path. `.github
 ]
 ```
 
-#588 repaired the frontmatter of the 10 existing docs; bodies are unchanged:
+#588 repaired the frontmatter of the 10 existing `docs/solutions/` docs, and #590 repaired four more (one ideation doc, two brainstorms and one research doc, each restored to its pre-2.6.2 frontmatter). Bodies are unchanged:
 - moved the indented keys back to column 0 (`root_cause`, `resolution_type`, `severity`, `related_components`, `tags`);
 - deleted the blank lines;
 - wrapped the problem item in single quotes: `- '"build · model" stalls without progress, or `assistant[]` comes back empty'`.
@@ -80,7 +80,7 @@ From the diffs, Biome treats the frontmatter block as markdown body text: it rem
 - Keep frontmatter-bearing markdown out of Biome's formatter. `.changeset/` is already excluded entirely, and `docs/**/*.md` keeps lint but loses formatting.
 - `bun run fix` runs inside Renovate's `postUpgradeTasks`. Review any Biome bump that touches files beyond `package.json` and `bun.lock` as a content change.
 - Run the `Bun.YAML.parse` check above after editing docs. On its own this is a manual step, and nothing ran it when #492 landed.
-- This PR also adds a `Bun.YAML.parse` frontmatter check for every `docs/**/*.md` to the test suite, so a formatter or hand edit that breaks frontmatter now fails CI instead of silently dropping docs from search.
+- `tests/docs-frontmatter.test.ts` runs a `Bun.YAML.parse` frontmatter check for every `docs/**/*.md` in `test:unit`, so a formatter or hand edit that breaks frontmatter now fails CI instead of silently dropping docs from search.
 - Exclude generated artifacts (`CHANGELOG.md`) from formatters instead of reformatting what a tool will regenerate.
 
 ## Related Issues
