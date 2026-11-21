@@ -19,6 +19,7 @@ type TuiPlugin = (
 type TuiPluginModule = {
   id: string
   tui: TuiPlugin
+  setup: (context: unknown) => unknown
 }
 
 type DialogReplacement = {
@@ -86,9 +87,12 @@ async function loadTuiPlugin(): Promise<TuiPlugin> {
   const pluginModule = Reflect.get(module, 'default') as TuiPluginModule
   const plugin = pluginModule.tui
 
+  // `setup` is the V2 entry; V1 ignores it. `server` must stay absent: V1
+  // rejects a default carrying both `server` and `tui`.
   expect(pluginModule).toEqual({
     id: 'opencode-copilot-delegate',
     tui: expect.any(Function),
+    setup: expect.any(Function),
   })
 
   expect(typeof plugin).toBe('function')

@@ -3,6 +3,7 @@
 import type { TuiPluginApi } from '@opencode-ai/plugin/tui'
 import type { RpcClient } from './rpc-client'
 import {
+  errorMessage,
   formatTaskDescription,
   formatTaskFooter,
   type StatusTask,
@@ -42,14 +43,6 @@ export type StatusDialogs = {
 }
 
 type DialogApi = Pick<TuiPluginApi, 'ui'>
-
-function errorMessage(error: unknown): string {
-  if (error instanceof Error && error.message.trim().length > 0) {
-    return error.message.trim()
-  }
-
-  return 'Unknown RPC error.'
-}
 
 function warnNonFatal(error: unknown) {
   // The TUI half has no structured log channel; a failure here must never

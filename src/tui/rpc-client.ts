@@ -13,6 +13,7 @@ import {
   TasksListResponseSchema,
 } from '../runtime/rpc-contract'
 import {
+  assertSafeSessionDiscriminator,
   defaultPortFileBaseDir,
   defaultSessionDiscriminator,
 } from '../runtime/rpc-paths'
@@ -20,6 +21,13 @@ import {
 type CreateRpcClientOptions = {
   baseDir?: string
   sessionDiscriminator?: string
+  /**
+   * Resolves the discriminator on every request instead of fixing it at
+   * construction. V2 uses this to read the connected server's pid, which can
+   * change if the managed service restarts. Ignored when
+   * `sessionDiscriminator` is set.
+   */
+  resolveSessionDiscriminator?: () => string | Promise<string>
   fetchImpl?: typeof fetch
   requestTimeoutMs?: number
 }
@@ -86,10 +94,29 @@ export class RpcAuthError extends RpcServerError {
   }
 }
 
-function resolvePortFilePath(options: CreateRpcClientOptions): string {
+async function resolvePortFilePath(
+  options: CreateRpcClientOptions,
+): Promise<string> {
+  let discriminator: string
+
+  try {
+    discriminator =
+      options.sessionDiscriminator ??
+      (await (options.resolveSessionDiscriminator?.() ??
+        defaultSessionDiscriminator()))
+    // Whatever the source, it becomes a path segment: never read outside the
+    // base dir.
+    assertSafeSessionDiscriminator(discriminator)
+  } catch (error) {
+    throw new RpcUnreachableError(
+      `Could not determine which OpenCode server to query: ${errorMessage(error)}`,
+      { cause: error },
+    )
+  }
+
   return join(
     options.baseDir ?? defaultPortFileBaseDir(),
-    options.sessionDiscriminator ?? defaultSessionDiscriminator(),
+    discriminator,
     'server-port.json',
   )
 }
@@ -264,13 +291,12 @@ function createRequestSignal(
 }
 
 export function createRpcClient(options: CreateRpcClientOptions = {}) {
-  const portFilePath = resolvePortFilePath(options)
   const fetchImpl = options.fetchImpl ?? fetch
   const abortController = new AbortController()
   const requestTimeoutMs = options.requestTimeoutMs ?? 5_000
 
   async function request<T>(requestOptions: RequestOptions<T>): Promise<T> {
-    const portFile = await readPortFile(portFilePath)
+    const portFile = await readPortFile(await resolvePortFilePath(options))
     const url = `http://127.0.0.1:${portFile.port}${requestOptions.path}`
     const context = { path: requestOptions.path, url }
     const headers = new Headers()

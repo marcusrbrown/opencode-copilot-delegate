@@ -229,7 +229,7 @@ Unit 1's findings are recorded in `docs/research/opencode-v2-host-contract-2026-
 
 ### Deferred to Implementation
 
-- How the V2 TUI finds the server, given that it runs in a separate process with no `OPENCODE_SESSION_ID`. Unit 8 designs a new port-file discriminator.
+- ~~How the V2 TUI finds the server, given that it runs in a separate process with no `OPENCODE_SESSION_ID`.~~ Resolved in Unit 8: the server keys its port file by its pid, and the TUI reads that pid from `ctx.client.server.info()`.
 - The live behavior of `resume: false` and `delivery: 'queue' | 'steer'` with a real model. It is source-verified only, and Unit 5's host check confirms it.
 - V2 2.3.0 and 2.3.1 were not probed. The pinned host-contract job covers 2.3.2. Add a 2.3.0 shard only if the peer floor stays at `>=2.3.0`.
 
@@ -453,7 +453,7 @@ flowchart LR
 
 ### Phase 2: TUI dual-host
 
-- [ ] **Unit 7: OpenTUI 0.9.x on the TUI half**
+- [x] **Unit 7: OpenTUI on the TUI half** (done 2026-11-21; as-built notes below)
 
 **Goal:** Meet V2's `>=0.8.4` peer without breaking V1.
 
@@ -473,7 +473,17 @@ flowchart LR
 
 **Verification:** Suites green. A live Esc check on the V1 host passes.
 
-- [ ] **Unit 8: V2 TUI adapter**
+**As built (decision: `@opentui/*` 0.8.4, not 0.9.x, and no longer shipped):**
+- **Rent test.** Nothing in the plugin needs 0.9.x. The code touches OpenTUI only through the JSX pragma and the `JSX` type; every dialog is a host component (V1) or a host promise API (V2).
+  - Peers read from the installed packages: `@opencode/plugin@2.3.2` peers `@opentui/core|solid >=0.8.4` and `solid-js >=1.9.0` (all optional). `@opencode-ai/plugin@1.19.6` peers `@opentui/core|solid|keymap >=0.4.5`. One version satisfies both: anything `>=0.8.4`.
+  - 0.8.4 is the lowest such version and the one V2's own `devDependencies` and host run (host V2 2.3.2: 0.8.4 / solid 1.9.17). No host runs 0.9.x, so 0.9.x would buy nothing.
+- **API diffs.** `useThread` is gone from the repo: the #572 rewrite removed `components/*`, `modal-list`, `confirm-card` and with them every `testRender`, so the "remove `useThread`" and "make `destroy` async" items had no remaining sites. The `captureCharFrame` snapshot risk no longer exists for the same reason.
+- **Both renderers tested.** `test:tui` is 52/0 on `@opentui` 0.8.4 (this PR) and 52/0 on 0.4.5 (a scratch copy with the two versions swapped), so the code runs against V1's and V2's renderer APIs.
+- **Dependency placement.** `@opentui/core`, `@opentui/solid` and `solid-js` move from `dependencies` to `devDependencies` (types, tests, and the build-time `@opentui/solid/bun-plugin` transform) plus optional `peerDependencies` (`>=0.4.5`, `>=0.4.5`, `>=1.9.10`: the lowest host versions checked). Both hosts resolve the externalized imports to their own copies (host-contract §7), so shipping a second, unused copy and its native binary to every user was dead weight. `overrides.@opentui/core` follows to 0.8.4. `scripts/build.ts` still externalizes `@opentui/*` and `solid-js`; `dist/tui/index.js` imports only `@opentui/solid` (`createComponent`).
+- **Proof that nothing needs to be installed.** The built plugin ran live as an npm-style package under `node_modules` with no `@opentui/*` or `solid-js` anywhere near it, on V1 1.19.6 and on V2 2.3.2 (see Unit 8 live check).
+- **Not done:** the lockfile-reachable advisory path (`brace-expansion` via `@opentui/solid`) is now dev-only. The `fro-bot.yaml` "SHIPPED" classification therefore no longer applies to it.
+
+- [x] **Unit 8: V2 TUI adapter** (done 2026-11-21; as-built notes below)
 
 **Goal:** `/copilot-status` on V2.
 
@@ -495,6 +505,21 @@ flowchart LR
 - Edge case: a V1 `api` without `keymap.layer` still uses the existing ladder.
 
 **Verification:** TUI suites green. Live check on both hosts. README TUI section updated.
+
+**As built:**
+- **Discriminator.** The V2 server keys its port file by `String(process.pid)` (`serverPidDiscriminator`, `src/runtime/rpc-paths.ts`), passed explicitly by the V2 adapter (`initializeProcess({ rpcSessionDiscriminator })`), so a stray `OPENCODE_SESSION_ID` in the server's environment can't move it. The TUI reads the same number from `ctx.client.server.info().pid` (`ServerInfo` is `{ version, pid, hostname?, urls, paths, capabilities? }`). Rejected alternatives: the location directory (one server process serves many locations and one RPC server serves all of them, so a per-location key is wrong), the server URL's port (the TUI would need the server to publish it), and V2's `ctx.rpc` (a larger rewrite of the RPC layer). V1 is unchanged: `OPENCODE_SESSION_ID ?? pid` on both sides.
+- **Resolved per request,** not at setup (`createRpcClient({ resolveSessionDiscriminator })`), so a managed service that restarted is followed. A pid that is not a positive safe integer is rejected before it can become a path segment. The client is checked too: `assertSafeSessionDiscriminator` (moved to `rpc-paths.ts`, shared with the server) runs in the client's path resolution. Against a remote server (`--server <url>`) the pid has no port file here and could collide with an unrelated local one, so `discriminatorForServer` refuses when `ServerInfo.hostname` differs from `os.hostname()`; the user gets the "Status unavailable" alert saying status is only available for a local server. (`ServerInfo.urls` is the server's own view, loopback even when remote, and the client doesn't expose its base URL, so the hostname is the usable signal; an absent hostname is treated as local.) Esc on the confirm ends the flow on both hosts: V1's `DialogConfirm` has no Esc binding, so the host closes the dialog and `onCancel` never fires.
+- **Entry.** One default `{ id, tui, setup }`. V1's loader (1.14.41 and 1.19.6 `readV1Plugin`) rejects only a default carrying both `server` and `tui`, and ignores extra keys; V2's `isPlugin` needs `id` and `setup`. Verified live on both hosts.
+- **V2 uses no JSX and no `onClose`.** `src/tui/status-flow-v2.ts` is one sequential flow over `ctx.ui.dialog.select / confirm / alert`. Those settle exactly once and the host clears the dialog before the continuation runs (V2.3.2 `createDialogApi`), so there are no deferred reopen timers and nothing re-entrant to get wrong. `dialog.set({ size: 'large' })` runs right after `select` because `show` resets the size to medium.
+- **Registration needs `mode: 'global'`.** Live finding on 2.3.2: a layer with the default `base` mode registered the command (`keymap.commands()` listed it) but the prompt's `/` menu said "No matching commands". With `mode: 'global'` (what the host's own slash commands use) `/copilot-status` appears.
+- **The V1 ladder is untouched.** `tui(api)` still prefers `keymap.registerLayer`, then `command.register`. V2 never calls `tui`, and V1 never calls `setup`, so no runtime host detection is needed.
+- **Files:** `src/tui/index.tsx`, `src/tui/status-flow-v2.ts` (new), `src/tui/rpc-client.ts`, `src/tui/status-format.ts` (`errorMessage` shared), `src/tui/status-dialogs.tsx` (imports it), `src/runtime/rpc-paths.ts`, `src/core/process.ts`, `src/hosts/v2.ts`, `README.md`, tests: `src/tui/__tests__/{index-v2,status-flow-v2}.test.ts`, `src/tui/__tests__/index.test.ts`, `tests/host-v2.test.ts`, `tests/package-exports.test.ts`.
+- **Tests (`test:tui` 52/0, `test:unit` 383/0):** V2 `setup` registers exactly one palette and slash command; Esc on the list and on the confirm never calls `clear` or `show`; an RPC failure, an unreadable server pid, a missing port file, and a server that can't be identified each render the error alert without throwing; a real `startRpcServer` keyed by pid is reached over HTTP by the V2 TUI while `OPENCODE_SESSION_ID` disagrees; the pid is re-read on every open; the V1 `tui` entry still uses `registerLayer` and never calls `keymap.layer`; `host-v2` asserts the server's port file is under its pid, not under `OPENCODE_SESSION_ID`. No wall-clock assertions: waits are bounded by turns on a condition.
+- **Live check (V2 2.3.2, `env -i`, scratch HOME/XDG/project):**
+  - A real `opencode serve` loaded the built plugin. Its port file dir equalled the server pid with a decoy `OPENCODE_SESSION_ID` in its env. A separate process ran the plugin's `setup` against the real `@opencode/client`. `server.info().pid` equalled the spawned pid and the TUI reached the real RPC (`check-discriminator.ts`).
+  - A PTY `opencode --standalone`: `/copilot-status` appears in the `/` menu, Enter opens the host alert ("No Copilot delegations are running.", from the real server), Esc and Enter both close it, it reopens, and the TUI never froze. The plugin sat under a directory with no `node_modules`.
+  - A PTY V1 1.19.6 with the plugin installed under `node_modules` with no `@opentui/*` or `solid-js`: same sequence, same result.
+  - Not live-verified: the populated list (running tasks) and the cancel path, which need a model-driven delegation. Covered by the `status-flow-v2` unit tests against a faithful fake of the host's promise dialogs.
 
 ## System-Wide Impact
 
