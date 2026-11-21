@@ -103,3 +103,44 @@ describe('opencode host pins', () => {
     expect(contexts).toContain(aggregator)
   })
 })
+
+// Inputs for the OpenTUI sync check below.
+const v2Peers = (
+  JSON.parse(
+    await readFile('node_modules/@opencode/plugin/package.json', 'utf8'),
+  ) as { peerDependencies: Record<string, string> }
+).peerDependencies
+const renovate = Bun.JSON5.parse(
+  await readFile('.github/renovate.json5', 'utf8'),
+) as {
+  packageRules: { matchPackageNames?: string[]; allowedVersions?: string }[]
+}
+const pkgFull = JSON.parse(await readFile('package.json', 'utf8')) as {
+  devDependencies: Record<string, string>
+  overrides: Record<string, string>
+}
+
+describe('OpenTUI dev pin follows the V2 host', () => {
+  // The @opentui dev pin only types and tests the TUI (both hosts load their
+  // own copy), so it must be the lowest version both hosts' peers accept:
+  // the V2 host package's floor. Renovate's allowedVersions cap and the
+  // @opentui/core override must move with it (.github/renovate.json5).
+  test.each(['@opentui/core', '@opentui/solid'])(
+    '%s dev pin equals the V2 host floor and the Renovate cap',
+    (name) => {
+      const floor = v2Peers[name]?.replace(/^>=/, '')
+      expect(floor).toMatch(/^\d+\.\d+\.\d+$/)
+      expect(pkgFull.devDependencies[name]).toBe(floor)
+      const rule = renovate.packageRules.find((r) =>
+        r.matchPackageNames?.includes(name),
+      )
+      expect(rule?.allowedVersions).toBe(`<=${floor}`)
+    },
+  )
+
+  test('the @opentui/core override matches the dev pin', () => {
+    expect(pkgFull.overrides['@opentui/core']).toBe(
+      pkgFull.devDependencies['@opentui/core'],
+    )
+  })
+})
