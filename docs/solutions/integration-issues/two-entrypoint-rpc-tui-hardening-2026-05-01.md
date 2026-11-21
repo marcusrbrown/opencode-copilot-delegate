@@ -6,19 +6,17 @@ module: copilot-status-tui-foundation
 problem_type: integration_issue
 component: tooling
 symptoms:
-
 - server tools could fail to register when the TUI RPC server could not start
 - the packaged plugin could expose a broken ./tui entrypoint or omit the built TUI bundle
 - the TUI could render stale async results after cleanup or hold stale task selection during cancel flows
 - cancellation progress was not visible through RPC/TUI while a cancel was in flight
-  root_cause: incomplete_setup
-  resolution_type: code_fix
-  severity: high
-  related_components:
+root_cause: incomplete_setup
+resolution_type: code_fix
+severity: high
+related_components:
 - development_workflow
 - testing_framework
-  tags: [copilot-status, tui, rpc, two-entrypoint, packaging, cancellation, localhost-auth, port-file]
-
+tags: [copilot-status, tui, rpc, two-entrypoint, packaging, cancellation, localhost-auth, port-file]
 ---
 
 # Hardening Two-Entrypoint RPC/TUI Plugin Integration

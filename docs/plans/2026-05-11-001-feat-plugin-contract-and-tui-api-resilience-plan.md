@@ -8,6 +8,8 @@ origin: docs/brainstorms/2026-05-11-plugin-contract-and-tui-api-resilience-requi
 
 # Plugin contract and TUI API resilience
 
+> **Partly superseded by [2026-11-20-002](2026-11-20-002-feat-opencode-v2-dual-host-plan.md):** `plugInOnce` now dedupes per directory instead of returning `{}` to every call after the first (R6). The default export is the object `{ id, server, setup }`, not a function.
+
 ## Overview
 
 Bring `opencode-copilot-delegate` into compatibility with OpenCode 1.14.44+ (TUI API migration) and match the plugin-entry-shape contract Systematic enforced in v2.12.2 (PR #355). Five implementation units split across two PRs: one user-facing TUI fix that can ship independently, and a four-unit structural-correctness set that lands together because the CI gate (R4) depends on the Node-loadable build artifact (R5), which depends on the default-only export refactor (R3).

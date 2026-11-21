@@ -7,22 +7,22 @@ problem_type: best_practice
 component: development_workflow
 severity: medium
 applies_when:
-
 - Implementing atomic file mutations
 - Handling concurrent appends to shared files
 - Ensuring crash-safe PID file writes
 - Avoiding race conditions without locks
-  tags:
+tags:
 - atomic-writes
 - file-serialization
 - temp-files
 - o-excl
 - crash-safety
 - in-process-queue
-
 ---
 
 # Atomic File Append/Remove with O_EXCL Temp-File and In-Process Serialization Queue
+
+> **Update 2026-11-21:** `writeChains` is no longer a module-level `Map`. It is now `processGlobal('pid-file-write-chains', …)` in `src/runtime/pid-file.ts`, a `Symbol.for` slot on `globalThis`. OpenCode evaluates the plugin module more than once per process: once per config source or workspace on V1, and once per location on V2. A module-scope queue would only serialize writes within one module instance. Read "in-process queue" below as "process-global queue". See [v2-silent-zero-tools-normalize-tool-arg-schemas-2026-11-21.md](../integration-issues/v2-silent-zero-tools-normalize-tool-arg-schemas-2026-11-21.md).
 
 ## Context
 

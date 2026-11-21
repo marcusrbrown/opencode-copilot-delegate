@@ -8,6 +8,8 @@ origin: docs/brainstorms/2026-05-02-copilot-session-continuity-requirements.md
 
 # Copilot session continuity — resume + connect
 
+> **Note 2026-11-21:** Registering every tool through `normalizeToolArgSchemas` and `plugInOnce` (see the Interaction graph bullets under System-Wide Impact) now applies to OpenCode 1.x only. On 2.x, tools register unnormalized through `setup`. See [2026-11-20-002](2026-11-20-002-feat-opencode-v2-dual-host-plan.md).
+
 ## Overview
 
 Add `copilot_resume` and `copilot_connect` tools that wrap the Copilot CLI's `--resume[=id|name|prefix]` and `--connect[=sessionId]` flags, and surface inline `Resume by ID` / `Connect by ID` affordances inside the existing `/copilot-status` modal. Continuity-derived tasks share the existing `TaskState` shape, distinguished by an `origin: 'spawn' | 'resume' | 'connect'` discriminator so cancel, output, and notify behave truthfully — including for borrowed processes the current plugin instance did not spawn the underlying Copilot session for.

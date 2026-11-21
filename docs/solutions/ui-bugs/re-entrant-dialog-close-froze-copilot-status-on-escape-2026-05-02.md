@@ -6,17 +6,15 @@ module: tui
 problem_type: ui_bug
 component: tooling
 symptoms:
-
 - Pressing Escape in `/copilot-status` froze the entire OpenCode TUI instead of closing the modal.
 - The freeze also affected the modal load-error path while switching to the unavailable alert.
 - Layout and input rewrites changed the presentation but did not remove the freeze.
-  root_cause: wrong_api
-  resolution_type: code_fix
-  severity: high
-  related_components:
+root_cause: wrong_api
+resolution_type: code_fix
+severity: high
+related_components:
 - testing_framework
-  tags: [tui, copilot-status, dialog-lifecycle, escape-key, modal, re-entrant-close]
-
+tags: [tui, copilot-status, dialog-lifecycle, escape-key, modal, re-entrant-close]
 ---
 
 # Re-entrant dialog close froze /copilot-status on Escape
