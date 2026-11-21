@@ -1,4 +1,4 @@
-import { tool } from '@opencode-ai/plugin/tool'
+import { tool } from '../lib/tool'
 import { cancelTaskById } from '../runtime/cancel-helper'
 import { getTask } from '../runtime/task-registry'
 
