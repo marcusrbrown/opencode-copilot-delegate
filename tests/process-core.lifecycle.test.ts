@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
 import {
   _resetProcessCore,
   acquireProcessCore,
@@ -31,6 +31,12 @@ function generation(
     }
   }
 }
+
+// Reset on both sides: other suites acquire through V1 (which never releases)
+// and leave a live generation behind, and file order differs across runners.
+beforeEach(() => {
+  _resetProcessCore()
+})
 
 afterEach(() => {
   _resetProcessCore()
