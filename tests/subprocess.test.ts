@@ -712,6 +712,69 @@ describe('subprocess runtime', () => {
       expect(task.status).toBe('failed')
       expect(task.errorText).toContain('something went wrong')
     })
+
+    it('marks an exit-0 run with no events as failed and keeps the stderr tail', async () => {
+      // Given a binary that only writes to stderr and exits 0
+      const { spawnCopilot } = await loadModules()
+      const binDir = makeFakeCopilotBin()
+      tempPaths.push(binDir)
+
+      const task = spawnCopilot(
+        ['-c', 'echo "fixture not found" >&2; exit 0'],
+        { cwd: process.cwd(), env: makeSpawnEnv(binDir) },
+      )
+
+      // When the subprocess finishes
+      await task.completionPromise
+
+      // Then it is reported as failed with an explanation and the stderr text
+      expect(task.exitCode).toBe(0)
+      expect(task.events).toHaveLength(0)
+      expect(task.status).toBe('failed')
+      expect(task.errorText).toContain(
+        'copilot exited 0 without producing any output',
+      )
+      expect(task.errorText).toContain('fixture not found')
+    })
+
+    it('marks an exit-0 run with no events and no stderr as failed', async () => {
+      const { spawnCopilot } = await loadModules()
+      const binDir = makeFakeCopilotBin()
+      tempPaths.push(binDir)
+
+      const task = spawnCopilot(['-c', 'exit 0'], {
+        cwd: process.cwd(),
+        env: makeSpawnEnv(binDir),
+      })
+
+      await task.completionPromise
+      expect(task.status).toBe('failed')
+      expect(task.errorText).toBe(
+        'copilot exited 0 without producing any output',
+      )
+    })
+
+    it('keeps an exit-0 run that produced events complete despite stderr warnings', async () => {
+      const { spawnCopilot } = await loadModules()
+      const binDir = makeFakeCopilotBin()
+      tempPaths.push(binDir)
+
+      const task = spawnCopilot(
+        [
+          '-c',
+          [
+            'echo "deprecation warning" >&2',
+            'printf \'%s\\n\' \'{"type":"result","sessionId":"session-1","exitCode":0,"usage":{}}\'',
+            'exit 0',
+          ].join('; '),
+        ],
+        { cwd: process.cwd(), env: makeSpawnEnv(binDir) },
+      )
+
+      await task.completionPromise
+      expect(task.status).toBe('complete')
+      expect(task.errorText).toBe('deprecation warning')
+    })
   })
 
   describe('auth environment resolution', () => {
