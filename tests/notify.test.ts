@@ -7,6 +7,7 @@ import {
   notifyCompletion,
   resetInFlightCounters,
 } from '../src/runtime/notify'
+import { NO_OUTPUT_ERROR } from '../src/runtime/subprocess'
 
 /** Create a mock client that records prompt, toast, and app.log calls. */
 function mockClient(): NotifyClient & {
@@ -248,6 +249,44 @@ describe('notification injection', () => {
       const text = client.promptCalls[0].text
       expect(text).toContain('ACTION REQUIRED')
       expect(text).toContain('1')
+    })
+
+    it('explains a zero-output failure instead of citing exit code 0', async () => {
+      // Given a task that failed even though Copilot exited 0 (#579: no output)
+      const client = mockClient()
+      incrementInFlight('session-A')
+
+      // When notified
+      await notifyCompletion(
+        client,
+        makeTaskInfo({
+          status: 'failed',
+          exitCode: 0,
+          failureReason: 'no-output',
+        }),
+      )
+
+      // Then the notice says why it failed, not that exit code 0 is the cause
+      const text = client.promptCalls[0].text
+      expect(text).toContain('ACTION REQUIRED')
+      expect(text).toContain(NO_OUTPUT_ERROR)
+      expect(text).not.toContain('Subprocess exited with code 0')
+    })
+
+    it('uses the exit-code wording for any other failure, even with exit code 0', async () => {
+      // Given a failure with exit code 0 but no explicit no-output reason
+      const client = mockClient()
+      incrementInFlight('session-A')
+
+      await notifyCompletion(
+        client,
+        makeTaskInfo({ status: 'failed', exitCode: 0 }),
+      )
+
+      // Then the notice does not guess that Copilot produced no output
+      const text = client.promptCalls[0].text
+      expect(text).toContain('Subprocess exited with code 0')
+      expect(text).not.toContain(NO_OUTPUT_ERROR)
     })
 
     it('should send prompt to the correct parent session ID', async () => {
