@@ -24,7 +24,7 @@
  */
 
 import type { PluginInput } from '@opencode-ai/plugin'
-import { tool } from '@opencode-ai/plugin/tool'
+import { tool } from '../lib/tool'
 import {
   hasLocalCopilotSession,
   normalizeContinuityError,
