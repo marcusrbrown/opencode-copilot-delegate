@@ -11,9 +11,9 @@
  *
  * Two guards with different scopes:
  *
- * - {@link initProcessOnce} runs process-wide setup (orphan reaping, the RPC
- *   server and its port file) exactly once per process, whatever the
- *   directory.
+ * - `acquireProcessCore` (src/runtime/process-core.ts) runs process-wide
+ *   setup (orphan reaping, the RPC server and its port file) once per live
+ *   generation, whatever the directory. V1 never releases it.
  * - {@link plugInOnce} hands out real hooks once per `key` (the workspace
  *   directory). A second invocation for the same key gets `{}`; a different
  *   key gets its own real hooks. This partially supersedes R6 of the
@@ -71,7 +71,7 @@
  * the port (it is port 0, so the OS picks a new one). It would overwrite the
  * port file, though, so the TUI would discover only the second server and its
  * token, and lose sight of tasks the first one serves. Orphan reaping must
- * also run once, before any task is spawned. {@link initProcessOnce} is the
+ * also run once, before any task is spawned. `acquireProcessCore` is the
  * guard for that process-wide work. Per-directory tool hooks are cheap and
  * safe to build once per workspace. The paired `wireRpcServerCleanup` helper
  * in `src/lib/rpc-cleanup.ts` enforces the matching invariant on shutdown:
@@ -79,12 +79,12 @@
  */
 
 import { _resetProcessGlobal, processGlobal } from '../lib/process-global'
+import { _resetProcessCore } from './process-core'
 
 // Not 'singleton': that `.v1` slot held a single state object in releases
 // before per-directory hooks, and a Map here would collide with it if both
 // versions load in one process.
 const HOOKS_SLOT = 'hook-guards'
-const PROCESS_INIT_SLOT = 'process-init'
 const DEFAULT_KEY = '<default>'
 
 interface SingletonState<T> {
@@ -92,11 +92,6 @@ interface SingletonState<T> {
   loadedAt: number
   hooksPromise: Promise<T>
   warned: boolean
-}
-
-interface ProcessInitState<T> {
-  pid: number
-  promise: Promise<T>
 }
 
 /** Per-key hook guards, shared by every module instance in the process. */
@@ -190,29 +185,11 @@ export async function plugInOnce<T>({
 }
 
 /**
- * Run process-wide setup at most once per process, across every module
- * instance and workspace directory, and share its promise with every caller.
- * A rejected init is sticky, like {@link plugInOnce}.
- */
-export function initProcessOnce<T>(
-  doInit: () => Promise<T>,
-  pid: number = process.pid,
-): Promise<T> {
-  const slot = processGlobal<{ state?: ProcessInitState<unknown> }>(
-    PROCESS_INIT_SLOT,
-    () => ({}),
-  )
-  if (slot.state?.pid !== pid) {
-    slot.state = { pid, promise: doInit() }
-  }
-  return slot.state.promise as Promise<T>
-}
-
-/**
- * Test-only: clear both guards so the next invocation re-runs process setup
- * and hook construction. Must not be called in production code paths.
+ * Test-only: clear the hook guards and the process core so the next
+ * invocation re-runs process setup and hook construction. Must not be called
+ * in production code paths.
  */
 export function _resetPluginSingleton(): void {
   _resetProcessGlobal(HOOKS_SLOT)
-  _resetProcessGlobal(PROCESS_INIT_SLOT)
+  _resetProcessCore()
 }

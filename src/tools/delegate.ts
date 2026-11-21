@@ -1,4 +1,3 @@
-import type { PluginInput } from '@opencode-ai/plugin'
 import { tool } from '../lib/tool'
 import type { NotifyClient } from '../runtime/notify'
 import {
@@ -14,7 +13,7 @@ import { createTask, getAllTasks } from '../runtime/task-registry'
 const MAX_CONCURRENT = 10
 
 type DelegateToolOptions = {
-  client: PluginInput['client']
+  client: NotifyClient
   description: string
   directory: string
   pidFilePath?: string
@@ -172,17 +171,11 @@ export function createDelegateTool(options: DelegateToolOptions) {
       }
 
       incrementInFlight(ctx.sessionID)
-      void notifySpawn(options.client as NotifyClient, task.taskId).catch(
-        () => {
-          // Spawn-toast failures are non-fatal for the tool call.
-        },
-      )
+      void notifySpawn(options.client, task.taskId).catch(() => {
+        // Spawn-toast failures are non-fatal for the tool call.
+      })
 
-      attachCompletionPipeline(
-        task,
-        spawnResult,
-        options.client as NotifyClient,
-      )
+      attachCompletionPipeline(task, spawnResult, options.client)
 
       return JSON.stringify({ task_id: task.taskId })
     },

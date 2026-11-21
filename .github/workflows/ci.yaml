@@ -65,12 +65,55 @@ jobs:
                 console.error('Move helpers to src/lib/ — plugin entry must export only default; see docs/solutions or memory pattern for the v2.5.0/v2.12.1 regression class.');
                 process.exit(1);
               }
-              if (typeof m.default !== 'function') {
-                console.error('Plugin default export is not a function');
+              const entry = m.default;
+              const shape = Object.keys(entry ?? {}).sort().join(',');
+              if (shape !== 'id,server,setup' || typeof entry.server !== 'function' || typeof entry.setup !== 'function') {
+                console.error('Plugin default must be the dual-host object { id, server, setup }; got: ' + shape);
                 process.exit(1);
               }
-              console.log('Export shape OK: only default, typeof=function');
+              console.log('Export shape OK: only default { id, server, setup }');
             });
+          "
+
+      - name: Node dual-host entry smoke test
+        env:
+          XDG_CACHE_HOME: ${{ runner.temp }}/smoke-cache
+          XDG_STATE_HOME: ${{ runner.temp }}/smoke-state
+        run: |
+          node --input-type=module -e "
+            const { default: plugin } = await import('./dist/index.js');
+            const tools = ['copilot_cancel', 'copilot_delegate', 'copilot_output', 'copilot_resume'];
+            const fail = (message) => { console.error(message); process.exit(1); };
+
+            // V1: server() with a V1-shaped input returns the four tools.
+            const hooks = await plugin.server({
+              client: { app: { log: async () => {} }, session: { prompt: async () => {} } },
+              directory: process.cwd(),
+              worktree: process.cwd(),
+            });
+            const v1 = Object.keys(hooks.tool ?? {}).sort().join(',');
+            if (v1 !== tools.join(',')) fail('V1 server() tools: ' + v1);
+
+            // V2: setup() with a fake V2 context registers the four tools.
+            const added = [];
+            const cleanup = await plugin.setup({
+              location: { directory: process.cwd() },
+              session: { synthetic: async () => {} },
+              tool: {
+                transform: async (callback) => { callback({ add: (tool) => added.push(tool) }); return { dispose: async () => {} }; },
+                reload: async () => {},
+                list: async () => added.map((tool) => ({ ...tool, id: tool.name })),
+              },
+            });
+            const v2 = added.map((tool) => tool.name).sort().join(',');
+            if (v2 !== tools.join(',')) fail('V2 setup() tools: ' + v2);
+            for (const tool of added) {
+              tool.input['~standard'].jsonSchema.input({ target: 'draft-2020-12' });
+            }
+            if (typeof cleanup !== 'function') fail('V2 setup() returned no cleanup');
+            await cleanup();
+            console.log('Dual-host smoke OK: V1 server() and V2 setup() each register four tools');
+            process.exit(0);
           "
 
       - name: Unit tests

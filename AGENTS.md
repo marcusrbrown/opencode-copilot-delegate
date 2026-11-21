@@ -13,7 +13,13 @@
 
 ```
 src/
-├── index.ts              # Server plugin entrypoint — wires tools + RPC runtime
+├── index.ts              # Dual-host entry: default `{ id, server, setup }` only (V1 reads `server`, V2 reads `setup`); typed without host packages
+├── hosts/
+│   ├── v1.ts             # `serverV1`: acquire process core (never released), per-directory hooks via `plugInOnce`, normalized arg schemas
+│   └── v2.ts             # `setupV2`: reduced-bridge guard, `tool.transform` + `tools.add` (zod as Standard Schema, unnormalized), `session.synthetic` notices, cleanup releases the core
+├── core/
+│   ├── tools.ts          # `buildTools`: the four tools for one workspace, shared by both hosts
+│   └── process.ts        # `initializeProcess`: orphan reap + RPC server; returns the release teardown (cancel tasks → close RPC → truncate ledger)
 ├── tools/
 │   ├── delegate.ts       # copilot_delegate tool
 │   ├── output.ts         # copilot_output tool
@@ -33,7 +39,8 @@ src/
 │   ├── continuity-validation.ts # Validates resume target IDs, `--add-dir` paths, and cwd against allowed roots (realpath-aware)
 │   ├── orphan-reaper.ts         # Startup reaper: kills orphaned Copilot process trees found in per-instance PID files (liveness + identity gates)
 │   ├── pid-file.ts              # Per-instance PID file I/O (serialized append/remove/truncate, symlink-safe)
-│   └── plugin-singleton.ts      # `initProcessOnce` (reap + RPC once per process) and `plugInOnce` (hooks once per directory; `{}` for duplicate sources)
+│   ├── plugin-singleton.ts      # `plugInOnce`: hooks once per directory; `{}` for duplicate config sources (V1)
+│   └── process-core.ts          # `acquireProcessCore`/`releaseProcessCore`: ref-counted process resources; last release tears down once, acquire waits on a pending release
 ├── lib/
 │   ├── ansi.ts                       # `stripAnsi` — removes ANSI escape sequences from text
 │   ├── errno.ts                      # `isErrnoException` type predicate for `node:fs` errors

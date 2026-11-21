@@ -14,7 +14,7 @@ import {
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { PluginInput } from '@opencode-ai/plugin'
-import plugin from '../src/index'
+import { serverV1 } from '../src/hosts/v1'
 import { _resetPluginSingleton } from '../src/runtime/plugin-singleton'
 import { PortFileSchema } from '../src/runtime/rpc-contract'
 import { cleanupAll } from '../src/runtime/task-registry'
@@ -35,7 +35,7 @@ let restoreEnv: (() => void) | undefined
 let closeRpcServer: (() => Promise<void>) | undefined
 
 beforeEach(() => {
-  // Each lifecycle test asserts side effects of a fresh `await plugin(input)`
+  // Each lifecycle test asserts side effects of a fresh `await serverV1(input)`
   // (orphans-dir creation, foreign-pidfile reaping). Reset BEFORE each test so
   // singleton state from a previous test file (e.g. `tests/tools.test.ts`)
   // cannot short-circuit init and serve stale cached hooks tied to a different
@@ -134,7 +134,7 @@ describe('plugin init lifecycle', () => {
 
     // When the plugin is loaded
     const input = makePluginInput(process.cwd())
-    const result = await plugin(input)
+    const result = await serverV1(input)
 
     // Then the orphans directory exists with restrictive permissions
     const orphansDir = join(xdgState, 'opencode-copilot-delegate', 'orphans')
@@ -160,7 +160,7 @@ describe('plugin init lifecycle', () => {
     process.env.XDG_STATE_HOME = xdgState
 
     const input = makePluginInput(process.cwd())
-    const result = await plugin(input)
+    const result = await serverV1(input)
 
     const portFilePath = join(
       process.env.XDG_CACHE_HOME ?? join(process.env.HOME ?? '', '.cache'),
@@ -202,7 +202,7 @@ describe('plugin init lifecycle', () => {
     process.env.XDG_CACHE_HOME = xdgCacheFile
 
     const input = makePluginInput(process.cwd())
-    const result = await plugin(input)
+    const result = await serverV1(input)
 
     expect(Object.keys(result.tool ?? {}).sort()).toEqual([
       'copilot_cancel',
@@ -234,7 +234,7 @@ describe('plugin init lifecycle', () => {
 
     // When the plugin is loaded
     const input = makePluginInput(process.cwd())
-    const result = await plugin(input)
+    const result = await serverV1(input)
 
     // Then tools still dispatch (mkdir threw and was swallowed)
     expect(Object.keys(result.tool ?? {}).sort()).toEqual([
@@ -253,7 +253,7 @@ describe('plugin init lifecycle', () => {
   it('completes orphan reaping before tool dispatch', async () => {
     // Seed a foreign dead-spawner pidfile in the exact orphans directory that
     // plugin init reaps. If init stops awaiting reapOrphans, the foreign file
-    // will still exist after `await plugin(...)` resolves; the awaited path
+    // will still exist after `await serverV1(...)` resolves; the awaited path
     // must unlink it before returning the tool dispatch.
     const xdgState = mkdtempSync(join(tmpdir(), 'plugin-init-await-'))
     tempPaths.push(xdgState)
@@ -270,7 +270,7 @@ describe('plugin init lifecycle', () => {
 
     // When the plugin is loaded
     const input = makePluginInput(process.cwd())
-    const result = await plugin(input)
+    const result = await serverV1(input)
 
     // Then init finished reaping before returning the tool dispatch.
     expect(statSync(orphansDir).isDirectory()).toBe(true)
@@ -301,9 +301,9 @@ describe('plugin init lifecycle', () => {
     process.env.XDG_STATE_HOME = xdgState
 
     const input = makePluginInput(process.cwd())
-    const first = await plugin(input)
-    const second = await plugin(input)
-    const third = await plugin(input)
+    const first = await serverV1(input)
+    const second = await serverV1(input)
+    const third = await serverV1(input)
 
     // First invocation gets the real hooks with the full tool catalog.
     expect(Object.keys(first.tool ?? {}).sort()).toEqual([
@@ -342,7 +342,7 @@ describe('plugin init lifecycle', () => {
     writeFileSync(foreignPidFile, '99999\tcopilot\tTue Apr 28 23:45:30 2026\n')
 
     const input = makePluginInput(process.cwd())
-    const result = await plugin(input)
+    const result = await serverV1(input)
 
     expect(Object.keys(result.tool ?? {}).sort()).toEqual([
       'copilot_cancel',
@@ -390,8 +390,8 @@ describe('per-workspace hooks (#530 item 2)', () => {
     const beta = makeWorkspace('beta-agent')
 
     // When the host invokes the factory once per workspace
-    const first = await plugin(makePluginInput(alpha))
-    const second = await plugin(makePluginInput(beta))
+    const first = await serverV1(makePluginInput(alpha))
+    const second = await serverV1(makePluginInput(beta))
 
     // Then both get the full tool catalog (previously the second got `{}`)
     const tools = [
@@ -417,15 +417,15 @@ describe('per-workspace hooks (#530 item 2)', () => {
     const xdgState = mkdtempSync(join(tmpdir(), 'plugin-ws-rpc-xdg-'))
     tempPaths.push(xdgState)
     process.env.XDG_STATE_HOME = xdgState
-    await plugin(makePluginInput(makeWorkspace('one')))
+    await serverV1(makePluginInput(makeWorkspace('one')))
     const firstCleanup = closeRpcServer
     expect(firstCleanup).toBeDefined()
     const tokenAfterFirst = readPortFileToken()
 
     // When further workspaces load the plugin in the same process
     closeRpcServer = undefined
-    await plugin(makePluginInput(makeWorkspace('two')))
-    await plugin(makePluginInput(makeWorkspace('three')))
+    await serverV1(makePluginInput(makeWorkspace('two')))
+    await serverV1(makePluginInput(makeWorkspace('three')))
 
     // Then no second server started: no new cleanup was wired, and the port
     // file still carries the first server's token

@@ -44,8 +44,10 @@ describe('host-free server build', () => {
       pathToFileURL(join(outdir, 'index.js')).href
     )) as Record<string, unknown>
 
-    // Then it exposes only a default plugin factory
+    // Then it exposes only the default dual-host plugin object
     expect(Object.keys(mod).sort()).toEqual(['default'])
-    expect(typeof mod.default).toBe('function')
+    const entry = mod.default as Record<string, unknown>
+    expect(typeof entry.server).toBe('function')
+    expect(typeof entry.setup).toBe('function')
   })
 })

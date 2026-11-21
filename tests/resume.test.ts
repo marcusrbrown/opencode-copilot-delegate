@@ -22,7 +22,7 @@ import { join } from 'node:path'
 import { setTimeout as delay } from 'node:timers/promises'
 import type { PluginInput } from '@opencode-ai/plugin'
 import type { ToolContext } from '@opencode-ai/plugin/tool'
-import plugin from '../src/index'
+import { serverV1 } from '../src/hosts/v1'
 import { _resetPluginSingleton } from '../src/runtime/plugin-singleton'
 import { cleanupAll } from '../src/runtime/task-registry'
 import { createResumeTool } from '../src/tools/resume'
@@ -215,7 +215,7 @@ describe('copilot_resume tool', () => {
   describe('catalog registration', () => {
     it('registers copilot_resume as the 4th tool (catalog grows 3 → 4)', async () => {
       const input = makePluginInput(process.cwd())
-      const result = await plugin(input)
+      const result = await serverV1(input)
 
       expect(Object.keys(result.tool ?? {}).sort()).toEqual([
         'copilot_cancel',
@@ -227,7 +227,7 @@ describe('copilot_resume tool', () => {
 
     it('copilot_resume args carry normalizeToolArgSchemas overrides', async () => {
       const input = makePluginInput(process.cwd())
-      const result = await plugin(input)
+      const result = await serverV1(input)
       const tools = result.tool as NonNullable<typeof result.tool>
 
       const resumeArgs = tools.copilot_resume.args as Record<string, unknown>
@@ -726,7 +726,7 @@ exit 1
 describe('plugin tool catalog with copilot_resume', () => {
   it('lists exactly 4 tools after resume registration', async () => {
     const input = makePluginInput(process.cwd())
-    const result = await plugin(input)
+    const result = await serverV1(input)
 
     const toolNames = Object.keys(result.tool ?? {}).sort()
     expect(toolNames).toEqual([
@@ -743,7 +743,7 @@ describe('plugin tool catalog with copilot_resume', () => {
     expect(xdgStateHome.startsWith(tmpdir())).toBe(true)
 
     // When the plugin is loaded
-    await plugin(makePluginInput(process.cwd()))
+    await serverV1(makePluginInput(process.cwd()))
 
     // Then init created its state under the temp dir, not the real home
     expect(
@@ -753,7 +753,7 @@ describe('plugin tool catalog with copilot_resume', () => {
 
   it('schema-walk covers copilot_resume target_id and add_dir args', async () => {
     const input = makePluginInput(process.cwd())
-    const result = await plugin(input)
+    const result = await serverV1(input)
     const tools = result.tool as NonNullable<typeof result.tool>
 
     const cases: Array<{ tool: keyof typeof tools; arg: string }> = [

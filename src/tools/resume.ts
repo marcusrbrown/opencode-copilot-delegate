@@ -23,7 +23,6 @@
  * Exports `launchResume` for RPC reuse.
  */
 
-import type { PluginInput } from '@opencode-ai/plugin'
 import { tool } from '../lib/tool'
 import {
   hasLocalCopilotSession,
@@ -74,7 +73,7 @@ function computeAllowedRoots(directory: string): string[] {
 // ---------------------------------------------------------------------------
 
 export type LaunchResumeOptions = {
-  client: PluginInput['client']
+  client: NotifyClient
   directory: string
   sessionID: string
   targetId: string
@@ -219,14 +218,14 @@ async function validateResumeInputs(
 const NAME_TARGET_FAILURE_WINDOW_MS = 500
 
 function attachResumePipeline(
-  client: PluginInput['client'],
+  client: NotifyClient,
   sessionID: string,
   task: ReturnType<typeof createTask>,
   spawnResult: SpawnCopilotResult,
 ): void {
   incrementInFlight(sessionID)
-  void notifySpawn(client as NotifyClient, task.taskId).catch(() => {})
-  attachCompletionPipeline(task, spawnResult, client as NotifyClient)
+  void notifySpawn(client, task.taskId).catch(() => {})
+  attachCompletionPipeline(task, spawnResult, client)
 }
 
 export async function launchResume(
@@ -325,7 +324,7 @@ export async function launchResume(
 // ---------------------------------------------------------------------------
 
 type ResumeToolOptions = {
-  client: PluginInput['client']
+  client: NotifyClient
   directory: string
   pidFilePath?: string
   failureWindowMs?: number
