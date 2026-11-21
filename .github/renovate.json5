@@ -18,6 +18,15 @@
       matchPackageNames: ['@opencode-ai/{/,}**'],
       semanticCommitType: 'build',
     },
+    {
+      description: [
+        'Hold @opentui/* at the OpenTUI version bundled by the pinned OpenCode 2.x host (the v2 pin in scripts/opencode-host-pins.json).',
+        'Both hosts load their own OpenTUI copy at runtime, so this dev pin only types and tests the TUI. It must stay the lowest version that meets both hosts\' peer ranges, which is the V2 host\'s (@opencode/plugin 2.3.2 peers @opentui >=0.8.4).',
+        'Raise allowedVersions, the devDependencies and the @opentui/core override together when the v2 host pin moves to a newer OpenTUI.',
+      ],
+      matchPackageNames: ['@opentui/core', '@opentui/solid'],
+      allowedVersions: '<=0.8.4',
+    },
   ],
   postUpgradeTasks: {
     commands: ['bun install', 'bun run fix', 'bun run build'],
