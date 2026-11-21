@@ -187,7 +187,7 @@ The fix makes the boundaries explicit:
 - Keep additive TUI/RPC features non-fatal during server plugin initialization.
 - Wrap async HTTP handlers at the server boundary, not only inside individual route branches.
 - Reject unsafe path discriminators before any filesystem write.
-- Delete exact stale files during startup cleanup instead of removing parent directories.
+- Delete exact stale files during startup cleanup instead of removing parent directories. *(Update 2026-11-21: the sibling sweep in `rpc-port-sweep.ts` also removes **empty** stale directories past the grace window with a non-recursive `rmdir`, and `close()` removes its own emptied directory; see `../logic-errors/stale-rpc-port-files-leaked-per-pid-cache-dirs-2026-11-21.md`. `assertSafeSessionDiscriminator` now lives in `rpc-paths.ts` and also runs on the TUI client.)*
 - Preserve transitional runtime states internally when UI needs progress visibility, then normalize them at public API boundaries.
 - Add tests for startup fallback, structured RPC `500`s, invalid discriminators, and surgical port-file cleanup.
 - Add tests for running-plus-cancelling task lists, stale cancel selection, TUI request timeout/disposal, modal late-response guards, and package build/export smoke.

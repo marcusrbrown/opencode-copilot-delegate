@@ -301,6 +301,8 @@ It has **no directory or worktree**. Per-location data comes from the `setup` co
 
 ## 6. V2 TUI process and `OPENCODE_SESSION_ID`
 
+> **Resolved 2026-11-21 (#587):** the V2 server keys its port file by its own pid, and the V2 TUI reads `ctx.client.server.info().pid` on each request, with a hostname guard. The location directory, the server URL port and `ctx.rpc` were rejected. See `docs/solutions/best-practices/v2-tui-finds-server-port-file-by-server-pid-2026-11-21.md`.
+
 **Answer.** The V2 TUI is **never in the server's process**, and `OPENCODE_SESSION_ID` is **not set** in either the TUI or the server process. It is injected only into the environment of child processes spawned by the shell tool. The current port-file discriminator `OPENCODE_SESSION_ID ?? String(process.pid)` (`src/runtime/rpc-server.ts:87`, `src/tui/rpc-client.ts:94`) therefore **cannot match** between a V2 server and a V2 TUI.
 
 **Status.** verified-by-probe (standalone mode) plus source for the other modes.

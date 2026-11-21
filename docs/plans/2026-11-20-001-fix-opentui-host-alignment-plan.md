@@ -1,11 +1,13 @@
 ---
 title: "fix: Align OpenTUI with the V1 host and clear the brace-expansion advisory"
 type: fix
-status: active
+status: completed
 date: 2026-11-20
 ---
 
 # fix: Align OpenTUI with the V1 host and clear the brace-expansion advisory
+
+> **Outcome (2026-11-21):** Shipped in #568. Bun 1.4.5 does **not** honor nested override keys, and the global fallback dragged rimraf's 5.x copy down to 2.x. The version-scoped key `"brace-expansion@2": "^2.1.8"` worked; see `docs/solutions/best-practices/bun-version-scoped-override-for-transitive-advisory-2026-11-21.md`. #587 later moved `@opentui/*` to dev dependencies plus optional peers, so the advisory path is now dev-only, and the "shipped dependency tree" premise no longer holds. The dev pin is 0.8.4 (Renovate hold in #589).
 
 ## Overview
 

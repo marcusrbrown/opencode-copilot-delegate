@@ -5,26 +5,24 @@ status: ready-for-planning
 scope: standard
 ideation_source: docs/ideation/2026-04-27-copilot-delegate-v0.2.md (S1)
 related:
-
-- docs/research/copilot-cli-capabilities-2026-04-27.md
-- docs/plans/2026-04-21-copilot-delegate-plugin.md (closed)
-  layout_reference:
+  - docs/research/copilot-cli-capabilities-2026-04-27.md
+  - docs/plans/2026-04-21-copilot-delegate-plugin.md (closed)
+layout_reference:
   source: OpenCode native subagent view (observed during brainstorming; not checked into this repo)
   shape: |
-  A vertically stacked panel layout, post-completion. Top: a header strip showing
-  `Subagent (N of N)` indicating the run is finished. Below: a main prompt panel
-  with a cyan / accent left border that holds the original delegated prompt.
-  Below that: a vertical sequence of output cards — one per tool call — each
-  collapsible with a `Click to expand` affordance on collapsed cards and showing
-  the full tool result when expanded. Bottom: a status bar with delegation
-  metadata on the left and navigation hints on the right reading
-  `Parent up · Prev left · Next right`. Color treatment is OpenCode-default
-  (cyan accent, default terminal foreground/background).
-  target_releases: v0.2.0 → v0.2.1 → v0.2.2 (staged; each minor bump per `0.x` policy)
-  handoff: ce:plan (v0.2.0 only); v0.2.1 and v0.2.2 each get their own brainstorm before planning
-  review_artifacts:
-- 5 of 6 reviewers returned (coherence-reviewer timed out); staging decision driven by HIGH consensus across scope-guardian, adversarial, and product-lens
-
+    A vertically stacked panel layout, post-completion. Top: a header strip showing
+    `Subagent (N of N)` indicating the run is finished. Below: a main prompt panel
+    with a cyan / accent left border that holds the original delegated prompt.
+    Below that: a vertical sequence of output cards — one per tool call — each
+    collapsible with a `Click to expand` affordance on collapsed cards and showing
+    the full tool result when expanded. Bottom: a status bar with delegation
+    metadata on the left and navigation hints on the right reading
+    `Parent up · Prev left · Next right`. Color treatment is OpenCode-default
+    (cyan accent, default terminal foreground/background).
+target_releases: v0.2.0 → v0.2.1 → v0.2.2 (staged; each minor bump per `0.x` policy)
+handoff: ce:plan (v0.2.0 only); v0.2.1 and v0.2.2 each get their own brainstorm before planning
+review_artifacts:
+  - 5 of 6 reviewers returned (coherence-reviewer timed out); staging decision driven by HIGH consensus across scope-guardian, adversarial, and product-lens
 ---
 
 # `/copilot-status` TUI — visibility platform requirements

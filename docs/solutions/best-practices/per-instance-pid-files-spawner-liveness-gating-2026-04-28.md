@@ -403,6 +403,7 @@ The shipped implementation follows that exact shape:
 
 ## Related
 
+- `../logic-errors/stale-rpc-port-files-leaked-per-pid-cache-dirs-2026-11-21.md`: the same liveness gate (`defaultIsPluginAlive`) applied to stale RPC port files
 - See [Secure process introspection with array-spawn ps and comm-field identity gate](secure-process-introspection-array-spawn-ps-comm-field-2026-04-28.md) for the kernel-truth identity check that runs inside the reap loop.
 - See [Centralized terminal-state idempotency for task lifecycle](centralized-terminal-state-idempotency-task-lifecycle-2026-04-28.md) for how PID-file cleanup is coupled to terminal status transitions in this codebase.
 - See [Atomic file append/remove with O_EXCL temp-file and in-process serialization queue](atomic-file-append-remove-o-excl-temp-file-2026-04-28.md) for the per-instance PID file's mutation pattern.
