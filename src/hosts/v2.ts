@@ -130,6 +130,7 @@ export async function setupV2(
     })
   } catch (error) {
     stderrLog('warn', `tool setup failed: ${error}`)
+    active = false
     await releaseProcessCore()
     return undefined
   }
