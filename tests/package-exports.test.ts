@@ -55,9 +55,12 @@ describe('package exports', () => {
       exportKeys,
       'Plugin entry must export only default — extra named exports break OpenCode plugin loading (v2.5.0/v2.12.1 regression class). Move helpers to src/lib/.',
     ).toEqual(['default'])
-    expect(
-      typeof builtPlugin.default,
-      'Plugin default export must be a function',
-    ).toBe('function')
+    // Dual-host shape: V1 reads `server`, V2 reads `setup`. A bare function
+    // default would load on V1 only.
+    const entry = builtPlugin.default as Record<string, unknown>
+    expect(Object.keys(entry).sort()).toEqual(['id', 'server', 'setup'])
+    expect(entry.id).toBe('opencode-copilot-delegate')
+    expect(typeof entry.server, 'V1 entry `server`').toBe('function')
+    expect(typeof entry.setup, 'V2 entry `setup`').toBe('function')
   })
 })

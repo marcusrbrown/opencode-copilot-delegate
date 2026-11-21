@@ -4,15 +4,21 @@ An [OpenCode](https://opencode.ai) plugin that delegates tasks to [GitHub Copilo
 
 ## Overview
 
-This plugin registers three tools in OpenCode:
+This plugin registers four tools in OpenCode:
 
-- **`copilot_delegate`** — Spawn `copilot -p` as a background subprocess. Returns a `task_id` immediately so the parent agent never blocks.
-- **`copilot_output`** — Retrieve the structured result envelope for a completed or running delegation.
-- **`copilot_cancel`** — Cancel a running delegation with SIGTERM → SIGKILL escalation.
+- **`copilot_delegate`**: Spawn `copilot -p` as a background subprocess. Returns a `task_id` immediately so the parent agent never blocks.
+- **`copilot_output`**: Retrieve the structured result envelope for a completed or running delegation.
+- **`copilot_cancel`**: Cancel a running delegation with SIGTERM → SIGKILL escalation.
+- **`copilot_resume`**: Continue a previous Copilot session.
 
-When the subprocess completes, a `<system-reminder>` notification is injected into the parent session via `client.session.prompt` with `noReply: false` for the first notification per session and `noReply: true` for subsequent ones, so the agent sees the result without an unbounded reply chain.
+When a delegation finishes, a `<system-reminder>` notice is injected into the parent session. A completion while other delegations from that session are still running is recorded silently. The last completion starts a turn, and so does any failure or cancellation.
+
+- On OpenCode 1.x this uses `client.session.prompt` with `noReply`.
+- On OpenCode 2.x it uses `session.synthetic`: `resume: false` for silent notices, `delivery: 'queue'` for the last completion (it waits for the active turn), and `delivery: 'steer'` for failures.
 
 ## Installation
+
+The same package works on OpenCode 1.x (`>=1.14.41`) and 2.x (`>=2.3.2`). Each host's plugin package is an optional peer dependency.
 
 ```json
 // opencode.json
@@ -20,6 +26,10 @@ When the subprocess completes, a `<system-reminder>` notification is injected in
   "plugin": ["opencode-copilot-delegate"]
 }
 ```
+
+On OpenCode 2.x the host reactivates plugins on config changes, plugin edits, and edits to plugins listed before this one. When the last activation in the process ends, running delegations are cancelled and the in-memory task list is cleared, so earlier `task_id`s then return `unknown`.
+
+The `/copilot-status` TUI half supports OpenCode 1.x only for now.
 
 ### Optional: install the TUI half
 
@@ -97,7 +107,7 @@ Task state is in-memory inside a single OpenCode process, and it is shared by ev
 - **Orphaned subprocesses (mitigated since v0.2.0):** If OpenCode crashes mid-delegation, the `copilot` subprocess becomes orphaned. A PID-file reaper now scans `<XDG_STATE_HOME>/opencode-copilot-delegate/orphans/` at every plugin init, probes the owning plugin's liveness, and reaps subprocesses whose plugin has exited. A strict identity gate (kernel-tracked `comm` + start time) prevents PID-reuse misfires.
 - **Prompt visibility in `ps`:** The `copilot` CLI accepts the prompt as a command-line argument, which means the full prompt text appears in `ps` output for any user on the host. This is an upstream Copilot CLI behavior. Avoid delegating prompts that contain secrets or PII; pass sensitive material via files, env vars, or `--secret-env-vars` instead.
 - **No subprocess lifetime cap:** A hung `copilot` subprocess stays in the registry as `running` indefinitely. Cancel manually via `copilot_cancel`. A configurable timeout is planned for v1.x.
-- **TUI half is opt-in:** The package ships server and TUI entrypoints. Existing server-only installs continue to register the three tools; `/copilot-status` only appears when the TUI entrypoint is installed.
+- **TUI half is opt-in:** The package ships server and TUI entrypoints. Existing server-only installs continue to register the four tools; `/copilot-status` only appears when the TUI entrypoint is installed.
 - **RPC server cleanup is best-effort:** The server half exposes a localhost-only RPC listener for the TUI and writes a per-session authenticated port file under `<XDG_CACHE_HOME or ~/.cache>/opencode/copilot-delegate/`. OpenCode's server plugin API has no dispose hook today, so cleanup is tied to process exit signals and the orphan-reaper posture covers missed shutdowns.
 
 ## Versioning
