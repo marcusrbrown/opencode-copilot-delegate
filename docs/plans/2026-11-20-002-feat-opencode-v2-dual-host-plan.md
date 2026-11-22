@@ -1,7 +1,7 @@
 ---
 title: "feat: Support OpenCode V1 and V2 hosts from one package"
 type: feat
-status: active
+status: completed
 date: 2026-11-20
 deepened: 2026-11-20
 ---
@@ -434,7 +434,7 @@ flowchart LR
 - No Renovate rule was added for the pins file. Bumping a pin is a manual edit to the pins file, the matrix ids stay the same, and `host-contract-pins.test.ts` guards the relationships.
 - The `resume: false` and `delivery` semantics against a real model are still unverified: the matrix runs with no model by design.
 
-- [ ] **Unit 6: Phase 1 docs and release**
+- [x] **Unit 6: Phase 1 docs and release** (done 2026-11-22: shipped in 0.14.0)
 
 **Goal:** Ship server dual-host with accurate docs.
 
@@ -450,6 +450,16 @@ flowchart LR
 - Test expectation: none. Documentation only.
 
 **Verification:** Docs match the shipped behavior. Fro Bot's doc-drift check reports nothing.
+
+**As built:**
+- **README and AGENTS:** README.md (V1/V2 install, host ranges, the V2 notice mapping) and AGENTS.md (`src/core`, `src/hosts`, the process core, peers, gates) were updated in #582, #584, #587 and #590.
+- **Learnings:** the dual-host learning is `docs/solutions/integration-issues/v2-silent-zero-tools-normalize-tool-arg-schemas-2026-11-21.md` (#588). #590 adds eight related learnings and updates one existing doc.
+- **Release:** `opencode-copilot-delegate@0.14.0` (#585) ships both phases, server and TUI.
+- **Pre-release live check:** run on OpenCode 2.3.2 with a real model (evidence on #582 and #585). It covered:
+  - the `steer`, `resume:false` and `queue` notices;
+  - the TUI list followed by Cancel and Confirm;
+  - a plugin reload cancelling a running task with no notice;
+  - an empty ledger afterwards.
 
 ### Phase 2: TUI dual-host
 
