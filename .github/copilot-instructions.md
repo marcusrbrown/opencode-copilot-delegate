@@ -26,7 +26,7 @@ Follow AGENTS.md for architecture, coding standards, and module boundaries.
 
 ## Verification Commands
 
-Run all five before considering work complete. `test:unit` and `test:tui` are the CI test gates; bare `bun test` also collects `tests/integration/`, which needs `opencode` on `PATH` and, for its LLM scenarios, `COPILOT_PAT` or `GH_TOKEN`.
+Run all five before considering work complete. `test:unit` and `test:tui` are the CI test gates; bare `bun test` also collects `tests/integration/`, which skips itself unless `opencode` is on `PATH` and then runs real-host (and, with `COPILOT_PAT` or `GH_TOKEN`, real-LLM) scenarios, so its result depends on the machine.
 
 ```bash
 bun run test:unit # Unit tests (tests/*.test.ts)
