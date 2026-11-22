@@ -65,17 +65,29 @@ env:
     Run the skill's full pipeline: dispatch the reviewer personas it selects
     for the diff, then run its validation and merge steps. Diff size, a prior
     review of the same PR, or "the change looks simple" are not reasons to
-    skip the personas; this review exists to run them. The single exception
-    is a diff that changes only Markdown or other documentation files: then
-    you may review directly. Use the validated findings as the evidence for
-    the review below, and verify each one you report against the diff.
+    skip the personas; this review exists to run them. Use the validated
+    findings as the evidence for the review below, and verify each one you
+    report against the diff.
 
-    If persona dispatch is unavailable or a dispatch errors, review the diff
-    directly and quote the exact error. Never fall back silently.
+    Two cases permit a direct review instead:
+    - Docs-only diff: every changed file is documentation for humans
+      (`docs/**`, `README.md`, `CHANGELOG.md`, `.changeset/*.md`).
+      Agent-read instruction files are behavior-bearing, not docs: a diff
+      touching `AGENTS.md`, anything under `.github/`, or any skill, agent,
+      or prompt file gets the full pipeline.
+    - Failure: the skill fails to load, the base ref does not resolve, a
+      persona dispatch or the validation or merge step errors, or the run is
+      near its time limit. Never fall back silently. If some personas
+      returned, finish the review with their findings plus your own direct
+      check of the rest, and record both in the method line.
 
-    Begin the review body with one line, before the Verdict heading:
-    `Review method: ce:review read-only; personas: <names dispatched>` or
-    `Review method: direct (<docs-only diff | quoted dispatch error>)`.
+    Begin the review body with exactly one of these lines, before the Verdict
+    heading. Separate persona names with ", " and quote at most 200
+    characters of an error:
+    `Review method: ce:review read-only; personas: <dispatched>`
+    `Review method: ce:review partial; personas: <returned>; failed: <persona or step> ("<error>")`
+    `Review method: direct (docs-only diff)`
+    `Review method: direct ("<error>")`
 
     Do NOT run repository-wide build, lint, typecheck, or test commands
     (`bun run build`, `bun run lint`, `bun run typecheck`, `bun test`,
