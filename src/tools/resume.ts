@@ -20,7 +20,10 @@
  *
  * No `prompt` argument — resume + new prompt is a fork operation.
  *
- * Exports `launchResume` for RPC reuse.
+ * `launchResume` is exported for the planned `/tasks/resume` RPC route (Unit 4 of
+ * the session-continuity plan). Today only `createResumeTool` calls it, and
+ * `tests/resume.test.ts` exercises it through the tool. The export is a stable
+ * seam for that route, not a wired caller.
  */
 
 import { tool } from '../lib/tool'
@@ -69,7 +72,7 @@ function computeAllowedRoots(directory: string): string[] {
 }
 
 // ---------------------------------------------------------------------------
-// launchResume — exported for RPC reuse
+// launchResume — exported ahead of the planned /tasks/resume RPC route (not wired yet)
 // ---------------------------------------------------------------------------
 
 export type LaunchResumeOptions = {
