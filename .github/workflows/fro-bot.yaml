@@ -88,14 +88,17 @@ env:
     frontmatter the response protocol defines) and is exactly one of these,
     written without backticks. Separate names and errors with ", ", and
     quote at most 200 characters of each error:
-    `Review method: ce:review read-only; personas: <dispatched>`
+    `Review method: ce:review read-only; personas: <selected, all returned>`
     `Review method: ce:review partial; personas: <returned>; failed: <persona or step> ("<error>")`
     `Review method: direct (docs-only diff)`
     `Review method: direct ("<error>")`
     For several failures, repeat `<persona or step> ("<error>")` after
     `failed:`. Use `ce:review partial` only when at least one persona
     returned. A failure takes precedence over docs-only. If the skill selects
-    no personas, treat that as a failure. The forms above are disclosures,
+    no personas, treat that as a failure. A selected persona that was not
+    dispatched is a failure too: list it under `failed:` with the reason. The
+    clean form is only for runs where every selected persona returned. The
+    forms above are disclosures,
     not extra exceptions: for an unlisted failure, use
     `Review method: direct ("<what failed>")`.
 
