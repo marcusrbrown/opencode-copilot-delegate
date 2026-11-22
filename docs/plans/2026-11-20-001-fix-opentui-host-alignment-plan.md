@@ -119,7 +119,7 @@ Upgrade `@opentui/core` and `@opentui/solid` from `0.2.7` to `0.4.5`, the versio
 
 ## Implementation Units
 
-- [ ] **Unit 1: Bump OpenTUI to 0.4.5 with a single core copy**
+- [x] **Unit 1: Bump OpenTUI to 0.4.5 with a single core copy** (done: #568; the dev pin has since moved to 0.8.4 in #587 and #589)
 
 **Goal:** `@opentui/core` and `@opentui/solid` at `0.4.5`, one core copy, lockfile regenerated from current main.
 
@@ -148,7 +148,7 @@ Upgrade `@opentui/core` and `@opentui/solid` from `0.2.7` to `0.4.5`, the versio
 
 **Verification:** Typecheck, lint, build, the ESM smoke test (`['default']`), `test:unit`, and `test:tui` all pass. `npm pack --dry-run` lists the same files.
 
-- [ ] **Unit 2: Clear the brace-expansion advisory on the OpenTUI path**
+- [x] **Unit 2: Clear the brace-expansion advisory on the OpenTUI path** (done: #568, via the version-scoped override `brace-expansion@2`; see the Outcome note above)
 
 **Goal:** No vulnerable `brace-expansion` on the shipped `@opentui/solid` path.
 
@@ -173,7 +173,7 @@ Upgrade `@opentui/core` and `@opentui/solid` from `0.2.7` to `0.4.5`, the versio
 
 **Verification:** `bun audit` shows the three advisories cleared on that path. The build and TUI tests are green.
 
-- [ ] **Unit 3: Live host check and supersede stale PRs**
+- [x] **Unit 3: Live host check and supersede stale PRs** (done: #568 closed #335 and #135 as superseded. The live check on OpenCode 1.19.6 showed the TUI was already unstyled and unresponsive on `main`; #572 fixed that by rebuilding `/copilot-status` on host dialogs)
 
 **Goal:** Prove the upgraded TUI against the real V1 host, then retire #335 and #135.
 

@@ -10,6 +10,8 @@ origin: docs/brainstorms/2026-05-02-copilot-session-continuity-requirements.md
 
 > **Note 2026-11-21:** Registering every tool through `normalizeToolArgSchemas` and `plugInOnce` (see the Interaction graph bullets under System-Wide Impact) now applies to OpenCode 1.x only. On 2.x, tools register unnormalized through `setup`. See [2026-11-20-002](2026-11-20-002-feat-opencode-v2-dual-host-plan.md).
 
+> **Status note (2026-11-22):** This plan stays `active`. The resume half of the slice is on `main`: `copilot_resume` (#120), the `origin` discriminator and `copilotSessionId` capture (#109), and the Unit 3a capture (#94). Units 4 (`/tasks/resume` and `/tasks/recent-sessions` RPC routes) and 5 (Recent Sessions view and raw-ID form in the TUI) have no code on `main`: `src/runtime/rpc-server.ts` serves only `/health`, `/tasks/list` and `/tasks/cancel`. Unit 6 is partly done (AGENTS.md lists `copilot_resume`; the changeset shipped with #120; the README documents `copilot_resume`) but the RPC and TUI documentation waits on Units 4-5. `copilot_connect` is deferred (see the Amendment below). `launchResume` is still exported "for RPC reuse" with no RPC caller.
+
 ## Overview
 
 Add `copilot_resume` and `copilot_connect` tools that wrap the Copilot CLI's `--resume[=id|name|prefix]` and `--connect[=sessionId]` flags, and surface inline `Resume by ID` / `Connect by ID` affordances inside the existing `/copilot-status` modal. Continuity-derived tasks share the existing `TaskState` shape, distinguished by an `origin: 'spawn' | 'resume' | 'connect'` discriminator so cancel, output, and notify behave truthfully — including for borrowed processes the current plugin instance did not spawn the underlying Copilot session for.
@@ -233,7 +235,7 @@ The plugin is strong at spawning fresh delegations and weak at picking useful wo
 
 ## Implementation Units
 
-- [ ] **Unit 1: Registry + envelope substrate**
+- [x] **Unit 1: Registry + envelope substrate** (done: #109. `origin` and `copilotSessionId` ship; `psIdentity` exists on the type but nothing sets it, since connect is deferred)
 
 **Goal:** Add the `origin` discriminator and supporting fields to `TaskState`, capture `copilotSessionId` from the `result` JSONL event, and thread `origin` through `OutputEnvelope`. Existing `delegate.ts` defaults `origin: 'spawn'`.
 
@@ -281,7 +283,7 @@ The plugin is strong at spawning fresh delegations and weak at picking useful wo
 
 ---
 
-- [ ] **Unit 2: Shared completion pipeline + origin-aware notify and cancel**
+- [x] **Unit 2: Shared completion pipeline + origin-aware notify and cancel** (done: #109, #120. `attachCompletionPipeline` is shared by `copilot_delegate` and `copilot_resume`, and notify text branches on `origin`. Connect-specific cancel behavior is deferred with connect)
 
 **Goal:** Extract the completion-pipeline wiring into a shared helper so all three (eventually five) tool factories can attach it consistently. Branch notification text and cancel response on `origin`.
 
@@ -333,7 +335,7 @@ The plugin is strong at spawning fresh delegations and weak at picking useful wo
 
 ---
 
-- [ ] **Unit 3a: Empirical pre-flight — capture real `--connect` JSONL behavior**
+- [x] **Unit 3a: Empirical pre-flight — capture real `--connect` JSONL behavior** (done: #94; outcome was to defer connect. Only `connect-mismatch.jsonl` and `resume-mismatch.jsonl` were captured, not `connect-attach.jsonl`)
 
 **Goal:** Before any connect-validation design lands, capture an actual `copilot --connect=<known-bad-id>` JSONL stream and identify whether any _early_ session-identity event arrives during the connect handshake (before tool calls or model output).
 
