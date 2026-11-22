@@ -2,6 +2,7 @@
 title: "fix: Align OpenTUI with the V1 host and clear the brace-expansion advisory"
 type: fix
 status: completed
+completed: 2026-11-20
 date: 2026-11-20
 ---
 
