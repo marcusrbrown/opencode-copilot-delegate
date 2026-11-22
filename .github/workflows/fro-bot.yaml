@@ -60,10 +60,47 @@ env:
     `mode:read-only base:origin/<the PR's base branch>`. Do not pass a PR
     number or branch as a target, because read-only mode must not switch the
     checkout. Read-only mode makes no edits, artifacts, commits, or PR
-    actions. Use its validated findings as the evidence for the review below,
-    and verify each one you report against the diff. Do not invoke any other
-    `ce:*` workflow skill. If `ce:review` fails or degrades, review the diff
-    directly and say so in the risk assessment.
+    actions. Do not invoke any other `ce:*` workflow skill.
+
+    Run the skill's full pipeline: dispatch the reviewer personas it selects
+    for the diff, then run its validation and merge steps. Diff size, a prior
+    review of the same PR, or "the change looks simple" are not reasons to
+    skip the personas; this review exists to run them. Use the validated
+    findings as the evidence for the review below, and verify each one you
+    report against the diff.
+
+    Exactly two cases allow a direct review; there is no other reason to skip
+    the personas:
+    - Docs-only diff: every changed file, judged by both its old and new path
+      for renames, is in this exhaustive list: `docs/**`, `README.md`,
+      `CHANGELOG.md`, `.changeset/*.md`. Agents also read `docs/solutions`
+      and `docs/plans`, but they still count as docs. For a docs-only diff,
+      do not run the pipeline; review directly. A diff touching `AGENTS.md`,
+      anything under `.github/`, or any skill, agent, or prompt file is never
+      docs-only, even under `docs/`; that rule wins over the list.
+    - Failure: the skill fails to load, the base ref does not resolve, or a
+      persona dispatch, the validation step, or the merge step errors. Never
+      fall back silently. If some personas returned, finish the review with
+      their findings plus your own direct check of the rest.
+
+    The Review method line is the only text allowed before the Verdict
+    heading. It is the first line of the review body (after the verdict
+    frontmatter the response protocol defines) and is exactly one of these,
+    written without backticks. Separate names and errors with ", ", and
+    quote at most 200 characters of each error:
+    `Review method: ce:review read-only; personas: <selected, all returned>`
+    `Review method: ce:review partial; personas: <returned>; failed: <persona or step> ("<error>")`
+    `Review method: direct (docs-only diff)`
+    `Review method: direct ("<error>")`
+    For several failures, repeat `<persona or step> ("<error>")` after
+    `failed:`. Use `ce:review partial` only when at least one persona
+    returned. A failure takes precedence over docs-only. If the skill selects
+    no personas, treat that as a failure. A selected persona that was not
+    dispatched is a failure too: list it under `failed:` with the reason. The
+    clean form is only for runs where every selected persona returned. The
+    forms above are disclosures,
+    not extra exceptions: for an unlisted failure, use
+    `Review method: direct ("<what failed>")`.
 
     Do NOT run repository-wide build, lint, typecheck, or test commands
     (`bun run build`, `bun run lint`, `bun run typecheck`, `bun test`,
@@ -81,7 +118,9 @@ env:
     - OpenCode plugin API contracts: `src/index.ts` exports only `default`
       (CI smoke test enforces it), tool schema correctness, ToolResult shape,
       structured `{ error }` results instead of thrown exceptions, and
-      compatibility with the `@opencode-ai/plugin` peer floor in package.json
+      compatibility with both host peer floors in package.json
+      (`@opencode-ai/plugin` for V1 `server`/`tui`, `@opencode/plugin` for V2
+      `setup`); the built entries must not import a host package at runtime
     - Copilot CLI contract: JSONL parsing (`src/runtime/jsonl-parser.ts`,
       `envelope.ts`) stays tolerant of unknown/malformed lines; spawn flags in
       `src/runtime/subprocess.ts` match the pinned `@github/copilot` CLI
@@ -100,7 +139,8 @@ env:
     Use inline comments for file-specific issues. Reserve the review body
     for the structured summary below.
 
-    You MUST structure your review using exactly these headings:
+    You MUST structure your review using exactly these headings (after the
+    Review method line):
     ## Verdict: [PASS | CONDITIONAL | REJECT]
     CONDITIONAL = can merge after addressing the listed blocking issues.
     ### Blocking issues
