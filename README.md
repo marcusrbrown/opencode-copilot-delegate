@@ -75,7 +75,7 @@ The plugin logs the resolved auth source (not the token value) at delegation sta
 
 | Arg          | Type        | Description                                                               |
 | ------------ | ----------- | ------------------------------------------------------------------------- |
-| `prompt`     | `string`    | Required. The prompt to send to Copilot.                                  |
+| `prompt`     | `string`    | Required. The prompt to send to Copilot. Must be non-empty.               |
 | `agent`      | `string?`   | Optional. Copilot agent name (see tool description for available agents). |
 | `model`      | `string?`   | Optional. Model override (e.g. `claude-haiku-4.5`).                       |
 | `add_dir`    | `string[]?` | Optional. Additional directories to allow Copilot to read.                |
@@ -86,11 +86,11 @@ Returns `{ task_id: string }` — a `cpl_`-prefixed UUID.
 
 ### `copilot_output`
 
-| Arg          | Type       | Description                                                              |
-| ------------ | ---------- | ------------------------------------------------------------------------ |
-| `task_id`    | `string`   | Required. Task ID from `copilot_delegate`.                               |
-| `block`      | `boolean?` | Optional. Wait for completion before returning. Default `false`.         |
-| `timeout_ms` | `number?`  | Optional. Max wait ms when `block: true`. Default `30000`, max `120000`. |
+| Arg          | Type       | Description                                                                    |
+| ------------ | ---------- | ------------------------------------------------------------------------------ |
+| `task_id`    | `string`   | Required. Task ID from `copilot_delegate`.                                     |
+| `block`      | `boolean?` | Optional. Wait for completion before returning. Default `false`.               |
+| `timeout_ms` | `integer?` | Optional. Max wait ms when `block: true`. Default `30000`, range `0`–`120000`. |
 
 Returns a structured envelope with `status`, `final_message`, `tokens`, `tool_calls_summary`, and more.
 
@@ -101,6 +101,19 @@ Returns a structured envelope with `status`, `final_message`, `tokens`, `tool_ca
 | `task_id` | `string` | Required. Task ID to cancel. |
 
 Returns `{ cancelled: boolean; was_running: boolean }`.
+
+### `copilot_resume`
+
+Resume a prior Copilot session by UUID, name, or unique name prefix. Wraps `copilot --resume=<target_id>` and runs the resumed session as a background subprocess, like `copilot_delegate`. It sends no new prompt. Retrieve the result with `copilot_output` and cancel with `copilot_cancel`, using the returned `task_id`.
+
+| Arg          | Type        | Description                                                                                                                                                                                                                |
+| ------------ | ----------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `target_id`  | `string`    | Required. Non-empty. Copilot session UUID, session name, or unique name prefix. A UUID is checked against the local Copilot session store before spawning. A plugin `cpl_*` task ID is not accepted; use `copilot_output`. |
+| `cwd`        | `string?`   | Optional. Working directory for the resumed session. Must be an absolute path within the active workspace. Defaults to the plugin directory.                                                                               |
+| `add_dir`    | `string[]?` | Optional. Additional directories to allow Copilot to read. When omitted and a prior task in this process matches `target_id`, that task's `add_dir` values are reused.                                                     |
+| `config_dir` | `string?`   | Optional. Copilot config directory used for the UUID session lookup and passed to the subprocess as `COPILOT_CONFIG_DIR`. Defaults to `~/.copilot` (or the `COPILOT_CONFIG_DIR` env var). Rarely needed.                   |
+
+Returns `{ task_id: string }` on success, or `{ error: string }` (for example when no session matches `target_id`, or an input fails validation). The same concurrency cap as `copilot_delegate` applies: at most 10 running Copilot tasks.
 
 ## Scope Boundary
 

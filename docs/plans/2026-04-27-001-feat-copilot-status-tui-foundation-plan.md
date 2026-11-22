@@ -1,8 +1,9 @@
 ---
 title: "feat: /copilot-status TUI foundation"
 type: feat
-status: active
+status: completed
 date: 2026-04-27
+completed: 2026-05-01
 origin: docs/brainstorms/2026-04-27-copilot-status-tui-requirements.md
 prerequisite_plan: docs/plans/2026-04-27-002-fix-runtime-hardening-plan.md
 ---
@@ -236,7 +237,7 @@ tests/
 
 ## Implementation Units
 
-- [ ] **Unit 1: Build prerequisites + package.json + tsconfig**
+- [x] **Unit 1: Build prerequisites + package.json + tsconfig** (done: #84; `./tui` export in `package.json`, `jsxImportSource: @opentui/solid` in `tsconfig.json`)
 
 **Goal:** Land the build-pipeline changes that unblock all downstream TUI work.
 
@@ -280,7 +281,7 @@ tests/
 
 ---
 
-- [ ] **Unit 2: RPC contract module (Zod schemas + types)**
+- [x] **Unit 2: RPC contract module (Zod schemas + types)** (done: #84; `src/runtime/rpc-contract.ts`, `tests/rpc-contract.test.ts`)
 
 **Goal:** Single source of truth for HTTP-RPC request/response shapes consumed by both halves, including the auth-token contract.
 
@@ -324,7 +325,7 @@ tests/
 
 ---
 
-- [ ] **Unit 3: HTTP-RPC server (server-side)**
+- [x] **Unit 3: HTTP-RPC server (server-side)** (done: #84; `src/runtime/rpc-server.ts`, `tests/rpc-server.test.ts`)
 
 **Goal:** node:http server bound to localhost on ephemeral port, per-session port file with bearer-token auth at `0o600`, three routes wired to the existing task registry.
 
@@ -385,7 +386,7 @@ tests/
 
 ---
 
-- [ ] **Unit 4: Cancel-helper extraction + spawn toast + plugin init wiring**
+- [x] **Unit 4: Cancel-helper extraction + spawn toast + plugin init wiring** (done: #84; `src/runtime/cancel-helper.ts`, `notifySpawn` in `src/runtime/notify.ts`)
 
 **Goal:** Extract the shared cancel call into `src/runtime/cancel-helper.ts`. Add the spawn-toast helper. Wire the RPC server into plugin init.
 
@@ -435,7 +436,7 @@ tests/
 
 ---
 
-- [ ] **Unit 5: TUI plugin entrypoint + RPC client**
+- [x] **Unit 5: TUI plugin entrypoint + RPC client** (done: #84; `src/tui/index.tsx`, `src/tui/rpc-client.ts`, `src/tui/__tests__/rpc-client.test.ts`)
 
 **Goal:** New `src/tui/index.tsx` registers `/copilot-status` command and instantiates the modal-list component. RPC client reads the per-session port file + auth token.
 
@@ -481,7 +482,7 @@ tests/
 
 ---
 
-- [ ] **Unit 6: Modal list view component + keybinds + UX micro-specs**
+- [x] **Unit 6: Modal list view component + keybinds + UX micro-specs** (done: #84; as built, the custom `components/modal-list.tsx` was later replaced by host `DialogSelect` in `src/tui/status-dialogs.tsx` and `src/tui/status-format.ts`, #572)
 
 **Goal:** SolidJS component rendering R2 (list rows) + R5 (keybinds) + R6 (focus indicator, empty/loading/error states with full UX micro-spec compliance).
 
@@ -547,7 +548,7 @@ tests/
 
 ---
 
-- [ ] **Unit 7: Cancel-confirm dialog + cancel forwarding**
+- [x] **Unit 7: Cancel-confirm dialog + cancel forwarding** (done: #84; as built, the custom `components/confirm-card.tsx` was later replaced by host `DialogConfirm` in `src/tui/status-dialogs.tsx`, #572)
 
 **Goal:** ConfirmCard component + RPC cancel wiring; closes the loop on R3 with the locked inline-error UX branch.
 

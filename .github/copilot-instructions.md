@@ -21,15 +21,16 @@ Follow AGENTS.md for architecture, coding standards, and module boundaries.
 - **Linting/formatting**: Biome (not ESLint/Prettier)
 - **Test framework**: `bun:test`
 - **Build**: `bun build` + `tsc --emitDeclarationOnly`
-- **Dependencies**: `fkill` for process cleanup; `zod` (bundled, `>=4.2`); `@opencode-ai/plugin` (V1) and `@opencode/plugin` (V2) as optional peer dependencies, imported as types only; `@opentui/core`, `@opentui/solid` and `solid-js` are dev dependencies and optional peers (the host supplies them at runtime), kept external in the TUI build
+- **Dependencies**: `fkill` for process cleanup; `zod` (bundled, `^4.6.7`; 4.2 is the minimum for V2 Standard Schema support); `@opencode-ai/plugin` (V1) and `@opencode/plugin` (V2) as optional peer dependencies, imported as types only; `@opentui/core`, `@opentui/solid` and `solid-js` are dev dependencies and optional peers (the host supplies them at runtime), kept external in the TUI build
 - **TUI half**: the `./tui` entry exports `{ id, tui, setup }` (V1 reads `tui`, V2 reads `setup`; never add `server`). `/copilot-status` uses host dialogs only: V1 components and V2 `ctx.ui.dialog.*` promises. Never call `dialog.clear()` or pass `onClose`. The V2 keymap layer needs `mode: 'global'`. V2 finds the server's port file by server pid.
 
 ## Verification Commands
 
-Run all four before considering work complete:
+Run all five before considering work complete. `test:unit` and `test:tui` are the CI test gates; bare `bun test` also collects `tests/integration/`, which skips itself unless `opencode` is on `PATH` and then runs real-host (and, with `COPILOT_PAT` or `GH_TOKEN`, real-LLM) scenarios, so its result depends on the machine.
 
 ```bash
-bun test          # Unit + integration tests
+bun run test:unit # Unit tests (tests/*.test.ts)
+bun run test:tui  # TUI tests (src/tui/__tests__, OpenTUI Solid preload)
 bun run typecheck # tsc --noEmit (strict)
 bun run lint      # biome check .
 bun run build     # Bundle + declaration emit

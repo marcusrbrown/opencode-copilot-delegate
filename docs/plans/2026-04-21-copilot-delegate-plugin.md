@@ -1,8 +1,9 @@
 ---
 title: "feat: OpenCode Copilot Delegate Plugin"
 type: feat
-status: active
+status: completed
 date: 2026-04-21
+completed: 2026-04-26
 origin: "~/.context/systematic/ce-brainstorm/2026-04-21-copilot-delegate-plugin-requirements.md"
 deepened: 2026-04-23
 second_deepening: 2026-04-23
