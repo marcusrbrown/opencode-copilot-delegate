@@ -1,5 +1,11 @@
 # opencode-copilot-delegate
 
+## 0.14.1
+
+### Patch Changes
+
+- fbe6943: stop shipping the empty `src/tui/.gitkeep` placeholder in the npm tarball
+
 ## 0.14.0
 
 ### Minor Changes
