@@ -838,6 +838,8 @@ jobs:
           prompt: ${{ env.PROMPT }}
           opencode-config: ${{ secrets.OPENCODE_CONFIG }}
           isolate-agent: "true"
+          trace-endpoint: https://traces.fro.bot/marcusrbrown/v1/traces
+          trace-headers: "Authorization: Bearer ${{ secrets.FRO_BOT_TRACE_TOKEN }}"
 
   # Deterministic backstop for the approval rule: whatever the agent did, a
   # fro-bot APPROVED review on a PR where approval is not allowed is dismissed.
