@@ -55,17 +55,15 @@ describe('buildEnvelope', () => {
       expect(envelope.duration_ms).toBe(3000)
     })
 
-    it('should fall back to Date.now() when endedAt is not provided', () => {
-      // Given input with only startedAt
-      const now = Date.now()
-      const input = makeInput({ startedAt: now - 1000 })
+    it('should fall back to the injected clock when endedAt is not provided', () => {
+      // Given input with only startedAt and a fixed clock
+      const input = makeInput({ startedAt: 4000 })
 
       // When the envelope is built
-      const envelope = buildEnvelope(input)
+      const envelope = buildEnvelope(input, () => 5000)
 
-      // Then duration_ms should be approximately 1000ms
-      expect(envelope.duration_ms).toBeGreaterThanOrEqual(900)
-      expect(envelope.duration_ms).toBeLessThanOrEqual(1200)
+      // Then duration_ms should be exactly 1000ms (deterministic)
+      expect(envelope.duration_ms).toBe(1000)
     })
   })
 
