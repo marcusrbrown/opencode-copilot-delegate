@@ -127,6 +127,16 @@ Run `bun run lint` to check, `bun run fix` to auto-fix.
 - Scopes: `runtime`, `tools`, `discovery`, `ci`, `docs`, `deps`, `dev`
 - User-visible feature additions and behavior changes require a `.changeset/*.md` with `minor` bump (unstable `0.x` series). Targeted user-visible bug fixes/hotfixes may use `patch` when they do not add new functionality.
 
+## Agent Rules
+
+The Fro Bot agent works under this file and `.github/workflows/fro-bot.yaml`. It holds every ask, including cross-repo program briefs, against both, and declines or counters an ask that conflicts with them.
+
+- Delivery: scheduled and dispatched runs deliver changes as a branch and a pull request, never as a comment-only run or a discarded working directory
+- Reviews: it reviews pull requests from same-repository heads, including those opened by the `fro-bot` user (GitHub cannot request a review for that user). It may approve only pull requests by `marcusrbrown` that contain no `fro-bot` commit; the approval backstop dismisses any other approval
+- Never merge, enable automerge, force-push, or push to `main`
+- Workflow security: checkouts in jobs that run on pull requests, issues, or comments set `persist-credentials: false`; agent steps set `isolate-agent` and pin `fro-bot/agent` to a release by commit SHA
+- Model: it comes from `FRO_BOT_MODEL_REVIEW` (pull requests) or `FRO_BOT_MODEL_AUTOHEAL` (schedule and dispatch), falling back to `FRO_BOT_MODEL`
+
 ## Security Constraints
 
 - No secrets, PATs, tokens, or PII in tool return values or log output
