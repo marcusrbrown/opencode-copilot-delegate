@@ -652,7 +652,6 @@ jobs:
         (
           github.event_name == 'pull_request' &&
           !endsWith(github.event.pull_request.user.login || '', '[bot]') &&
-          (github.event.pull_request.user.login || '') != 'fro-bot' &&
           (
             github.event.action != 'review_requested' ||
             (github.event.requested_reviewer.login || '') == 'fro-bot'
@@ -724,7 +723,9 @@ jobs:
 
       # Fro Bot may APPROVE only marcusrbrown's PRs that contain no fro-bot
       # commit. Any API error yields allowed=false (fail closed). The rule is
-      # appended to the PR review prompt; approval-backstop enforces it.
+      # appended to the PR review prompt; approval-backstop enforces it. GitHub
+      # also rejects REQUEST_CHANGES on a PR the fro-bot user authored, so the
+      # deny rule for those says COMMENT only.
       - name: Decide whether Fro Bot may approve
         id: approval-rule
         if: >-
@@ -740,6 +741,7 @@ jobs:
         run: |
           allow='Approval is permitted for this pull request if your review finds no blocking issues.'
           deny='Approval is NOT permitted for this pull request: submit a COMMENT or REQUEST_CHANGES review, never APPROVE.'
+          deny_self='Approval is NOT permitted for this pull request, and it was opened by the fro-bot user, so GitHub rejects APPROVE and REQUEST_CHANGES on it: submit a COMMENT review only, and state any blocking issue in its body.'
 
           decide() {
             local pr_json author commits_json logins
@@ -758,7 +760,10 @@ jobs:
           if decide; then
             { echo 'allowed=true'; echo "rule=${allow}"; } >> "$GITHUB_OUTPUT"
           else
-            { echo 'allowed=false'; echo "rule=${deny}"; } >> "$GITHUB_OUTPUT"
+            # An unreadable author keeps the generic deny rule (fail closed).
+            author=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR}" --jq '.user.login' | tr '[:upper:]' '[:lower:]') || author=''
+            if [ "$author" = 'fro-bot' ]; then rule=$deny_self; else rule=$deny; fi
+            { echo 'allowed=false'; echo "rule=${rule}"; } >> "$GITHUB_OUTPUT"
           fi
 
       - name: Checkout repository
@@ -793,7 +798,13 @@ jobs:
         with:
           bun-version: ${{ steps.bun-version.outputs.version }}
 
+      # The pull_request review run of a PR the fro-bot user opened holds
+      # FRO_BOT_PAT on the runner, so that head's lifecycle scripts must not run
+      # here: skip the install. The review is read-only and its prompt forbids
+      # repo-wide build, lint, typecheck and test commands. A run started by an
+      # @fro-bot comment on such a PR still installs.
       - name: Install dependencies
+        if: github.event_name != 'pull_request' || github.event.pull_request.user.login != 'fro-bot'
         run: bun install --frozen-lockfile
 
       - name: Run Fro Bot
@@ -824,7 +835,15 @@ jobs:
           # branch-pr delivery is separate and may change package.json and
           # bun.lock (verified by the zod security PR #556).
           brokered-push-extra-paths: tests
-          model: ${{ vars.FRO_BOT_MODEL }}
+          # Model by kind of work: review of pull requests, or the daily pass and
+          # dispatched prompts. Each falls back to FRO_BOT_MODEL when its
+          # variable is unset, as do comment- and issue-triggered runs.
+          model: >-
+            ${{
+              (github.event_name == 'pull_request' && vars.FRO_BOT_MODEL_REVIEW)
+              || ((github.event_name == 'schedule' || github.event_name == 'workflow_dispatch') && vars.FRO_BOT_MODEL_AUTOHEAL)
+              || vars.FRO_BOT_MODEL
+            }}
           # The daily pass must deliver fixes as branches + PRs. Under the
           # default (`auto` -> working-dir) its edits stay in the runner's
           # working tree and are discarded — which is why earlier security
