@@ -798,10 +798,11 @@ jobs:
         with:
           bun-version: ${{ steps.bun-version.outputs.version }}
 
-      # A pull request the fro-bot user opened is reviewed with FRO_BOT_PAT on
-      # the runner, so its head's lifecycle scripts must not run here: skip the
-      # install. The review is read-only and its prompt forbids repo-wide
-      # build, lint, typecheck and test commands.
+      # The pull_request review run of a PR the fro-bot user opened holds
+      # FRO_BOT_PAT on the runner, so that head's lifecycle scripts must not run
+      # here: skip the install. The review is read-only and its prompt forbids
+      # repo-wide build, lint, typecheck and test commands. A run started by an
+      # @fro-bot comment on such a PR still installs.
       - name: Install dependencies
         if: github.event_name != 'pull_request' || github.event.pull_request.user.login != 'fro-bot'
         run: bun install --frozen-lockfile
