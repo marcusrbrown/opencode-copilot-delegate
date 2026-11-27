@@ -28,7 +28,8 @@ on:
       prompt:
         description: >-
           Custom prompt for the Fro Bot agent. When non-empty it is used
-          verbatim regardless of `mode` (comment-only delivery). Required when
+          verbatim regardless of `mode` (delivered as a branch and pull
+          request). Required when
           `mode=review`. Leave empty with `mode=autoheal` to run the daily pass.
         required: false
         default: ""
@@ -828,10 +829,10 @@ jobs:
           # default (`auto` -> working-dir) its edits stay in the runner's
           # working tree and are discarded — which is why earlier security
           # fixes were re-applied day after day without ever landing.
-          # Prompt-only dispatches stay comment-only.
+          # Prompt dispatches deliver the same way.
           output-mode: >-
             ${{
-              (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.prompt == '' && inputs.mode == 'autoheal'))
+              (github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && (inputs.prompt != '' || inputs.mode == 'autoheal')))
               && 'branch-pr'
               || ''
             }}
