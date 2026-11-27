@@ -136,7 +136,10 @@ function extractTokens(events: ParsedEvent[]): TokenUsage | undefined {
  * Every field degrades gracefully — missing events, empty arrays, and absent
  * usage data produce undefined fields rather than errors.
  */
-export function buildEnvelope(input: EnvelopeInput): OutputEnvelope {
+export function buildEnvelope(
+  input: EnvelopeInput,
+  now: () => number = Date.now,
+): OutputEnvelope {
   const {
     taskId,
     events,
@@ -152,7 +155,7 @@ export function buildEnvelope(input: EnvelopeInput): OutputEnvelope {
     copilotSessionId,
   } = input
 
-  const durationMs = (endedAt ?? Date.now()) - startedAt
+  const durationMs = (endedAt ?? now()) - startedAt
   const finalMessage = extractFinalMessage(events)
   const toolCalls = aggregateToolCalls(events)
   const tokens = extractTokens(events)
