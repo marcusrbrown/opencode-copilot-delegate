@@ -723,7 +723,9 @@ jobs:
 
       # Fro Bot may APPROVE only marcusrbrown's PRs that contain no fro-bot
       # commit. Any API error yields allowed=false (fail closed). The rule is
-      # appended to the PR review prompt; approval-backstop enforces it.
+      # appended to the PR review prompt; approval-backstop enforces it. GitHub
+      # also rejects REQUEST_CHANGES on a PR the fro-bot user authored, so the
+      # deny rule for those says COMMENT only.
       - name: Decide whether Fro Bot may approve
         id: approval-rule
         if: >-
@@ -739,6 +741,7 @@ jobs:
         run: |
           allow='Approval is permitted for this pull request if your review finds no blocking issues.'
           deny='Approval is NOT permitted for this pull request: submit a COMMENT or REQUEST_CHANGES review, never APPROVE.'
+          deny_self='Approval is NOT permitted for this pull request, and it was opened by the fro-bot user, so GitHub rejects APPROVE and REQUEST_CHANGES on it: submit a COMMENT review only, and state any blocking issue in its body.'
 
           decide() {
             local pr_json author commits_json logins
@@ -757,7 +760,10 @@ jobs:
           if decide; then
             { echo 'allowed=true'; echo "rule=${allow}"; } >> "$GITHUB_OUTPUT"
           else
-            { echo 'allowed=false'; echo "rule=${deny}"; } >> "$GITHUB_OUTPUT"
+            # An unreadable author keeps the generic deny rule (fail closed).
+            author=$(gh api "repos/${GITHUB_REPOSITORY}/pulls/${PR}" --jq '.user.login' | tr '[:upper:]' '[:lower:]') || author=''
+            if [ "$author" = 'fro-bot' ]; then rule=$deny_self; else rule=$deny; fi
+            { echo 'allowed=false'; echo "rule=${rule}"; } >> "$GITHUB_OUTPUT"
           fi
 
       - name: Checkout repository
@@ -792,7 +798,12 @@ jobs:
         with:
           bun-version: ${{ steps.bun-version.outputs.version }}
 
+      # A pull request the fro-bot user opened is reviewed with FRO_BOT_PAT on
+      # the runner, so its head's lifecycle scripts must not run here: skip the
+      # install. The review is read-only and its prompt forbids repo-wide
+      # build, lint, typecheck and test commands.
       - name: Install dependencies
+        if: github.event_name != 'pull_request' || github.event.pull_request.user.login != 'fro-bot'
         run: bun install --frozen-lockfile
 
       - name: Run Fro Bot
