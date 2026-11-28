@@ -724,8 +724,9 @@ jobs:
       # Fro Bot may APPROVE only marcusrbrown's PRs that contain no fro-bot
       # commit. Any API error yields allowed=false (fail closed). The rule is
       # appended to the PR review prompt; approval-backstop enforces it. GitHub
-      # also rejects REQUEST_CHANGES on a PR the fro-bot user authored, so the
-      # deny rule for those says COMMENT only.
+      # also rejects APPROVE and REQUEST_CHANGES on a PR the fro-bot user
+      # authored; the action downgrades the verdict to a COMMENT review there,
+      # so the deny rule for those keeps the verdict frontmatter.
       - name: Decide whether Fro Bot may approve
         id: approval-rule
         if: >-
@@ -741,7 +742,7 @@ jobs:
         run: |
           allow='Approval is permitted for this pull request if your review finds no blocking issues.'
           deny='Approval is NOT permitted for this pull request: submit a COMMENT or REQUEST_CHANGES review, never APPROVE.'
-          deny_self='Approval is NOT permitted for this pull request, and it was opened by the fro-bot user, so GitHub rejects APPROVE and REQUEST_CHANGES on it: submit a COMMENT review only, and state any blocking issue in its body.'
+          deny_self='Approval is NOT permitted for this pull request, and it was opened by the fro-bot user. Keep the verdict frontmatter the response protocol defines and put any blocking issue in the review body; the action chooses the GitHub review event.'
 
           decide() {
             local pr_json author commits_json logins
